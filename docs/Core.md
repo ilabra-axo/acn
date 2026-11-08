@@ -697,7 +697,12 @@ row needs a scenario test in the conformance suite.
 | Mint failure | A custodial mint exits or censors | Mint named in terms; per-mint caps; mint diversity |
 | Forged token | Bogus proof that shows "unspent" | DLEQ (NUT-12) verification before promising |
 | Arbiter collusion | Arbiter + performer use the escrowed `s` | Arbiters are scored keys; arbiter choice is in the terms; high-value work splits into milestones |
-| Judge gaming | Optimizing for a judge model | Interpretive reports are never sufficient (INV-8, V-11) |
+| Judge gaming | Optimizing for a judge model | Interpretive reports are never sufficient (INV-8, V-11); a `judged` condition is explicitly an opinion and labelled so (§7), with the safeguards below |
+| Judge hill-climbing | Performer runs the known judge and rubric locally and iterates until it passes | `commit_reveal` rubrics; judge ensembles across model families; audits with holdback (§8.5) |
+| Judge prompt injection | Deliverable contains text addressed to the judge | The harness isolates and sanitizes the artifact; detection fails the condition and is recorded on the performer (V-17.5, vector J-6) |
+| Self-judging | Performer runs the judge or signs as runner | The runner must not be the performer (`self_judged`, V-17.1, vectors J-3, J-3b) |
+| Judge drift or collusion | A judge passes poor work systematically | Audits on the record; runners and judge fingerprints scored on audit outcomes |
+| Non-determinism disputes | Same input, different scores | `repeats` with the median per judge; every run's score in the attestation (V-17.3, vector J-8) |
 | Timestamp lies | Backdated `created_at` | Causal order from hashes (INV-3); V-15 monotonicity bounds backdating to the predecessor |
 | Metadata leakage | A public commitment graph reveals business relationships | Private mode (§5.5); encrypted tokens. Reputation then needs a disclosure mechanism (D-13) |
 | Highlight-reel reputation | Parties publish only flattering outcomes from private commitments | Open (D-13): disclosure consent in the terms; negatives published by the party with the incentive, with signed proof |
