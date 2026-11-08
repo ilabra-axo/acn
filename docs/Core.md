@@ -26,6 +26,11 @@ governance endorsements, bindings and reputation, implementation phases.
 - **Negotiated** (N): the full commitment automaton with counter-offers, rework and optional
   arbitration, for work with real conditions of satisfaction.
 
+**Commitments are atomic.** A commitment is one request, one deliverable and one settlement.
+Dependencies between commitments, multi-step workflows and staged delivery are composed above
+the protocol (by bindings or a workflow layer, out of scope here), as sequences of ordinary
+commitments. The `parent` tag records subcontracting for provenance; it does not schedule.
+
 **Non-goals:** UI design; NIP-90 compatibility (NIP-90 is now marked unrecommended upstream);
 mandating a transport for the underlying MCP invocation. Nostr-native or direct HTTP are both
 valid, since ACN wraps the call as a commitment.
@@ -48,11 +53,16 @@ MAY follow RFC 2119.
    and only under the causal monotonicity rule (V-15).
 4. **INV-4 Terms binding.** Every promise or acceptance binds to a content-addressed terms hash.
    Terms are immutable; changing them means a new hash.
-5. **INV-5 Requester closure.** Only the requester can declare satisfaction (or an arbiter, by
-   `RULING`, where the terms name one). A performer's report asserts completion; it is never
+5. **INV-5 Settlement authority.** Under `settlement_trigger = requester`, only the requester can
+   declare satisfaction (or an arbiter, by `RULING`, where the terms name one), and that
+   declaration releases payment. Under `verifier` or `contingent`, payment is released by the
+   designated trigger, and the requester's `SATISFY` or `REJECT` after release is a recorded
+   judgement with no settlement effect. In every mode, a performer can never release payment to
+   itself without the trigger's secret. A performer's report asserts completion; it is never
    closure.
-6. **INV-6 Closure is settlement.** In conditional profiles, the satisfaction event reveals the
-   payment preimage. Closing and paying are one signed act.
+6. **INV-6 Settlement is one act.** Settlement is always a single signed act that reveals the
+   payment secret: `SATISFY` (requester), `RULING` (arbiter), `RELEASE` (settlement verifier) or
+   `CLAIM` (contingent).
 7. **INV-7 Signatures prove authorship only.** A signature never counts as evidence that a claim
    is true.
 8. **INV-8 Interpretive is not provenance.** Interpretive reports (e.g. LLM-as-judge) use a
