@@ -30,4 +30,4 @@ pub use binding::{binding_status, BindingStatus};
 pub use event::Event;
 pub use fold::{fold, Commitment, ConditionStatus, Output, Pending, Phase, Profile, State};
 pub use status::{status_at, Party, Status};
-pub use terms::Terms;
+pub use terms::{Assurance, Terms};

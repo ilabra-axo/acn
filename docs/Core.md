@@ -340,7 +340,7 @@ Otherwise they are stored on Blossom and supplied to the validator as a document
 | --- | --- | --- |
 | `v` | string | Terms schema version (`acn-terms/0.2`) |
 | `deliverable` | object | `description`; optional `output_schema` hash, `output_contract` id, `tool` name, `input` arguments |
-| `conditions` | array | Conditions of satisfaction; each has `id`, `class`, and class-specific fields |
+| `conditions` | array | Conditions of satisfaction; each has `id`, `class` (`mechanical`, `grounding`, `judged`, `interpretive`, `human`), and class-specific fields |
 | `deadline` | unix s | Latest `REPORT` time |
 | `review_window` | seconds | Time the requester has after `REPORT` to `SATISFY` or `REJECT` |
 | `rework_limit` | integer | Max `REJECT` → rework cycles before Rejected (0 in T profiles) |
@@ -360,9 +360,36 @@ INV-8 is enforced.
   a mechanical attestation from a listed verifier.
 - **`grounding`:** agreement with an external referent (dataset, resolved market, sensor log),
   named by hash and source. Satisfied only by a grounding attestation.
+- **`judged`:** a pinned judge (e.g. an LLM with a fixed prompt, harness and sampling) scored the
+  work at or above a threshold. Satisfied only by a judged attestation (`K_ATTEST_JUDGED`, §9)
+  from a listed runner (V-17). A `judged` condition certifies that the pinned judges produced
+  the stated score; it **never certifies that the work is good** (INV-8). Class-specific fields:
+
+  | Field | Type | Meaning |
+  | --- | --- | --- |
+  | `judges` | array, ≥ 1 | Each: `model_id`, `model_version` (provider-pinned), `prompt_template_hash`, `harness_hash`, `sampling` (temperature, max tokens, seed if supported) |
+  | `rubric_hash` | sha256 | Hash of the rubric text. The rubric itself MAY be withheld until evaluation (`rubric_disclosure`) |
+  | `rubric_disclosure` | enum | `public` (rubric published with the terms) or `commit_reveal` (only the hash is published; the text is revealed in the attestation) |
+  | `scale` | object | Score range, e.g. `{min: 0, max: 10}` |
+  | `threshold` | number | θ; pass when the aggregate score ≥ θ. MUST lie within `scale` |
+  | `aggregation` | enum | `all` (every judge ≥ θ), `mean`, or `median` (across judges) |
+  | `repeats` | integer, ≥ 1 | Runs per judge; the per-judge score is the median of its runs (non-determinism control) |
+  | `runners` | pubkeys, ≥ 1 | Keys allowed to run the judges and sign the attestation. MUST NOT include the performer |
+  | `audit` | object or null | `rate` (0–1), `auditors[]` pubkeys, `window` seconds |
+  | `holdback` | object or null | `fraction` (0–1) of the price released only after the audit window (§8.5) |
+
+  Terms whose `judged` conditions lack these fields, or are inconsistent (no judges, `repeats` 0,
+  θ outside the scale, a malformed `rubric_hash`), do not parse (`terms_mismatch`, V-9).
 - **`interpretive`:** quality judgement (rubric). Interpretive reports MAY inform it, but the
   requester always judges it in the end.
 - **`human`:** the requester's own judgement, expressed by `SATISFY` or `REJECT`.
+
+**Assurance labels.** Every condition carries a derived assurance label: `check`
+(`mechanical`), `grounded` (`grounding`), `opinion` (`judged` and `interpretive`), `human`
+(`human`). A commitment's **overall assurance** is its weakest condition's label, ordered
+`grounded` > `check` > `human` > `opinion` (D-14); a commitment without conditions is `human`.
+The label is computed by the validator from the terms in force, never asserted by a party, and
+clients MUST display it (§12).
 
 **Templates.** Service advertisements publish terms templates by hash. A request that uses a
 template unchanged references the template hash directly, which keeps transactional calls cheap.

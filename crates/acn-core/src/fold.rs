@@ -15,7 +15,7 @@ use crate::binding::{BindingStatus, Bindings};
 use crate::event::Event;
 use crate::jcs;
 use crate::kinds::*;
-use crate::terms::{ConditionClass, GovernedParty, Terms};
+use crate::terms::{Assurance, ConditionClass, GovernedParty, Terms};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Profile {
@@ -100,6 +100,9 @@ pub struct Commitment {
     pub performer_binding: BindingStatus,
     /// Content of the current REPORT (inline result, contract, artifacts).
     pub report: Option<Value>,
+    /// Overall assurance of the terms in force: the weakest condition's label (spec §7).
+    /// `None` while the terms are unavailable.
+    pub assurance: Option<Assurance>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -329,6 +332,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
             chain_kinds: vec![K_REQUEST],
             progress: vec![],
             conditions: BTreeMap::new(),
+            assurance: None,
             performer_binding: BindingStatus::Unbound,
             report: None,
         };
@@ -542,6 +546,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
             for cond in &terms_now.conditions {
                 let ev = evidence.get(&(report.clone(), cond.id.clone()));
                 let status = match cond.class {
+                    ConditionClass::Judged => ConditionStatus::Unverified,
                     ConditionClass::Mechanical | ConditionClass::Grounding => match ev {
                         Some(v) if v.iter().any(|(r, _)| r == "fail") => ConditionStatus::Fail,
                         Some(v) if v.iter().any(|(r, _)| r == "pass") => ConditionStatus::Pass,
@@ -591,6 +596,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
             }
         }
 
+        commitment.assurance = Some(terms_now.assurance());
         commitment.terms = Some(terms_now);
         commitment.state = Some(st);
         Some(commitment)
