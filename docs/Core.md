@@ -894,6 +894,12 @@ row needs a scenario test in the conformance suite.
 | Withheld release (verifier trigger) | The settlement verifier refuses `RELEASE` despite passing work | Mechanical and grounding results are reproducible, so the refusal is provable; recorded as a verifier fault (lapse, §6.5); verifiers are scored, value-capped keys |
 | Pre-empted release (verifier trigger) | The requester rejects passing work before the verifier releases | `REJECT` before `RELEASE` is legal only against a failing attestation (§6.1; vector S-8b) |
 | False pass (verifier trigger) | Verifier and performer collude to pass bad work | Deterministic conditions make the false pass provable from the artifacts; verifier reputation destroyed |
+| Key leak (contingent v1) | The attesting verifier passes `k` or the plaintext to the requester, who reads it without funding | Verifier scored and value-capped; residual risk until zero-knowledge proofs replace the verifier's attestation (D-20) |
+| Unfunded offer (contingent) | The requester sees a passing attestation and never funds | The requester gains nothing (no `k`); requester fault recorded (§6.5); optional requester bond (D-21) |
+| Silent claim (contingent) | The performer takes the payment without publishing `k` | Contingent only on mints with `reveals_preimage_to_payer`: redeeming writes `k` into the spent proof's witness, which the payer reads with NUT-07 (§8.6) |
+| Ciphertext swap (contingent) | The ciphertext doesn't match the attested plaintext | The verifier decrypts `C` with `k` and attests the plaintext hash; attestations must name the `REPORT`'s `ciphertext` and `hashlock` (V-21) |
+| False pass (contingent) | Verifier and performer collude to pass bad work | Deterministic conditions make the false pass provable once the requester decrypts; verifier reputation destroyed |
+| Never-claimed payment (contingent) | The performer doesn't claim the funded lock | Refunds to the requester at the `FUND` locktime; performer fault (§6.5) |
 | Timestamp lies | Backdated `created_at` | Causal order from hashes (INV-3); V-15 monotonicity bounds backdating to the predecessor |
 | Metadata leakage | A public commitment graph reveals business relationships | Private mode (§5.5); encrypted tokens. Reputation then needs a disclosure mechanism (D-13) |
 | Highlight-reel reputation | Parties publish only flattering outcomes from private commitments | Open (D-13): disclosure consent in the terms; negatives published by the party with the incentive, with signed proof |
