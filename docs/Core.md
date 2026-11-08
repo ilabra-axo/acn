@@ -548,7 +548,7 @@ offers; a trigger may only be used with a mint that has what it needs.
 | `hashlock` | every trigger | NUT-14 |
 | `timelock_refund` | every trigger | NUT-14 |
 | `p2pk` | `requester`, `verifier` | NUT-11 |
-| `reveals_preimage_to_payer` | `contingent` | per mint, pending the spike (CR-002 Phase B) |
+| `reveals_preimage_to_payer` | `contingent` | any mint whose NUT-06 info declares NUT-07 and NUT-14: the spent proof's witness, with the preimage, comes back in the NUT-07 state check ([spike](acn/spikes/cashu-preimage-visibility.md)) |
 
 Checking a mint is I/O, so validators don't: **bindings** check the capability before committing
 (the requester before `REQUEST`, the performer before promising), and decline otherwise. This
@@ -914,8 +914,13 @@ From CR-002 (settlement triggers; its OD-1…OD-7):
   own ACN commitment with the requester or through a fee embedded in the terms.
 - [ ] **D-25 Lightning (CR-002 OD-6).** Which Lightning integration to use; none exists in the
   repo, so Cashu is the only rail for now (§8.6).
-- [ ] **D-26 Cashu outcome (CR-002 OD-7).** The spike's recorded result
-  (`docs/acn/spikes/cashu-preimage-visibility.md`) and the resulting capability rule.
+- [x] **D-26 Cashu outcome (CR-002 OD-7).** Resolved by the spike
+  ([cashu-preimage-visibility.md](acn/spikes/cashu-preimage-visibility.md)): NUT-14 specifies that
+  the preimage of a spent HTLC proof is retrievable with NUT-07, and CDK 0.18.3 and Nutshell 0.20.2
+  both return it. Rule: Cashu has `reveals_preimage_to_payer` on any mint that declares NUT-07
+  and NUT-14 in NUT-06 info; bindings check it; `contingent` is allowed on such mints. Caveats
+  recorded there: witness retention is unspecified, and witnesses are capped at 1,024 characters
+  by default.
 - [ ] **D-27 Arbiter escrow acknowledgement.** §8.4 asks the arbiter to acknowledge the escrowed
   secret, but validators don't enforce it, so commitments from before CR-002 keep their meaning.
   Decide whether to enforce `K_ESCROW_ACK` for arbiters too (e.g. from a future terms version).
@@ -974,3 +979,4 @@ invent patterns. Kind numbers and tag letters are symbolic until D-1 closes.
 |---|---|---|---|---|
 | CR-001 `judged` condition class | 2026-11-08 | INV-8, §3, §5.1, §6.2, §7, §8.2, §9, §10 (V-11, V-17, vectors), §12, §13, §14 (D-14…D-19), §15 | New condition class `judged` with derived assurance labels; `K_ATTEST_JUDGED` (7725); V-11 amended; new V-17 with codes `self_judged`, `judge_mismatch`, `rubric_mismatch`, `injection_detected`, `below_threshold`; INV-8 clarified (judged attestations are evidence about an opinion and satisfy only `judged`); client display of assurance; auto-satisfy by the requester's binding; five threat rows; open decisions D-14…D-19; worked example in [binding-api.md](binding-api.md) | Applied, with wire versions bumped to `acn/0.3` and `acn-terms/0.3` (`judged` requires terms 0.3; 0.2 terms still parse). **Dropped by decision:** the §2.4 holdback and the `audit` / `holdback` fields (vectors J-9, J-10; OD-2 → D-15 closed). The holdback would have changed INV-6 and the §6.2 state machine, and let a requester keep the held part by inaction. Instead an audit is an ordinary condition of satisfaction of a stronger class (§7); a `judged` condition alone is the minimum floor. Added vectors J-13 (judged + audit condition) and J-14 (unknown judged field) |
 | CR-002 settlement triggers, Phase A | 2026-11-08 | §1, INV-5, INV-6, §3, §4, §5.1, §5.4, §6.1, §6.2, §6.5, §7, §8.2, §8.4, §8.6, §10 (V-18…V-20, vectors), §13, §14 (D-20…D-27), §15 | `settlement_trigger` / `settlement_verifier` / `fund_window`; valid combinations; verifier trigger with `K_ESCROW_ACK` (7726) and `RELEASE` (7713), state `Settled`, verifier lapse; INV-5 and INV-6 replaced as authorized, with `RULING` added; rail capabilities per mint, checked by bindings; policy filters in the bindings; three threat rows; wire versions `acn/0.4`, `acn-terms/0.4` | Phase A applied. **Changed from CR-002 by decision:** commitments are atomic, so the `delivery` field and `staged` delivery are dropped (S-2, S-3 retired; staging composes above the protocol), and `fulfillment_proof` and `rail` wait until a second value exists (zk, Lightning); `VERIFIER_ACK` is the shared `K_ESCROW_ACK` and its code `missing_escrow_ack`; `rail_incapable` is a binding check; the verifier trigger excludes `human`/`interpretive` conditions and arbiters; `RELEASE` needs every condition passing, whoever attested. Phase B (spike) and Phase C (contingent) pending |
+| CR-002 Phase B, spike | 2026-11-08 | §8.6, §14 (D-26) | Cashu reveals the preimage to the payer through NUT-07 on mints declaring NUT-07 and NUT-14 (CDK 0.18.3 and Nutshell 0.20.2 tested); `reveals_preimage_to_payer` rule recorded | Done; Phase C may proceed on Cashu |
