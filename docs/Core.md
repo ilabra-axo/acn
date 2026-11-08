@@ -291,7 +291,7 @@ remains legal.
 | `REVOKE` | performer | Promised, Reworking | Revoked (scored) | `{reason}` |
 | `PROGRESS` | performer | Promised, Reworking (annotating) | unchanged | `{p_on_time?, note?}` |
 | `REPORT` | performer | Promised, Reworking; Requested in T0/T1 | Reported | `x` tags for artifacts; `{result?: <inline JSON ≤16 KiB>, contract?: <id>, derivation?: <hash>, note?}` |
-| `SATISFY` | requester | Reported | Satisfied | `{preimage?: <hex>}`; required when the terms carry a hashlock |
+| `SATISFY` | requester (by hand, or automatically by its binding under a pre-set policy, §8.2) | Reported | Satisfied | `{preimage?: <hex>}`; required when the terms carry a hashlock |
 | `REJECT` | requester | Reported | Reworking, or Rejected at the rework limit (always Rejected in T0/T1) | `{gaps: [{condition, evidence: [..], note?}]}`, non-empty; conditions must exist in terms |
 | `DISPUTE` | either | Reported; Rejected (if disputable) | Disputed | `{reason, evidence?: [..]}`; terms must name an arbiter |
 | `RULING` | arbiter | Disputed | Satisfied or Rejected (final) | `{decision: "performer"\|"requester", rationale?: <hash>, preimage?: <hex>}` |
@@ -435,6 +435,12 @@ late redemption is a race, not a hard cutoff.
 
 **Timing constraint.** `L` MUST exceed `deadline + review_window + redeem_margin`. Recommended
 `redeem_margin` ≥ 24 h.
+
+**Auto-satisfy (CR-001).** A requester's binding MAY issue `SATISFY` automatically when every
+condition is met (for example, `c1` passes mechanically and `c2` passes as judged). The
+`SATISFY` is signed with the requester's key and remains the requester's act (INV-5): the
+policy is the requester's pre-commitment, not a transfer of closure. Validators neither can nor
+need to tell an automatic `SATISFY` from a manual one.
 
 ### 8.3 T0
 
