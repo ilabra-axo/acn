@@ -45,6 +45,10 @@ pub enum Code {
     RubricMismatch,
     InjectionDetected,
     BelowThreshold,
+    // Settlement triggers (CR-002).
+    InvalidSettlementCombo,
+    MissingEscrowAck,
+    BadRelease,
 }
 
 impl Code {
@@ -77,6 +81,9 @@ impl Code {
         Code::RubricMismatch,
         Code::InjectionDetected,
         Code::BelowThreshold,
+        Code::InvalidSettlementCombo,
+        Code::MissingEscrowAck,
+        Code::BadRelease,
     ];
 
     pub fn severity(self) -> Severity {
@@ -129,6 +136,9 @@ impl Code {
             RubricMismatch => "rubric_mismatch",
             InjectionDetected => "injection_detected",
             BelowThreshold => "below_threshold",
+            InvalidSettlementCombo => "invalid_settlement_combo",
+            MissingEscrowAck => "missing_escrow_ack",
+            BadRelease => "bad_release",
         }
     }
 }

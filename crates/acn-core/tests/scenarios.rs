@@ -532,6 +532,16 @@ const ALL: &[Scenario] = &[
     ("J-12", common::judged::j_declared_and_unlisted),
     ("J-13", common::judged::j13),
     ("J-14", common::judged::j14),
+    // CR-002 Phase A: verifier settlement trigger.
+    ("S-2", common::settlement::s2),
+    ("S-4", common::settlement::s4),
+    ("S-5", common::settlement::s5),
+    ("S-6", common::settlement::s6),
+    ("S-7", common::settlement::s7),
+    ("S-7b", common::settlement::s7b),
+    ("S-8", common::settlement::s8),
+    ("S-8b", common::settlement::s8b),
+    ("S-8c", common::settlement::s8c),
 ];
 
 // ---------- CR-001 vectors (spec §10 conformance table) ----------
@@ -678,6 +688,144 @@ fn cr001_judged_condition_cannot_be_satisfied_by_the_wrong_evidence() {
         let c = &out.commitments[&w.events[0].id];
         assert_ne!(c.conditions.get("c2"), Some(&ConditionStatus::Pass));
     }
+}
+
+// ---------- CR-002 Phase A vectors (spec §10 conformance table) ----------
+
+fn check_settlement(name: &str, w: &W, out: &acn_core::Output) {
+    let e = &w.events;
+    let req = &e[0];
+    let ctx = format!("{name}: {:?}", out.anomalies);
+    let has = |i: usize, code: Code| out.has(&e[i].id, code);
+    if name == "S-2" {
+        assert!(out.has(&req.id, Code::InvalidSettlementCombo), "{ctx}");
+        assert!(!out.commitments.contains_key(&req.id), "{ctx}");
+        return;
+    }
+    let c = &out.commitments[&req.id];
+    let st = c.state.as_ref().unwrap();
+    match name {
+        // e: REQUEST, ACK(stranger), PROMISE
+        "S-4" => {
+            assert!(has(1, Code::Unauthorized), "{ctx}");
+            assert!(has(2, Code::MissingEscrowAck), "{ctx}");
+            assert_eq!(st.phase, Phase::Requested, "{ctx}");
+        }
+        // e: REQUEST, ACK, PROMISE, REPORT, ATTEST, RELEASE, SATISFY
+        "S-5" => {
+            assert_eq!(st.phase, Phase::Settled, "{ctx}");
+            assert!(st.judged, "SATISFY recorded as a judgement");
+            assert_eq!(c.chain_kinds.last(), Some(&K_SATISFY), "{ctx}");
+            assert!(status_at(c, 99_999).terminal);
+            assert!(
+                out.anomalies.iter().all(|a| a.code == Code::Unbound),
+                "{ctx}"
+            );
+        }
+        "S-6" | "S-7" | "S-7b" => {
+            assert!(
+                has(5 - usize::from(name == "S-7b"), Code::BadRelease),
+                "{ctx}"
+            );
+            assert_eq!(st.phase, Phase::Reported, "{ctx}");
+        }
+        "S-8" => {
+            assert_eq!(st.phase, Phase::Reported);
+            let before = status_at(c, 1300);
+            assert_eq!(before.awaiting, Some(Party::Verifier));
+            assert_eq!(before.lapsed, None);
+            let after = status_at(c, 1200 + 500 + 1);
+            assert_eq!(after.lapsed, Some(Party::Verifier), "verifier fault");
+        }
+        // e: REQUEST, ACK, PROMISE, REPORT, SATISFY(illegal), REJECT(illegal)
+        "S-8b" => {
+            assert!(has(4, Code::IllegalTransition), "{ctx}");
+            assert!(has(5, Code::IllegalTransition), "{ctx}");
+            assert_eq!(st.phase, Phase::Reported, "{ctx}");
+        }
+        // e: REQUEST, ACK, PROMISE, REPORT, ATTEST(fail), REJECT
+        "S-8c" => {
+            assert_eq!(st.phase, Phase::Reworking, "{ctx}");
+            assert_eq!(status_at(c, 1300).awaiting, Some(Party::Performer));
+        }
+        other => panic!("no expectation for {other}"),
+    }
+}
+
+const SETTLEMENT: &[Scenario] = &[
+    ("S-2", common::settlement::s2),
+    ("S-4", common::settlement::s4),
+    ("S-5", common::settlement::s5),
+    ("S-6", common::settlement::s6),
+    ("S-7", common::settlement::s7),
+    ("S-7b", common::settlement::s7b),
+    ("S-8", common::settlement::s8),
+    ("S-8b", common::settlement::s8b),
+    ("S-8c", common::settlement::s8c),
+];
+
+/// CR-002 §4.3 Phase A: every vector's expected outcome, under every arrival order.
+#[test]
+fn cr002_verifier_trigger_vectors_under_every_arrival_order() {
+    for (name, build) in SETTLEMENT {
+        let w = build();
+        for order in orders(w.events.len()) {
+            let shuffled: Vec<_> = order.iter().map(|&i| w.events[i].clone()).collect();
+            check_settlement(name, &w, &acn_core::fold(&shuffled, &w.docs));
+        }
+    }
+}
+
+/// The other invalid combinations, and the version gate for the new fields.
+#[test]
+fn cr002_settlement_combinations() {
+    use common::settlement::verifier_terms;
+    let parse = |t: serde_json::Value| acn_core::Terms::parse(&t).unwrap();
+    assert!(parse(verifier_terms(1, |_| {})).settlement_combo().is_ok());
+    for (why, t) in [
+        (
+            "no verifier",
+            verifier_terms(1, |t| t["settlement_verifier"] = json!(null)),
+        ),
+        (
+            "no hashlock",
+            verifier_terms(1, |t| t["payment"]["hashlock"] = json!(null)),
+        ),
+        (
+            "arbiter",
+            verifier_terms(1, |t| t["arbiter"] = json!(pk(&ARB))),
+        ),
+        (
+            "interpretive",
+            verifier_terms(1, |t| t["conditions"][0]["class"] = json!("interpretive")),
+        ),
+        (
+            "no conditions",
+            verifier_terms(1, |t| t["conditions"] = json!([])),
+        ),
+        (
+            "contingent",
+            verifier_terms(1, |t| t["settlement_trigger"] = json!("contingent")),
+        ),
+        (
+            "requester + verifier key",
+            verifier_terms(1, |t| t["settlement_trigger"] = json!("requester")),
+        ),
+    ] {
+        assert!(parse(t).settlement_combo().is_err(), "{why}");
+    }
+    // New fields need acn-terms/0.4; plain 0.3 terms still parse and default to requester.
+    assert!(
+        acn_core::Terms::parse(&verifier_terms(1, |t| t["v"] = json!("acn-terms/0.3"))).is_err()
+    );
+    let old = parse(terms(|t| t["v"] = json!("acn-terms/0.3")));
+    assert_eq!(
+        old.settlement_trigger,
+        acn_core::terms::SettlementTrigger::Requester
+    );
+    // Defaults don't change the terms hash (S-1): the new fields aren't serialized.
+    let v = serde_json::to_value(&old).unwrap();
+    assert!(v.get("settlement_trigger").is_none() && v.get("settlement_verifier").is_none());
 }
 
 // ---------- gates ----------

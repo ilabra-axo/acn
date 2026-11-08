@@ -11,7 +11,7 @@ fn verifies_events_signed_by_rust_nostr() {
     let d = Draft::request(
         &"aa".repeat(32),
         "T0",
-        &serde_json::json!({"v": "acn-terms/0.3"}),
+        &serde_json::json!({"v": "acn-terms/0.4"}),
         None,
     )
     .unwrap();

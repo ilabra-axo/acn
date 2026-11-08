@@ -292,7 +292,9 @@ fn role(pk: &str, c: &Commitment) -> Role {
     };
     if t.arbiter.as_deref() == Some(pk) {
         Role::Arbiter
-    } else if t.verifiers.iter().any(|v| v.pubkey == pk) {
+    } else if t.settlement_verifier.as_deref() == Some(pk)
+        || t.verifiers.iter().any(|v| v.pubkey == pk)
+    {
         Role::Verifier
     } else if t
         .governance
@@ -396,6 +398,8 @@ fn summary(e: &Event) -> String {
             s(&v, "verdict")
         ),
         K_ENDORSE => format!("Endorsed ({} gate)", tag(e, "endorser").unwrap_or("?")),
+        K_ESCROW_ACK => "Escrowed secret checked against the hashlock".to_string(),
+        K_RELEASE => "Released the preimage: every condition passed".to_string(),
         _ => name(e.kind).to_string(),
     }
 }
@@ -458,6 +462,7 @@ fn one(
                 | K_ATTEST_JUDGED
                 | K_INTERP_REPORT
                 | K_ENDORSE
+                | K_ESCROW_ACK
         ) {
             EntryStatus::Annotation
         } else {
@@ -591,6 +596,10 @@ fn one(
         }
         let ruled = c.chain_kinds.last() == Some(&K_RULING);
         let (status, detail) = match phase {
+            Some(Phase::Settled) => (
+                SettlementStatus::Paid,
+                "The settlement verifier released the preimage; the performer redeems".to_string(),
+            ),
             Some(Phase::Satisfied) if ruled => (
                 SettlementStatus::Paid,
                 "Arbiter released the preimage; the performer redeems".to_string(),
@@ -622,9 +631,26 @@ fn one(
     let is_party = mine || c.performer == me;
     let disputable =
         phase == Some(Phase::Reported) || (phase == Some(Phase::Rejected) && !status.terminal);
+    let verifier_trigger =
+        terms.is_some_and(|t| t.settlement_trigger == acn_core::terms::SettlementTrigger::Verifier);
+    let judged = st.is_some_and(|s| s.judged);
+    let failing = c.conditions.values().any(|s| *s == ConditionStatus::Fail);
+    let after_release = phase == Some(Phase::Settled) && !judged;
     let allowed = Allowed {
-        satisfy: mine && phase == Some(Phase::Reported),
-        reject: mine && phase == Some(Phase::Reported),
+        // Verifier trigger: RELEASE settles; SATISFY / REJECT after it are recorded judgements,
+        // and REJECT before it needs a failing attestation (CR-002).
+        satisfy: mine
+            && if verifier_trigger {
+                after_release
+            } else {
+                phase == Some(Phase::Reported)
+            },
+        reject: mine
+            && if verifier_trigger {
+                after_release || (phase == Some(Phase::Reported) && failing)
+            } else {
+                phase == Some(Phase::Reported)
+            },
         withdraw: mine
             && matches!(
                 phase,
@@ -676,6 +702,7 @@ fn one(
             Party::Requester => Role::Requester,
             Party::Performer => Role::Performer,
             Party::Arbiter => Role::Arbiter,
+            Party::Verifier => Role::Verifier,
         })
     };
     let my_role = role(me, c);

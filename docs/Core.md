@@ -91,7 +91,8 @@ underneath it.
 | **Requester** | `REQUEST`, `COUNTER`, `ACCEPT`, `WITHDRAW`, `SATISFY`, `REJECT`, `DISPUTE` | the payment preimage `s` |
 | **Performer** | `PROMISE`, `COUNTER`, `ACCEPT`, `DECLINE`, `REVOKE`, `PROGRESS`, `REPORT`, `DISPUTE` | a binding to an operator |
 | **Verifier** | `K_ATTEST_MECH`, `K_ATTEST_GROUND`, `K_INTERP_REPORT`; as a listed **runner** of a `judged` condition, `K_ATTEST_JUDGED` | a verifier-scoped binding |
-| **Arbiter** | `RULING` | an escrowed copy of `s` (§8.4), if named in the terms |
+| **Arbiter** | `RULING`, `K_ESCROW_ACK` (optional) | an escrowed copy of `s` (§8.4), if named in the terms |
+| **Settlement verifier** | `K_ESCROW_ACK`, `RELEASE` (and its attestations, as a listed verifier) | the escrowed `s` under the `verifier` trigger (§8.2) |
 | **Operator / governance** | `K_BIND`, `K_BIND_REVOKE`, `K_ENDORSE` | long-lived accountable keys |
 
 ```mermaid
@@ -176,8 +177,9 @@ geocaching 7516–7517). Code MUST reference symbolic names.
 | 7708 | `K_REPORT` | 7739 | `K_PRIVATE_ACT` (rumor-only, §5.5) |
 | 7709 | `K_SATISFY` | 37700 | `K_SVC` (addressable) |
 | 7710 | `K_REJECT` | 7725 | `K_ATTEST_JUDGED` (CR-001) |
-| 7711 | `K_DISPUTE` | | |
+| 7711 | `K_DISPUTE` | 7726 | `K_ESCROW_ACK` (CR-002) |
 | 7712 | `K_RULING` | | |
+| 7713 | `K_RELEASE` (CR-002) | | |
 
 ### 5.2 Tags
 
@@ -200,7 +202,7 @@ JSON (JCS) before sha256. Inline content limit: 16 KiB; larger material goes to 
 ### 5.4 Causal DAG, head and concurrency
 
 The request is the root. Acts are **advancing** (they change state and can become the head) or
-**annotating** (`PROGRESS`, attestations, interpretive reports, endorsements). Annotating acts
+**annotating** (`PROGRESS`, attestations, interpretive reports, endorsements, escrow acknowledgements). Annotating acts
 reference an event with `prev`, but never become the head, so liveness pings and attestations
 can't make the other party's in-flight acts stale.
 
@@ -209,7 +211,7 @@ Every advancing act carries exactly one `prev`, which MUST belong to the same co
 advancing acts whose `prev` is that head and that pass V-1…V-9 and V-14. The winner is chosen
 deterministically (INV-2):
 
-1. **Closing acts** (`WITHDRAW`, `DECLINE`, `REVOKE`, `SATISFY`, `RULING`) win over
+1. **Closing acts** (`WITHDRAW`, `DECLINE`, `REVOKE`, `SATISFY`, `RULING`, `RELEASE`) win over
 2. **term-preserving acts** (`PROMISE`, `ACCEPT`, `REPORT`, `REJECT`, `DISPUTE`), which win over
 3. **term-changing acts** (`COUNTER`).
 4. Remaining ties break on the lowest event id (lexicographic hex).
@@ -246,12 +248,14 @@ State is a record, not a single label:
 State {
   phase:          Requested | Countered | Promised | Reported | Reworking
                 | Satisfied | Rejected | Disputed | Declined | Withdrawn | Revoked
+                | Settled       // released by the designated trigger (CR-002)
   terms:          hash of the terms currently in force (request terms until a promise/accept)
   pending:        Option<(counter terms hash, countering party)>   // a counter awaiting ACCEPT
   promised:       bool          // a promise is in force
   rework_count:   u32
   report:         Option<event id>
   rejected_at:    Option<event id>
+  judged:         bool          // after Settled: the requester's one recorded judgement was made
   head:           event id
 }
 ```
@@ -284,11 +288,20 @@ stateDiagram-v2
     Rejected --> Disputed: DISPUTE (arbiter named)
     Disputed --> Satisfied: RULING performer
     Disputed --> Rejected: RULING requester (final)
+    Reported --> Settled: RELEASE (verifier trigger)
+    Settled --> Settled: SATISFY / REJECT (recorded judgement)
 ```
 
-**Terminal phases:** `Satisfied`, `Declined`, `Withdrawn`, `Revoked`. `Rejected` is terminal when
+**Terminal phases:** `Satisfied`, `Settled`, `Declined`, `Withdrawn`, `Revoked`. `Rejected` is terminal when
 the terms name no arbiter, or after a `RULING`. Otherwise it is *closed-disputable*: `DISPUTE`
 remains legal.
+
+**Verifier trigger.** Nothing becomes promised (`PROMISE`, an `ACCEPT` into Promised, or a T1
+`REPORT` from Requested) before an `ESCROW_ACK` from the settlement verifier for the hashlock of
+the terms in force (V-19). From Reported, `RELEASE` settles. The requester's `SATISFY` is not legal
+before it, and `REJECT` is legal only against a failing attestation, so passing work can't be
+pre-empted. After `Settled`, the requester MAY record one `SATISFY` or `REJECT` as a judgement;
+it changes nothing and feeds scoring only.
 
 ### 6.2 Acts
 
@@ -303,10 +316,12 @@ remains legal.
 | `REVOKE` | performer | Promised, Reworking | Revoked (scored) | `{reason}` |
 | `PROGRESS` | performer | Promised, Reworking (annotating) | unchanged | `{p_on_time?, note?}` |
 | `REPORT` | performer | Promised, Reworking; Requested in T0/T1 | Reported | `x` tags for artifacts; `{result?: <inline JSON ≤16 KiB>, contract?: <id>, derivation?: <hash>, note?}` |
-| `SATISFY` | requester (by hand, or automatically by its binding under a pre-set policy, §8.2) | Reported | Satisfied | `{preimage?: <hex>}`; required when the terms carry a hashlock |
-| `REJECT` | requester | Reported | Reworking, or Rejected at the rework limit (always Rejected in T0/T1) | `{gaps: [{condition, evidence: [..], note?}]}`, non-empty; conditions must exist in terms |
+| `SATISFY` | requester (by hand, or automatically by its binding under a pre-set policy, §8.2) | Reported (requester trigger); Settled (judgement, once) | Satisfied; unchanged after Settled | `{preimage?: <hex>}`; required when the terms carry a hashlock and the trigger is `requester` |
+| `REJECT` | requester | Reported (under `verifier`: only with a failing attestation); Settled (judgement, once) | Reworking, or Rejected at the rework limit (always Rejected in T0/T1); unchanged after Settled | `{gaps: [{condition, evidence: [..], note?}]}`, non-empty; conditions must exist in terms |
 | `DISPUTE` | either | Reported; Rejected (if disputable) | Disputed | `{reason, evidence?: [..]}`; terms must name an arbiter |
 | `RULING` | arbiter | Disputed | Satisfied or Rejected (final) | `{decision: "performer"\|"requester", rationale?: <hash>, preimage?: <hex>}` |
+| `K_ESCROW_ACK` | settlement verifier (or arbiter) | annotating; any time | unchanged; under `verifier`, enables promising | `c` tag; `{hashlock}`: the `H` the escrowed secret was checked against |
+| `RELEASE` | settlement verifier | Reported (`verifier` trigger) | Settled (terminal) | `{preimage, attestations?: [ids]}`; every condition passing (V-20) |
 
 Profile restrictions: `COUNTER`, `ACCEPT`, `PROMISE`, `REVOKE`, `DISPUTE` and `RULING` are only
 legal in profile `N`.
@@ -337,6 +352,9 @@ Requesters who doubt a timestamp can dispute with external evidence (§13).
 - **Lapsed (requester):** phase `Reported`, and `now > report.created_at + terms.review_window`.
   This is recorded as a requester-side fault for scoring.
 - **Expired dispute window:** a disputable `Rejected` becomes final after `review_window`.
+- **Lapsed (verifier):** `verifier` trigger, phase `Reported`, no failing attestation, and
+  `now > report.created_at + terms.review_window` without a `RELEASE`. A verifier fault; the
+  payment refunds at `L`. With a failing attestation the move is the requester's (above).
 
 A `REPORT` with `created_at > terms.deadline` is applied but flagged `late`. A `SATISFY` after the
 review window is applied but flagged `late` (payment may already have been refunded at `L`).
@@ -471,6 +489,17 @@ late redemption is a race, not a hard cutoff.
 **Timing constraint.** `L` MUST exceed `deadline + review_window + redeem_margin`. Recommended
 `redeem_margin` ≥ 24 h.
 
+**Verifier trigger (CR-002).** The secret is handed to the settlement verifier up front, so the
+requester can't withhold it once the work passes.
+
+1. The requester generates `s` and puts `H` in the terms, as above, and escrows `s`
+   NIP-44-encrypted to the `settlement_verifier` in the `REQUEST`'s `escrow` tag (§8.4 format).
+2. The verifier decrypts `s`, checks `sha256(s) = H`, and publishes `K_ESCROW_ACK` with `H`. The
+   performer MUST NOT promise before it (V-19).
+3. After `REPORT`, the verifier evaluates the conditions (or collects the listed verifiers' and
+   runners' attestations). When every condition passes it publishes `RELEASE` with `s`, and the
+   performer redeems. On a failing attestation the requester MAY `REJECT` for rework.
+
 **Auto-satisfy (CR-001).** A requester's binding MAY issue `SATISFY` automatically when every
 condition is met (for example, `c1` passes mechanically and `c2` passes as judged). The
 `SATISFY` is signed with the requester's key and remains the requester's act (INV-5): the
@@ -484,9 +513,11 @@ it at the mint immediately, before doing any work, to prevent double-spend.
 
 ### 8.4 Arbitrated settlement (replaces v0.1 2-of-3 refund)
 
-When the terms name an arbiter, the requester escrows `s` to the arbiter at request time (NIP-44,
-in an `["escrow", <ciphertext>]` tag addressed to the arbiter). The arbiter MUST check
-`sha256(s) = H` and acknowledge before the performer promises.
+When the terms name an arbiter (only with the `requester` trigger), the requester escrows `s` to
+the arbiter at request time (NIP-44, in an `["escrow", <ciphertext>, <holder pubkey>]` tag). The
+arbiter MUST check `sha256(s) = H`, and SHOULD acknowledge with `K_ESCROW_ACK` before the
+performer promises. Validators don't enforce the arbiter's acknowledgement, so commitments made
+before CR-002 keep their meaning (D-27).
 
 - **Ruling for the performer:** `RULING` carries `s`, and the performer redeems.
 - **Ruling for the requester:** the arbiter withholds `s`, and the requester refunds alone after `L`.
@@ -644,6 +675,16 @@ list). Every rule failure produces an anomaly with a code and a severity:
     attestation that passes 1–4, so an uncounted attestation can't record anything on the
     performer. The condition is `fail` if any counted attestation fails, `pass` if one passes.
 
+18. **V-18 Settlement combination (new, CR-002).** The terms on `REQUEST` or `COUNTER` are a
+    valid combination (§7). `invalid_settlement_combo` (reject; on a `REQUEST`, no commitment).
+19. **V-19 Escrow acknowledgement (new, CR-002).** Under `verifier`, an act that makes the
+    commitment promised is valid only after a `K_ESCROW_ACK` from the `settlement_verifier` naming
+    the hashlock of the terms it promises. `missing_escrow_ack` (reject). An acknowledgement from
+    anyone but a settlement verifier or arbiter of the commitment is `unauthorized`.
+20. **V-20 Release (new, CR-002).** `RELEASE` is signed by the `settlement_verifier`, its preimage
+    hashes to `H`, and every condition passes against the current `REPORT` by the evidence rules
+    (V-11, V-17), whoever attested. `bad_release` (reject).
+
 Deadline-related flags: `late` (flag) for a `REPORT` after the deadline or a `SATISFY`/`REJECT`
 after the review window.
 
@@ -669,6 +710,23 @@ order (INV-2).
 | J-12 | Declared aggregate/result disagree; an unlisted runner | `malformed`; `unlisted_verifier`; not counted |
 | J-13 | Judged floor plus a `mechanical` audit condition; judges pass, audit fails | `c2` pass, audit fail: not every condition is met; assurance `opinion` |
 | J-14 | A judged condition carries an unknown field (e.g. `holdback`) | Terms don't parse; the `REQUEST` is `malformed`, no commitment |
+
+**Settlement-trigger vectors (CR-002 Phase A).** Each also runs under every arrival-order
+permutation. S-2 and S-3 were about delivery modes, which commitments-are-atomic removed (§1); S-2
+is reused for the remaining invalid combination.
+
+| Id | Setup | Expected |
+| --- | --- | --- |
+| S-1 | Commitment with no new fields | Behaves exactly as before: every earlier vector passes unchanged |
+| S-2 | `verifier` with a `human` condition | `REQUEST` invalid; `invalid_settlement_combo`; no commitment |
+| S-4 | `verifier`; `PROMISE` without an `ESCROW_ACK` (one from a stranger) | Not applied; `missing_escrow_ack`; the stranger's ack `unauthorized` |
+| S-5 | `verifier`; passing attestation; valid `RELEASE`; later `SATISFY` | Settled; `SATISFY` recorded as a judgement, no state change |
+| S-6 | `RELEASE` whose secret doesn't hash to `H` | Not applied; `bad_release` |
+| S-7 | `RELEASE` signed by a key other than `settlement_verifier` | Not applied; `bad_release` |
+| S-7b | `RELEASE` before every condition passes | Not applied; `bad_release` |
+| S-8 | Verifier silent past the review window | Lapsed; verifier fault |
+| S-8b | `verifier`; requester `SATISFY`, then `REJECT` without a failing attestation | Neither applied; `illegal_transition` |
+| S-8c | `verifier`; failing attestation; requester `REJECT` | Reworking |
 
 ## 11. Bindings, governance and reputation
 
@@ -829,7 +887,7 @@ From CR-001 (the `judged` condition class; its OD-1…OD-6):
 Each phase is gated by acceptance criteria that a coding agent can test mechanically.
 
 1. **P0 Grammar and validator crate (`acn-core`).** Act schemas, terms schema, JCS hashing, the
-   fold, sibling resolution, V-1…V-11 and V-13…V-17, anomaly codes, `status_at`.
+   fold, sibling resolution, V-1…V-11 and V-13…V-20, anomaly codes, `status_at`.
    - Gate: scenario tests for every act and every anomaly code pass.
    - Gate: a property test shows identical state and anomalies under arrival-order permutations
      of each scenario (INV-2).

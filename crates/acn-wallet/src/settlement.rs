@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use acn_core::kinds::{K_REQUEST, K_RULING, K_SATISFY};
+use acn_core::kinds::{K_RELEASE, K_REQUEST, K_RULING, K_SATISFY};
 use acn_core::{fold, Event, Phase, Terms};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -50,7 +50,8 @@ pub fn check_payment(terms: &Terms, v: &Verified, me: &str) -> Result<(), String
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Advice {
-    /// Performer: the preimage is public in a SATISFY or performer-side RULING; redeem now.
+    /// Performer: the preimage is public in a SATISFY, a performer-side RULING or a verifier
+    /// RELEASE; redeem now.
     Redeem { token: String, preimage: String },
     /// Requester: closed without satisfaction; reclaim once `locktime` has passed.
     Refund {
@@ -70,16 +71,22 @@ pub fn advise(events: &[Event], commitment: &str, me: &str, now: u64) -> Option<
     terms.hashlock()?;
     let status = acn_core::status_at(c, now);
 
-    if me == c.performer && st.phase == Phase::Satisfied {
-        let closing = c.chain.last()?;
-        let e = events
-            .iter()
-            .find(|e| &e.id == closing && matches!(e.kind, K_SATISFY | K_RULING))?;
+    let paid = matches!(st.phase, Phase::Satisfied | Phase::Settled);
+    if me == c.performer && paid {
+        // The settling act: the last SATISFY / RULING / RELEASE on the chain (a judgement
+        // SATISFY after a RELEASE carries no preimage, so look for the one that does).
+        let e = c.chain.iter().rev().find_map(|id| {
+            events.iter().find(|e| {
+                &e.id == id
+                    && matches!(e.kind, K_SATISFY | K_RULING | K_RELEASE)
+                    && e.content.contains("preimage")
+            })
+        })?;
         let v: Value = serde_json::from_str(&e.content).ok()?;
         let preimage = v.get("preimage")?.as_str()?.to_string();
         return Some(Advice::Redeem { token, preimage });
     }
-    if me == c.requester && status.terminal && st.phase != Phase::Satisfied {
+    if me == c.requester && status.terminal && !paid {
         let locktime = terms.payment.as_ref()?.locktime?;
         return Some(Advice::Refund {
             token,
@@ -88,4 +95,84 @@ pub fn advise(events: &[Event], commitment: &str, me: &str, now: u64) -> Option<
         });
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use acn_core::draft::{public_key, Draft};
+    use acn_core::kinds::*;
+    use serde_json::json;
+
+    /// CR-002 verifier trigger: after RELEASE the performer is advised to redeem with `s`.
+    #[test]
+    fn performer_redeems_after_release() {
+        let (req, perf, ver) = ([1u8; 32], [2u8; 32], [4u8; 32]);
+        let (rp, pp, vp) = (
+            public_key(&req).unwrap(),
+            public_key(&perf).unwrap(),
+            public_key(&ver).unwrap(),
+        );
+        let s = [9u8; 32];
+        let pre: String = s.iter().map(|b| format!("{b:02x}")).collect();
+        let h = acn_core::jcs::sha256_hex(&s);
+        let terms = json!({
+            "v": acn_core::terms::TERMS_VERSION, "deliverable": {"description": "x"},
+            "conditions": [{"id": "tests", "class": "mechanical"}], "deadline": 5000, "review_window": 500,
+            "rework_limit": 0, "price": {"amount": 10, "unit": "sat"},
+            "payment": {"mint": "https://m", "hashlock": h, "locktime": 99999},
+            "verifiers": [{"pubkey": vp, "classes": ["mechanical"]}], "arbiter": null,
+            "subcontracting": false, "disclosure": "private", "governance": null,
+            "settlement_trigger": "verifier", "settlement_verifier": vp
+        });
+        let parties = [rp.as_str(), pp.as_str()];
+        let r = Draft::request(&pp, "N", &terms, Some("tok"))
+            .unwrap()
+            .sign(&req, 1000)
+            .unwrap();
+        let ack = Draft::new(K_ESCROW_ACK)
+            .tag(vec!["c".into(), r.id.clone()])
+            .content(json!({"hashlock": h}))
+            .sign(&ver, 1001)
+            .unwrap();
+        let p = Draft::promise(
+            &r.id,
+            &r.id,
+            &parties,
+            &acn_core::jcs::hash(&terms).unwrap(),
+            0.9,
+            true,
+        )
+        .sign(&perf, 1100)
+        .unwrap();
+        let rep = Draft::report(&r.id, &p.id, &parties, None, None, &[])
+            .sign(&perf, 1200)
+            .unwrap();
+        let att = Draft::attest(
+            K_ATTEST_MECH,
+            &r.id,
+            &rep.id,
+            "tests",
+            json!({"result": "pass"}),
+        )
+        .sign(&ver, 1250)
+        .unwrap();
+        let rel = Draft::act(K_RELEASE, &r.id, &rep.id, &parties)
+            .content(json!({"preimage": pre}))
+            .sign(&ver, 1300)
+            .unwrap();
+        let events = vec![r.clone(), ack, p, rep, att, rel];
+        assert_eq!(
+            advise(&events, &r.id, &pp, 2000),
+            Some(Advice::Redeem {
+                token: "tok".into(),
+                preimage: pre
+            })
+        );
+        assert_eq!(
+            advise(&events, &r.id, &rp, 2000),
+            None,
+            "nothing to refund once settled"
+        );
+    }
 }

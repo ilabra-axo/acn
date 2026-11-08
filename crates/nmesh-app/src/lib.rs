@@ -596,11 +596,15 @@ impl App {
         };
         let mut draft = Draft::request(&key, &profile, &terms, ct.as_deref())
             .map_err(|e| AppError::Invalid(e.to_string()))?;
-        // Escrow the preimage with the arbiter (Core.md §8.4).
-        if let (Some(s), Some(arbiter)) = (&secret, terms["arbiter"].as_str()) {
-            let arbiter = PublicKey::parse(arbiter).map_err(|e| AppError::BadKey(e.to_string()))?;
-            let ct = self.inner.session.nip44_encrypt(&arbiter, s)?;
-            draft = draft.tag(vec!["escrow".into(), ct, arbiter.to_hex()]);
+        // Escrow the preimage with its holder: the arbiter (Core.md §8.4) or the settlement
+        // verifier (verifier trigger, §8.2).
+        let holder = terms["settlement_verifier"]
+            .as_str()
+            .or(terms["arbiter"].as_str());
+        if let (Some(s), Some(holder)) = (&secret, holder) {
+            let holder = PublicKey::parse(holder).map_err(|e| AppError::BadKey(e.to_string()))?;
+            let ct = self.inner.session.nip44_encrypt(&holder, s)?;
+            draft = draft.tag(vec!["escrow".into(), ct, holder.to_hex()]);
         }
         let act = self.inner.session.sign_act(&draft, None)?;
         let id = act.id.clone();

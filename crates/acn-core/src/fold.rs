@@ -38,6 +38,8 @@ pub enum Phase {
     Declined,
     Withdrawn,
     Revoked,
+    /// Payment released by the designated trigger (`RELEASE`; CR-002). Terminal.
+    Settled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -61,6 +63,8 @@ pub struct State {
     pub report_at: Option<u64>,
     pub rejected_at: Option<u64>,
     pub ruled: bool,
+    /// After `Settled`: the requester's one recorded judgement (`SATISFY`/`REJECT`) was made.
+    pub judged: bool,
     pub head: String,
     pub head_at: u64,
 }
@@ -352,6 +356,14 @@ impl<'a, 'e> Ctx<'a, 'e> {
             );
             return Some(commitment);
         };
+        // CR-002: only the valid settlement combinations make a commitment.
+        if let Err(e) = root.settlement_combo() {
+            acc.push(req.id(), Code::InvalidSettlementCombo, e);
+            for p in self.members {
+                acc.push(p.id(), Code::PendingRef, "commitment root is invalid");
+            }
+            return None;
+        }
         let price = root.price.amount;
         let mint = root.payment.as_ref().map(|p| p.mint.clone());
 
@@ -421,6 +433,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
             report_at: None,
             rejected_at: None,
             ruled: false,
+            judged: false,
             head: req.id().to_string(),
             head_at: req.at(),
         };
@@ -561,6 +574,19 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 K_ATTEST_MECH | K_ATTEST_GROUND | K_ATTEST_JUDGED | K_INTERP_REPORT => {
                     self.attestation(acc, &run, &snapshots, p, &mut evidence)
                 }
+                K_ESCROW_ACK => {
+                    let holder = run.terms.values().any(|t| {
+                        t.settlement_verifier.as_deref() == Some(p.ev.pubkey.as_str())
+                            || t.arbiter.as_deref() == Some(p.ev.pubkey.as_str())
+                    });
+                    if !holder {
+                        acc.push(
+                            p.id(),
+                            Code::Unauthorized,
+                            "ESCROW_ACK must be signed by the settlement verifier or arbiter",
+                        );
+                    }
+                }
                 _ => {}
             }
         }
@@ -570,22 +596,9 @@ impl<'a, 'e> Ctx<'a, 'e> {
         if let Some(report) = &st.report {
             for cond in &terms_now.conditions {
                 let ev = evidence.get(&(report.clone(), cond.id.clone()));
-                let status = match cond.class {
-                    ConditionClass::Mechanical
-                    | ConditionClass::Grounding
-                    | ConditionClass::Judged => match ev {
-                        Some(v) if v.iter().any(|(r, _)| r == "fail") => ConditionStatus::Fail,
-                        Some(v) if v.iter().any(|(r, _)| r == "pass") => ConditionStatus::Pass,
-                        _ => ConditionStatus::Unverified,
-                    },
-                    ConditionClass::Interpretive => ConditionStatus::Advisory {
-                        verdicts: ev
-                            .map(|v| v.iter().map(|(r, _)| r.clone()).collect())
-                            .unwrap_or_default(),
-                    },
-                    ConditionClass::Human => ConditionStatus::Human,
-                };
-                commitment.conditions.insert(cond.id.clone(), status);
+                commitment
+                    .conditions
+                    .insert(cond.id.clone(), condition_status(cond.class, ev));
             }
         }
 
@@ -895,6 +908,78 @@ impl<'a, 'e> Ctx<'a, 'e> {
         Some(if pass { "pass" } else { "fail" })
     }
 
+    /// Under the verifier trigger, nothing becomes promised before the escrow is acknowledged.
+    fn require_escrow(&self, t: &Terms) -> Result<(), (Code, String)> {
+        if t.settlement_trigger == crate::terms::SettlementTrigger::Verifier
+            && !self.escrow_acked(t)
+        {
+            return Err((
+                Code::MissingEscrowAck,
+                "no ESCROW_ACK from the settlement_verifier for this hashlock".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// REJECT gaps must name conditions of the terms.
+    fn check_gaps(&self, terms: &Terms, k: &Parsed) -> Result<(), (Code, String)> {
+        for gap in k.content["gaps"].as_array().into_iter().flatten() {
+            let cond = gap["condition"].as_str().unwrap_or_default();
+            if terms.condition(cond).is_none() && cond != "artifact_unavailable" {
+                return Err((
+                    Code::Malformed,
+                    format!("gap names unknown condition `{cond}`"),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// CR-002: an `ESCROW_ACK` from the settlement verifier for the hashlock of `t`.
+    fn escrow_acked(&self, t: &Terms) -> bool {
+        let (Some(v), Some(h)) = (t.settlement_verifier.as_deref(), t.hashlock()) else {
+            return false;
+        };
+        self.members.iter().any(|p| {
+            p.kind() == K_ESCROW_ACK
+                && p.ev.pubkey == v
+                && p.str_field("hashlock")
+                    .is_some_and(|x| x.eq_ignore_ascii_case(h))
+        })
+    }
+
+    /// Condition statuses against the REPORT at `st` (for verifier-trigger legality). Uses the
+    /// same evidence rules as the fold's own pass; anomalies are reported there, not here.
+    fn conditions_at(
+        &self,
+        run: &Run,
+        terms: &Terms,
+        st: &State,
+    ) -> BTreeMap<String, ConditionStatus> {
+        let Some(report) = st.report.clone() else {
+            return BTreeMap::new();
+        };
+        let snaps = BTreeMap::from([(report.clone(), st.clone())]);
+        let mut scratch = Acc::default();
+        let mut evidence = BTreeMap::new();
+        for p in self.members.iter().filter(|p| {
+            matches!(
+                p.kind(),
+                K_ATTEST_MECH | K_ATTEST_GROUND | K_ATTEST_JUDGED | K_INTERP_REPORT
+            )
+        }) {
+            self.attestation(&mut scratch, run, &snaps, p, &mut evidence);
+        }
+        terms
+            .conditions
+            .iter()
+            .map(|c| {
+                let ev = evidence.get(&(report.clone(), c.id.clone()));
+                (c.id.clone(), condition_status(c.class, ev))
+            })
+            .collect()
+    }
+
     /// V-15, V-5, V-6, V-9, V-10, V-8 for one candidate act at the current head.
     fn step(
         &self,
@@ -910,6 +995,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
         let n = run.profile == Profile::N;
         let is_req = by == run.requester;
         let is_perf = by == run.performer;
+        let verifier = terms.settlement_trigger == crate::terms::SettlementTrigger::Verifier;
         let mut next = st.clone();
         next.head = k.id().to_string();
         next.head_at = k.at();
@@ -952,6 +1038,9 @@ impl<'a, 'e> Ctx<'a, 'e> {
                         format!("counter terms {h} not available"),
                     ));
                 }
+                if let Err(e) = run.terms[&h].settlement_combo() {
+                    return Err((Code::InvalidSettlementCombo, e));
+                }
                 next.pending = Some(Pending {
                     terms: h,
                     by: by.into(),
@@ -980,6 +1069,9 @@ impl<'a, 'e> Ctx<'a, 'e> {
                         "ACCEPT terms differ from the pending counter".into(),
                     ));
                 }
+                if let Some(t) = run.terms.get(&pending.terms) {
+                    self.require_escrow(t)?;
+                }
                 next.terms = pending.terms.clone();
                 next.pending = None;
                 next.promised = true;
@@ -998,6 +1090,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
                         "PROMISE terms differ from the terms in force".into(),
                     ));
                 }
+                self.require_escrow(terms)?;
                 next.promised = true;
                 next.phase = Promised;
             }
@@ -1040,6 +1133,10 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 if !legal {
                     return illegal();
                 }
+                // T1: a REPORT from Requested is the implicit promise.
+                if st.phase == Requested {
+                    self.require_escrow(terms)?;
+                }
                 if k.at() > terms.deadline {
                     flags.push((Code::Late, "REPORT after the terms deadline".into()));
                 }
@@ -1047,6 +1144,78 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 next.pending = None;
                 next.report = Some(k.id().to_string());
                 next.report_at = Some(k.at());
+            }
+            K_SATISFY | K_REJECT if st.phase == Settled => {
+                // After release: one recorded judgement, no settlement effect (CR-002).
+                if !is_req {
+                    return unauthorized("requester");
+                }
+                if st.judged {
+                    return illegal();
+                }
+                if kind == K_REJECT {
+                    self.check_gaps(terms, k)?;
+                }
+                next.judged = true;
+            }
+            K_SATISFY | K_REJECT if verifier && st.phase == Reported => {
+                if !is_req {
+                    return unauthorized("requester");
+                }
+                if kind == K_SATISFY {
+                    return Err((
+                        Code::IllegalTransition,
+                        "under the verifier trigger, RELEASE settles; SATISFY is a judgement after it".into(),
+                    ));
+                }
+                // REJECT for rework only against a failing attestation, so a requester can't
+                // pre-empt the release of work that passes.
+                self.check_gaps(terms, k)?;
+                let failing = self
+                    .conditions_at(run, terms, st)
+                    .values()
+                    .any(|s| *s == ConditionStatus::Fail);
+                if !failing {
+                    return Err((
+                        Code::IllegalTransition,
+                        "under the verifier trigger, REJECT needs a failing attestation".into(),
+                    ));
+                }
+                if late_review(terms, st, k) {
+                    flags.push((Code::Late, "REJECT after the review window".into()));
+                }
+                if n && st.rework_count < terms.rework_limit {
+                    next.rework_count += 1;
+                    next.phase = Reworking;
+                } else {
+                    next.phase = Rejected;
+                    next.rejected_at = Some(k.at());
+                }
+            }
+            K_RELEASE => {
+                if !verifier {
+                    return illegal();
+                }
+                if terms.settlement_verifier.as_deref() != Some(by) {
+                    return Err((
+                        Code::BadRelease,
+                        "RELEASE must be signed by the settlement_verifier".into(),
+                    ));
+                }
+                if st.phase != Reported {
+                    return illegal();
+                }
+                if let Err((_, why)) = check_preimage(terms, k) {
+                    return Err((Code::BadRelease, why));
+                }
+                let statuses = self.conditions_at(run, terms, st);
+                if let Some((c, s)) = statuses.iter().find(|(_, s)| **s != ConditionStatus::Pass) {
+                    return Err((
+                        Code::BadRelease,
+                        format!("condition `{c}` has not passed ({s:?})"),
+                    ));
+                }
+                next.phase = Settled;
             }
             K_SATISFY => {
                 if !is_req {
@@ -1068,15 +1237,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 if st.phase != Reported {
                     return illegal();
                 }
-                for gap in k.content["gaps"].as_array().into_iter().flatten() {
-                    let cond = gap["condition"].as_str().unwrap_or_default();
-                    if terms.condition(cond).is_none() && cond != "artifact_unavailable" {
-                        return Err((
-                            Code::Malformed,
-                            format!("gap names unknown condition `{cond}`"),
-                        ));
-                    }
-                }
+                self.check_gaps(terms, k)?;
                 if late_review(terms, st, k) {
                     flags.push((Code::Late, "REJECT after the review window".into()));
                 }
@@ -1138,6 +1299,23 @@ impl<'a, 'e> Ctx<'a, 'e> {
             }
         }
         Ok((next, flags))
+    }
+}
+
+fn condition_status(class: ConditionClass, ev: Option<&Vec<(String, String)>>) -> ConditionStatus {
+    match class {
+        ConditionClass::Mechanical | ConditionClass::Grounding | ConditionClass::Judged => match ev
+        {
+            Some(v) if v.iter().any(|(r, _)| r == "fail") => ConditionStatus::Fail,
+            Some(v) if v.iter().any(|(r, _)| r == "pass") => ConditionStatus::Pass,
+            _ => ConditionStatus::Unverified,
+        },
+        ConditionClass::Interpretive => ConditionStatus::Advisory {
+            verdicts: ev
+                .map(|v| v.iter().map(|(r, _)| r.clone()).collect())
+                .unwrap_or_default(),
+        },
+        ConditionClass::Human => ConditionStatus::Human,
     }
 }
 

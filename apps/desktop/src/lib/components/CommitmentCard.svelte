@@ -19,14 +19,14 @@
   const PHASE: Record<string, string> = {
     requested: "Requested", countered: "Counter-offer", promised: "Promised", reported: "Reported",
     reworking: "Reworking", satisfied: "Satisfied", rejected: "Rejected", disputed: "Disputed",
-    declined: "Declined", withdrawn: "Withdrawn", revoked: "Revoked",
+    declined: "Declined", withdrawn: "Withdrawn", revoked: "Revoked", settled: "Settled",
   };
   const ROLE: Record<string, string> = {
     requester: "you", performer: "performer", arbiter: "arbiter", verifier: "verifier", governance: "gate", other: "other",
   };
 
   const tone = $derived(
-    c.phase === "satisfied" ? "ok"
+    c.phase === "satisfied" || c.phase === "settled" ? "ok"
     : c.phase === "rejected" || c.phase === "declined" || c.phase === "revoked" ? (c.terminal ? "bad" : "you")
     : c.phase === "withdrawn" ? "muted"
     : c.lapsed ? "bad"
