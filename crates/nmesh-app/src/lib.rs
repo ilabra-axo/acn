@@ -956,6 +956,8 @@ impl App {
                     .commitment(&parse_pk(pubkey)?.to_hex(), commitment)
                     .await)
             }
+            // FUND locks real money: the wallet path, not the generic act path.
+            HintAction::Fund => self.fund(pubkey, commitment).await.map(Some),
             action => self.act(pubkey, commitment, action).await.map(Some),
         }
     }

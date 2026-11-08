@@ -163,9 +163,15 @@ async fn chat(
 
 async fn run_relay(port: u16) -> anyhow::Result<()> {
     use nostr_relay_builder::prelude::*;
+    // The default 60 notes/minute per connection is too low for a demo cast: every act is two
+    // gift wraps, and a presenter can run several scenarios a minute.
     let builder = RelayBuilder::default()
         .addr(IpAddr::V4(Ipv4Addr::LOCALHOST))
-        .port(port);
+        .port(port)
+        .rate_limit(RateLimit {
+            max_reqs: 500,
+            notes_per_minute: 6_000,
+        });
     let relay = LocalRelay::new(builder);
     relay.run().await?;
     eprintln!("dev relay (in-memory) listening on {}", relay.url().await);

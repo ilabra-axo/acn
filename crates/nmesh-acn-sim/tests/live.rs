@@ -8,7 +8,7 @@ use acn_core::Phase;
 use acn_sim::{Actor, HintAction, SCENARIOS};
 use nmesh_acn_sim::{start, Config, MintSetup};
 use nmesh_app::{App, AppConfig};
-use nostr_relay_builder::MockRelay;
+use nostr_relay_builder::prelude::{LocalRelay, RateLimit, RelayBuilder};
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("nmesh-sim-{name}-{}", std::process::id()));
@@ -19,7 +19,13 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
 
 #[tokio::test]
 async fn every_scenario_plays_live() -> anyhow::Result<()> {
-    let relay = MockRelay::run().await?;
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    // Thirteen scenarios in well under a minute: lift the default 60 notes/minute per connection.
+    let relay = LocalRelay::new(RelayBuilder::default().rate_limit(RateLimit {
+        max_reqs: 500,
+        notes_per_minute: 6_000,
+    }));
+    relay.run().await?;
     let url = relay.url().await.to_string();
     let dir = temp_dir("live");
     let cast = start(Config {
@@ -37,8 +43,8 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
     let (app, _events) = App::start(cfg).await?;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let w = app.top_up(100).await?;
-    assert_eq!((w.available, w.simulated), (100, false));
+    let w = app.top_up(300).await?;
+    assert_eq!((w.available, w.simulated), (300, false));
 
     // The "🎬 ACN demo" button: discovery by K_SVC, Atlas first.
     let found = app.discover_demo().await?;
@@ -65,7 +71,12 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
         app.accept_agent(&pk).await?;
     }
 
+    // `ONLY=judged,contingent cargo test ...` plays a subset (the final balance checks then fail).
+    let only = std::env::var("ONLY").ok();
     for s in SCENARIOS {
+        if only.as_deref().is_some_and(|o| !o.split(",").any(|x| x == s.id)) {
+            continue;
+        }
         let pk = cast.public_key(s.actor).to_hex();
         let c = app.request(&pk, &format!("/{} the demo", s.id)).await?;
         let id = c.id.clone();
@@ -103,6 +114,8 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
         let expected = match s.id {
             "silent" => Phase::Withdrawn,
             "rogue" => Phase::Declined,
+            "judged" | "contingent" => Phase::Settled,
+            "injected" => Phase::Rejected,
             _ => Phase::Satisfied,
         };
         assert_eq!(view.phase, Some(expected), "{}", s.id);
@@ -114,9 +127,21 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
         let price = match s.id {
             "paid" => 21,
             "dispute" => 50,
+            "judged" | "injected" => 60,
+            "judged-auto" => 40,
+            "contingent" => 30,
             _ => 0,
         };
-        if price > 0 {
+        if s.id == "injected" {
+            // Nothing released: the token stays locked until its locktime (then the requester refunds).
+            let mine = app.wallet().await?.expect("wallet");
+            let lock = mine
+                .locks
+                .iter()
+                .find(|l| l.commitment.as_deref() == Some(id.as_str()))
+                .expect("lock linked to the commitment");
+            assert_eq!((lock.amount, lock.state), (60, acn_wallet::LockState::Locked));
+        } else if price > 0 {
             let mut atlas = 0;
             for _ in 0..100 {
                 atlas = cast.performer_wallet().await?.available;
@@ -125,7 +150,18 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-            let mine = app.wallet().await?.expect("wallet");
+            let mut mine = app.wallet().await?.expect("wallet");
+            for _ in 0..50 {
+                let redeemed = mine.locks.iter().any(|l| {
+                    l.commitment.as_deref() == Some(id.as_str())
+                        && l.state == acn_wallet::LockState::Redeemed
+                });
+                if redeemed {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                mine = app.wallet().await?.expect("wallet");
+            }
             let lock = mine
                 .locks
                 .iter()
@@ -133,7 +169,6 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
                 .expect("lock linked to the commitment");
             assert_eq!(lock.amount, price);
             assert_eq!(lock.state, acn_wallet::LockState::Redeemed, "{}", s.id);
-            assert_eq!(mine.locked_out, 0);
             assert!(atlas >= price, "{}: Atlas has {atlas}", s.id);
         }
         let codes: Vec<_> = view.anomalies.iter().map(|a| a.code).collect();
@@ -148,6 +183,12 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
                 "{codes:?}"
             ),
             "dispute" => assert_eq!(view.chain.last().map(|e| e.act), Some("RULING")),
+            "injected" => assert!(codes.contains(&"injection_detected"), "{codes:?}"),
+            "contingent" => {
+                // Sealed until CLAIM revealed k; now the card shows the decrypted result.
+                let r = view.report.as_ref().expect("report");
+                assert_eq!(r.payload["title"], "Parser module", "{:?}", r.payload);
+            }
             _ => {}
         }
         // Third-party acts (verifier, judge, arbiter, gate) are grouped into the performer's thread.
@@ -167,9 +208,11 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
         .all(|w| w[0].updated_at >= w[1].updated_at));
     assert_eq!(app.board(100).await.items.len(), SCENARIOS.len());
 
-    // 100 - 21 (paid) - 50 (dispute, ruled for Atlas).
-    assert_eq!(app.wallet().await?.unwrap().available, 29);
-    assert_eq!(cast.performer_wallet().await?.available, 71);
+    // 300 - 21 (paid) - 50 (dispute, ruled for Atlas) - 60 (judged) - 40 (judged-auto)
+    // - 30 (contingent); 60 (injected) stays locked until its locktime.
+    let mine = app.wallet().await?.unwrap();
+    assert_eq!((mine.available, mine.locked_out), (39, 60));
+    assert_eq!(cast.performer_wallet().await?.available, 201);
     // Not enough left for another dispute (50 sat): refused before anything is signed.
     let pk = cast.public_key(Actor::Performer).to_hex();
     let err = app.request(&pk, "/dispute again").await.unwrap_err();
@@ -179,7 +222,7 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
     assert!(!app.commitments(&pk).await?.is_empty());
     app.reset_demo().await;
     assert!(app.commitments(&pk).await?.is_empty());
-    assert_eq!(app.wallet().await?.unwrap().available, 29, "money is kept");
+    assert_eq!(app.wallet().await?.unwrap().available, 39, "money is kept");
     app.shutdown().await;
     let mut cfg = AppConfig::new(vec![relay.url().await.to_string()], dir.join("app"));
     cfg.mint = Some(cast.mint_url().to_string());

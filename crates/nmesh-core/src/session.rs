@@ -171,7 +171,11 @@ impl Session {
     ) -> Result<EventId, CoreError> {
         let mut rumor = rumor.build(self.public_key());
         let id = rumor.id();
-        self.client.gift_wrap(&to, rumor.clone(), []).await?;
+        let out = self.client.gift_wrap(&to, rumor.clone(), []).await?;
+        if out.success.is_empty() {
+            // Relays answer OK=false (e.g. rate limits) without an error; don't lose it silently.
+            tracing::warn!(failed = ?out.failed, "no relay accepted the gift wrap");
+        }
         if to != self.public_key() {
             self.client.gift_wrap(&self.public_key(), rumor, []).await?;
         }

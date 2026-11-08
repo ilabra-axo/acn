@@ -95,6 +95,8 @@ struct Store {
     /// commitment -> decrypted Cashu token addressed to Atlas
     tokens: Mutex<HashMap<String, String>>,
     redeemed: Mutex<HashSet<String>>,
+    /// Contingent (Core.md §8.2): Atlas's delivery key `k` per commitment.
+    keys: Mutex<BTreeMap<String, String>>,
 }
 
 impl Store {
@@ -390,36 +392,79 @@ impl Sim {
                 .lock()
                 .unwrap()
                 .insert(e.id.clone(), sender);
-            // Escrowed preimage for the arbiter (Core.md §8.4): NIP-44 to Solon.
-            if let Some(ct) = e
-                .tags
-                .iter()
-                .find(|t| t[0] == "escrow")
-                .and_then(|t| t.get(1))
-            {
-                let arbiter = self.sessions[&Actor::Arbiter].keys();
-                match nostr_sdk::nips::nip44::decrypt(arbiter.secret_key(), &sender, ct) {
+            // Escrowed preimage for its holder (Core.md §8.2, §8.4): the arbiter or the
+            // settlement verifier, named by the tag's third element (the arbiter if absent).
+            if let Some(t) = e.tags.iter().find(|t| t[0] == "escrow" && t.len() > 1) {
+                let holder = t
+                    .get(2)
+                    .and_then(|pk| self.actor_of(pk))
+                    .unwrap_or(Actor::Arbiter);
+                let keys = self.sessions[&holder].keys();
+                match nostr_sdk::nips::nip44::decrypt(keys.secret_key(), &sender, &t[1]) {
                     Ok(s) => {
                         self.store.escrow.lock().unwrap().insert(e.id.clone(), s);
-                        tracing::info!(commitment = %e.id, "Solon received the escrowed preimage");
+                        tracing::info!(commitment = %e.id, "{} received the escrowed preimage", holder.display_name());
                     }
                     Err(err) => tracing::warn!(error = %err, "escrow could not be decrypted"),
                 }
             }
-            if self.sessions[&Actor::Performer].public_key().to_hex()
-                == e.tags
-                    .iter()
-                    .find(|t| t[0] == "p")
-                    .and_then(|t| t.get(1))
-                    .cloned()
-                    .unwrap_or_default()
-            {
+            if self.sessions[&Actor::Performer].public_key().to_hex() == p_tag(&e) {
+                let content: Value = serde_json::from_str(&e.content).unwrap_or_default();
+                if content["terms"]["settlement_trigger"] == "contingent" {
+                    // Atlas's delivery key; H = sha256(k) goes in the offer.
+                    let k = Keys::generate().secret_key().to_secret_hex();
+                    self.store.keys.lock().unwrap().insert(e.id.clone(), k);
+                }
                 self.check_payment(&e, sender).await;
             }
+        }
+        let atlas = self.sessions[&Actor::Performer].public_key().to_hex();
+        if e.kind == K_FUND && e.tags.iter().any(|t| t[0] == "p" && t.get(1) == Some(&atlas)) {
+            self.check_fund(&e, sender).await;
         }
         let (c, fresh) = self.store.add(e);
         if fresh {
             let _ = self.dirty.send(c);
+        }
+    }
+
+    fn actor_of(&self, pk: &str) -> Option<Actor> {
+        self.sessions
+            .iter()
+            .find(|(_, s)| s.public_key().to_hex() == pk)
+            .map(|(a, _)| *a)
+    }
+
+    /// Contingent (Core.md §8.2): Atlas checks the FUND token is locked to the offer's hashlock,
+    /// to him, for the price, before claiming (and so revealing `k`).
+    async fn check_fund(&self, e: &acn_core::Event, sender: PublicKey) {
+        let Some(c) = e.tags.iter().find(|t| t[0] == "c").and_then(|t| t.get(1)).cloned() else {
+            return;
+        };
+        let keys = self.sessions[&Actor::Performer].keys();
+        let me = keys.public_key().to_hex();
+        let content: Value = serde_json::from_str(&e.content).unwrap_or_default();
+        let verdict = async {
+            let ct = content["token"].as_str().ok_or("no token in FUND")?;
+            let token = nostr_sdk::nips::nip44::decrypt(keys.secret_key(), &sender, ct)
+                .map_err(|_| "token is not encrypted to me")?;
+            let v = self.wallet.inspect(&token).await.map_err(|e| e.to_string())?;
+            let k = self.store.keys.lock().unwrap().get(&c).cloned().ok_or("no key")?;
+            let h = acn_core::jcs::sha256_hex(&from_hex(&k).ok_or("bad key")?);
+            if !v.unspent || v.hashlock != h || v.receiver != me {
+                return Err("token does not match the offer".to_string());
+            }
+            if Some(v.amount) != content["amount"].as_u64() {
+                return Err(format!("token is {} sat", v.amount));
+            }
+            self.wallet.note_incoming(&token, &v, &sender.to_hex(), &c);
+            self.store.tokens.lock().unwrap().insert(c.clone(), token);
+            Ok::<_, String>(v.amount)
+        }
+        .await;
+        match verdict {
+            Ok(n) => tracing::info!(commitment = %c, "Atlas verified the {n} sat FUND token"),
+            Err(reason) => tracing::warn!(commitment = %c, %reason, "FUND token rejected"),
         }
     }
 
@@ -432,7 +477,11 @@ impl Sim {
         else {
             return;
         };
-        if terms.payment.is_none() || terms.price.amount == 0 {
+        // Contingent requests carry no token: the requester pays later, by FUND.
+        if terms.payment.is_none()
+            || terms.price.amount == 0
+            || content["terms"]["settlement_trigger"] == "contingent"
+        {
             return;
         }
         let keys = self.sessions[&Actor::Performer].keys();
@@ -517,7 +566,12 @@ impl Sim {
         let escrow = self.store.escrow.lock().unwrap().clone();
         let payments = self.store.payments.lock().unwrap().clone();
         self.maybe_redeem(c, &events);
-        for m in acn_sim::react_paid(&self.cast, &events, &escrow, &payments) {
+        let keys = self.store.keys.lock().unwrap().clone();
+        for m in acn_sim::react_with(&self.cast, &events, &escrow, Some(&payments), &keys) {
+            // CLAIM only once the FUND token is verified (and redeem it with k first).
+            if m.draft.kind == K_CLAIM && !self.store.tokens.lock().unwrap().contains_key(c) {
+                continue;
+            }
             if !self.store.scheduled.lock().unwrap().insert(m.key.clone()) {
                 continue;
             }
@@ -532,7 +586,28 @@ impl Sim {
                     return;
                 };
                 let session = &this.sessions[&m.actor];
-                let act = match session.sign_act(&m.draft, Some(m.not_before)) {
+                let mut draft = m.draft.clone();
+                if let Some(esc) = &m.escrow {
+                    // The key goes to its holder, NIP-44 (and in-process, since we host both).
+                    let to_pk = this.sessions[&esc.to].public_key();
+                    let ct = match session.nip44_encrypt(&to_pk, &esc.secret) {
+                        Ok(ct) => ct,
+                        Err(e) => return tracing::error!(error = %e, "escrow encrypt failed"),
+                    };
+                    draft = draft.tag(vec!["escrow".into(), ct, to_pk.to_hex()]);
+                    this.store.escrow.lock().unwrap().insert(c.clone(), esc.secret.clone());
+                }
+                if draft.kind == K_CLAIM {
+                    let token = this.store.tokens.lock().unwrap().get(&c).cloned();
+                    let k = this.store.keys.lock().unwrap().get(&c).cloned();
+                    let (Some(token), Some(k)) = (token, k) else { return };
+                    this.store.redeemed.lock().unwrap().insert(c.clone());
+                    match this.wallet.redeem(&token, &k, Some(&c)).await {
+                        Ok(n) => tracing::info!(commitment = %c, "Atlas claimed {n} sat with k"),
+                        Err(e) => return tracing::error!(commitment = %c, error = %e, "claim redeem failed"),
+                    }
+                }
+                let act = match session.sign_act(&draft, Some(m.not_before)) {
                     Ok(a) => a,
                     Err(e) => return tracing::error!(error = %e, "sign failed"),
                 };
@@ -550,4 +625,20 @@ impl Sim {
             });
         }
     }
+}
+
+fn p_tag(e: &acn_core::Event) -> String {
+    e.tags
+        .iter()
+        .find(|t| t[0] == "p")
+        .and_then(|t| t.get(1))
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn from_hex(s: &str) -> Option<Vec<u8>> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect()
 }
