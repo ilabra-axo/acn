@@ -49,7 +49,23 @@
   const flags = $derived(
     c.anomalies.filter((a) => a.severity === "flag" && !rejectedActs.some((e) => e.id === a.event)),
   );
-  const rejectable = $derived(c.conditions.length ? c.conditions : [{ id: "result", class: "human", description: "The result", status: null, evidence: [] }]);
+  const rejectable = $derived(c.conditions.length ? c.conditions : [{ id: "result", class: "human" as const, assurance: "human" as const, description: "The result", status: null, evidence: [], judged: null }]);
+
+  // Assurance (spec §7, §12): shown before PROMISE/ACCEPT and SATISFY, with judges named.
+  const ASSURANCE: Record<string, string> = {
+    grounded: "checked against an external referent",
+    check: "checked mechanically (tests, schema, hashes)",
+    human: "your own judgement",
+    opinion: "a judge's opinion, not a check that the work is good",
+  };
+  const judged = $derived(c.conditions.filter((x) => x.judged));
+  function judgedLine(j: NonNullable<Commitment["conditions"][number]["judged"]>) {
+    const who = j.judges.length === 2 ? `${j.judges[0]} and ${j.judges[1]}` : j.judges.join(", ");
+    const agg = j.aggregation === "all" ? "each judge" : j.aggregation;
+    const parts = [`judged by ${who}`, `threshold ${j.threshold}/${j.scale_max} (${agg}, ×${j.repeats})`];
+    if (j.rubric_disclosure === "commit_reveal") parts.push("rubric revealed at judging");
+    return parts.join("; ");
+  }
 
   function when(ts: number) {
     return new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -98,7 +114,13 @@
         {:else}
           <span class="unbound" title={c.performer_binding.detail}>unaccountable ⚠</span>
         {/if}
+        {#if c.assurance}
+          · <span class="assurance" data-a={c.assurance} title={`Overall assurance (weakest condition): ${ASSURANCE[c.assurance]}`}>assurance: {c.assurance}</span>
+        {/if}
       </div>
+      {#each judged as j}
+        <div class="judged-line">⚖︎ <span class="mono">{j.id}</span>: {judgedLine(j.judged!)}</div>
+      {/each}
     </div>
     <span class="status" data-tone={tone}>{status}</span>
   </header>
@@ -170,6 +192,7 @@
           </span>
           <span class="cid mono">{cond.id}</span>
           <span class="class">{cond.class}</span>
+          <span class="assurance" data-a={cond.assurance} title={ASSURANCE[cond.assurance]}>{cond.assurance}</span>
           <span class="desc muted">{cond.description}</span>
         </div>
         {#each cond.evidence as ev}
@@ -239,6 +262,9 @@
     </form>
   {:else if Object.values(c.allowed).some(Boolean)}
     <div class="actions">
+      {#if c.assurance && (c.allowed.accept_counter || c.allowed.satisfy)}
+        <span class="assurance" data-a={c.assurance} title={ASSURANCE[c.assurance]}>assurance: {c.assurance}</span>
+      {/if}
       {#if c.allowed.accept_counter}<button class="btn primary" onclick={() => act("accept_counter")} disabled={busy}>Accept counter-offer</button>{/if}
       {#if c.allowed.satisfy}
         <button class="btn primary" onclick={() => act("satisfy")} disabled={busy}>{c.settlement ? "Satisfy & pay" : "Accept result"}</button>
@@ -343,6 +369,11 @@
   .counted { color: var(--ok); font-size: 11px; }
   .nc { color: var(--warn); font-size: 11px; }
   .not-counted { opacity: 0.85; }
+  .assurance { font-size: 10.5px; font-weight: 650; padding: 0 6px; border-radius: 999px; white-space: nowrap; background: var(--sunken); color: var(--muted); }
+  .assurance[data-a="opinion"] { background: #f3e8ff; color: #6b21a8; }
+  .assurance[data-a="check"] { background: #dcfce7; color: #166534; }
+  .assurance[data-a="grounded"] { background: #dbeafe; color: #1e40af; }
+  .judged-line { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
   .settle {
     display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12.5px;
     border: 1px dashed var(--border); border-radius: var(--radius-sm); padding: 7px 10px;

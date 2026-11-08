@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use acn_core::kinds::*;
-use acn_core::terms::ConditionClass;
+use acn_core::terms::{Aggregation, Assurance, ConditionClass, RubricDisclosure};
 use acn_core::{
     fold, status_at, BindingStatus, Commitment, ConditionStatus, Event, Output, Party, Phase,
     Profile, Severity,
@@ -77,9 +77,26 @@ pub struct Evidence {
 pub struct ConditionView {
     pub id: String,
     pub class: ConditionClass,
+    /// Derived assurance label (spec §7).
+    pub assurance: Assurance,
     pub description: String,
     pub status: Option<ConditionStatus>,
     pub evidence: Vec<Evidence>,
+    /// For `judged` conditions: who judges and against what (clients MUST show it, §12).
+    pub judged: Option<JudgedView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JudgedView {
+    /// `model_id model_version` per judge.
+    pub judges: Vec<String>,
+    pub threshold: f64,
+    pub scale_min: f64,
+    pub scale_max: f64,
+    pub aggregation: Aggregation,
+    pub repeats: u32,
+    pub rubric_disclosure: RubricDisclosure,
+    pub runners: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -198,6 +215,8 @@ pub struct Projection {
     pub binding: BindingStatus,
     pub anomalies: Vec<AnomalyView>,
     pub allowed: Allowed,
+    /// Overall assurance (weakest condition), computed by the validator (spec §7, §12).
+    pub assurance: Option<Assurance>,
     // --- board ---
     pub lane: Lane,
     /// The local user's role in this commitment.
@@ -351,6 +370,26 @@ fn summary(e: &Event) -> String {
             };
             format!("{}: {}{m}", tag(e, "cond").unwrap_or("?"), s(&v, "result"))
         }
+        K_ATTEST_JUDGED => {
+            let judges: Vec<String> = v["judges"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|j| format!("{} {}", s(j, "model_id"), j["median"]))
+                .collect();
+            format!(
+                "{}: {} · score {} ({}) · judged opinion{}",
+                tag(e, "cond").unwrap_or("?"),
+                s(&v, "result"),
+                v["aggregate_score"],
+                judges.join(", "),
+                if v["injection_detected"] == true {
+                    " · injection detected"
+                } else {
+                    ""
+                }
+            )
+        }
         K_INTERP_REPORT => format!(
             "{}: \"{}\" (opinion, advisory)",
             tag(e, "cond").unwrap_or("?"),
@@ -413,7 +452,12 @@ fn one(
             EntryStatus::Pending
         } else if matches!(
             e.kind,
-            K_PROGRESS | K_ATTEST_MECH | K_ATTEST_GROUND | K_INTERP_REPORT | K_ENDORSE
+            K_PROGRESS
+                | K_ATTEST_MECH
+                | K_ATTEST_GROUND
+                | K_ATTEST_JUDGED
+                | K_INTERP_REPORT
+                | K_ENDORSE
         ) {
             EntryStatus::Annotation
         } else {
@@ -473,7 +517,7 @@ fn one(
                 .map(|cond| {
                     let evidence = members
                         .iter()
-                        .filter(|e| matches!(e.kind, K_ATTEST_MECH | K_ATTEST_GROUND | K_INTERP_REPORT))
+                        .filter(|e| matches!(e.kind, K_ATTEST_MECH | K_ATTEST_GROUND | K_ATTEST_JUDGED | K_INTERP_REPORT))
                         .filter(|e| tag(e, "cond") == Some(cond.id.as_str()))
                         .filter(|e| report.as_ref().is_some_and(|r| e_marked(e, "report") == Some(r.id.as_str())))
                         .map(|e| {
@@ -486,7 +530,8 @@ fn one(
                                 by: e.pubkey.clone(),
                                 role: role(&e.pubkey, c),
                                 verdict,
-                                counted: notes.is_empty() && e.kind != K_INTERP_REPORT,
+                                // A below-threshold judged attestation still counts, as a fail.
+                                counted: notes.iter().all(|n| n.code == "below_threshold") && e.kind != K_INTERP_REPORT,
                                 why: notes.first().map(|n| n.detail.clone()).or_else(|| {
                                     (e.kind == K_INTERP_REPORT).then(|| "opinion: informs the requester, never satisfies a condition".to_string())
                                 }),
@@ -496,9 +541,20 @@ fn one(
                     ConditionView {
                         id: cond.id.clone(),
                         class: cond.class,
+                        assurance: cond.class.assurance(),
                         description: cond.description.clone(),
                         status: c.conditions.get(&cond.id).cloned(),
                         evidence,
+                        judged: cond.judged().ok().map(|j| JudgedView {
+                            judges: j.judges.iter().map(|f| format!("{} {}", f.model_id, f.model_version)).collect(),
+                            threshold: j.threshold,
+                            scale_min: j.scale.min,
+                            scale_max: j.scale.max,
+                            aggregation: j.aggregation,
+                            repeats: j.repeats,
+                            rubric_disclosure: j.rubric_disclosure,
+                            runners: j.runners.clone(),
+                        }),
                     }
                 })
                 .collect()
@@ -627,6 +683,7 @@ fn one(
 
     Projection {
         lane,
+        assurance: c.assurance,
         needs_me: next.is_some() && next == Some(my_role),
         my_role,
         next,

@@ -103,6 +103,7 @@
   <div class="top">
     <span class="tool mono">/{c.tool ?? "request"}</span>
     <span class="pill">{c.profile}</span>
+    {#if c.assurance}<span class="assurance" data-a={c.assurance} title="Overall assurance (weakest condition), computed by the validator">{c.assurance}</span>{/if}
     {#if money}<span class="money {money.cls}">{money.text}</span>{/if}
   </div>
 
@@ -151,6 +152,10 @@
   .tile.me { border-left: 3px solid var(--accent); }
   .top { display: flex; align-items: center; gap: 6px; }
   .tool { font-weight: 700; font-size: 13px; }
+  .assurance { font-size: 10px; font-weight: 650; padding: 0 6px; border-radius: 999px; background: var(--sunken); color: var(--muted); }
+  .assurance[data-a="opinion"] { background: #f3e8ff; color: #6b21a8; }
+  .assurance[data-a="check"] { background: #dcfce7; color: #166534; }
+  .assurance[data-a="grounded"] { background: #dbeafe; color: #1e40af; }
   .money { margin-left: auto; font-size: 11.5px; font-weight: 650; white-space: nowrap; }
   .money.locked { color: #c2410c; }
   .money.paid { color: var(--ok); }

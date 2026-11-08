@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod judged;
+
 use std::collections::BTreeMap;
 
 use acn_core::draft::{public_key, Draft};
@@ -63,7 +65,7 @@ pub fn parties() -> [String; 2] {
 /// Base terms; `f` customises them.
 pub fn terms(f: impl FnOnce(&mut Value)) -> Value {
     let mut t = json!({
-        "v": "acn-terms/0.2",
+        "v": "acn-terms/0.3",
         "deliverable": { "description": "do the thing" },
         "conditions": [],
         "deadline": 2000,

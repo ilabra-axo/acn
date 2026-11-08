@@ -17,6 +17,82 @@ pub fn class_rank(kind: u16) -> u8 {
     }
 }
 
+/// Median of a non-empty list (mean of the middle two for an even count).
+pub(crate) fn median(xs: &[f64]) -> f64 {
+    let mut v = xs.to_vec();
+    v.sort_by(f64::total_cmp);
+    let n = v.len();
+    if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
+    }
+}
+
+/// `K_ATTEST_JUDGED` content (spec §9): structure and internal consistency only. Agreement
+/// with the terms is V-17, in the fold.
+fn judged_content(c: &Value) -> Result<(), String> {
+    let judges = c
+        .get("judges")
+        .and_then(Value::as_array)
+        .filter(|j| !j.is_empty())
+        .ok_or("judged attestation needs a non-empty `judges` array")?;
+    for j in judges {
+        for f in [
+            "model_id",
+            "model_version",
+            "prompt_template_hash",
+            "harness_hash",
+            "rationale_hash",
+        ] {
+            if j.get(f).and_then(Value::as_str).is_none() {
+                return Err(format!("judge entry needs `{f}`"));
+            }
+        }
+        if j.get("sampling").is_none() {
+            return Err("judge entry needs `sampling`".into());
+        }
+        let runs: Vec<f64> = j
+            .get("runs")
+            .and_then(Value::as_array)
+            .filter(|r| !r.is_empty())
+            .and_then(|r| r.iter().map(Value::as_f64).collect())
+            .ok_or("judge entry needs a non-empty numeric `runs` array")?;
+        let declared = j
+            .get("median")
+            .and_then(Value::as_f64)
+            .ok_or("judge entry needs a numeric `median`")?;
+        if (median(&runs) - declared).abs() > 1e-9 {
+            return Err("judge `median` is not the median of its `runs`".into());
+        }
+    }
+    if c.get("aggregate_score").and_then(Value::as_f64).is_none() {
+        return Err("`aggregate_score` must be a number".into());
+    }
+    match c.get("result").and_then(Value::as_str) {
+        Some("pass" | "fail") => {}
+        _ => return Err("attestation result must be `pass` or `fail`".into()),
+    }
+    if !c
+        .get("rubric_text_hash")
+        .and_then(Value::as_str)
+        .is_some_and(|h| is_hex(h, 64))
+    {
+        return Err("`rubric_text_hash` must be a lowercase sha256 hex".into());
+    }
+    match c.get("injection_detected").and_then(Value::as_bool) {
+        Some(true)
+            if c.get("injection_span_hash")
+                .and_then(Value::as_str)
+                .is_none() =>
+        {
+            Err("`injection_span_hash` is required when `injection_detected` is true".into())
+        }
+        Some(_) => Ok(()),
+        None => Err("`injection_detected` must be a boolean".into()),
+    }
+}
+
 pub fn is_advancing(kind: u16) -> bool {
     ACTS.contains(&kind) && kind != K_REQUEST && kind != K_PROGRESS
 }
@@ -109,7 +185,7 @@ pub fn parse(ev: &Event) -> R<Option<Parsed<'_>>> {
     let is_commitment_event = ACTS.contains(&ev.kind)
         || matches!(
             ev.kind,
-            K_ATTEST_MECH | K_ATTEST_GROUND | K_INTERP_REPORT | K_ENDORSE
+            K_ATTEST_MECH | K_ATTEST_GROUND | K_ATTEST_JUDGED | K_INTERP_REPORT | K_ENDORSE
         );
 
     if ev.kind == K_REQUEST {
@@ -189,9 +265,13 @@ pub fn parse(ev: &Event) -> R<Option<Parsed<'_>>> {
             _ => return malformed("attestation result must be `pass` or `fail`"),
         },
         K_INTERP_REPORT => need("verdict")?,
+        K_ATTEST_JUDGED => judged_content(&content).map_err(|m| (Code::Malformed, m))?,
         _ => {}
     }
-    if matches!(ev.kind, K_ATTEST_MECH | K_ATTEST_GROUND | K_INTERP_REPORT) {
+    if matches!(
+        ev.kind,
+        K_ATTEST_MECH | K_ATTEST_GROUND | K_ATTEST_JUDGED | K_INTERP_REPORT
+    ) {
         if ev.e_marked("report").len() != 1 {
             return malformed("attestation must reference exactly one REPORT (`e` … `report`)");
         }

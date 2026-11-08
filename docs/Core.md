@@ -1,6 +1,8 @@
-# Agent Commitments over Nostr — Logical Design Spec v0.2
+# Agent Commitments over Nostr — Logical Design Spec v0.3
 
-Nov 7, 2026 · @ivan Labra · v0.2 revision aligned with current NIPs/NUTs and the nmesh prototype.
+Nov 8, 2026 · @ivan Labra · v0.3 = v0.2 (aligned with current NIPs/NUTs and the nmesh prototype)
+plus CR-001, the `judged` condition class ([Appendix B](#appendix-b-change-requests-after-v02)).
+Wire versions: `acn/0.3`, `acn-terms/0.3`.
 v0.1 is preserved at [Core-v0.1.md](Core-v0.1.md); see the [change log](#appendix-a-change-log-v01--v02).
 
 ## 1. Purpose and scope
@@ -54,8 +56,10 @@ MAY follow RFC 2119.
 7. **INV-7 Signatures prove authorship only.** A signature never counts as evidence that a claim
    is true.
 8. **INV-8 Interpretive is not provenance.** Interpretive reports (e.g. LLM-as-judge) use a
-   distinct event kind. A validator MUST NOT satisfy a mechanical or grounding condition with an
-   interpretive report.
+   distinct event kind. A validator MUST NOT satisfy a mechanical, grounding or judged condition
+   with an interpretive report. A judged attestation certifies that a pinned judge produced a
+   stated score; it is evidence about an opinion, not about the work. It MAY satisfy a `judged`
+   condition and nothing else, and clients MUST display the resulting `opinion` assurance label.
 9. **INV-9 Artifacts by hash.** Deliverables and evidence are referenced by sha256 and stored
    off-relay (Blossom). Inline content is limited to small payloads (≤ 16 KiB).
 10. **INV-10 Accountable keys.** Agent keys are bound to an operator key by a signed binding.
@@ -76,7 +80,7 @@ underneath it.
 |---|---|---|
 | **Requester** | `REQUEST`, `COUNTER`, `ACCEPT`, `WITHDRAW`, `SATISFY`, `REJECT`, `DISPUTE` | the payment preimage `s` |
 | **Performer** | `PROMISE`, `COUNTER`, `ACCEPT`, `DECLINE`, `REVOKE`, `PROGRESS`, `REPORT`, `DISPUTE` | a binding to an operator |
-| **Verifier** | `K_ATTEST_MECH`, `K_ATTEST_GROUND`, `K_INTERP_REPORT` | a verifier-scoped binding |
+| **Verifier** | `K_ATTEST_MECH`, `K_ATTEST_GROUND`, `K_INTERP_REPORT`; as a listed **runner** of a `judged` condition, `K_ATTEST_JUDGED` | a verifier-scoped binding |
 | **Arbiter** | `RULING` | an escrowed copy of `s` (§8.4), if named in the terms |
 | **Operator / governance** | `K_BIND`, `K_BIND_REVOKE`, `K_ENDORSE` | long-lived accountable keys |
 
@@ -161,7 +165,7 @@ geocaching 7516–7517). Code MUST reference symbolic names.
 | 7707 | `K_PROGRESS` | 7732 | `K_BIND_REVOKE` |
 | 7708 | `K_REPORT` | 7739 | `K_PRIVATE_ACT` (rumor-only, §5.5) |
 | 7709 | `K_SATISFY` | 37700 | `K_SVC` (addressable) |
-| 7710 | `K_REJECT` | | |
+| 7710 | `K_REJECT` | 7725 | `K_ATTEST_JUDGED` (CR-001) |
 | 7711 | `K_DISPUTE` | | |
 | 7712 | `K_RULING` | | |
 
@@ -176,7 +180,7 @@ geocaching 7516–7517). Code MUST reference symbolic names.
 | `x` | 0+ | sha256 of referenced artifacts. |
 | `parent` | 0–1 | Parent commitment id (subcontracting). |
 | `profile` | 1 on request | `T0`, `T1` or `N`. |
-| `v` | 1 | Protocol version, `acn/0.2`. |
+| `v` | 1 | Protocol version, `acn/0.3`. Validators reject other versions (`bad_version`). |
 
 ### 5.3 Content
 
@@ -289,7 +293,7 @@ remains legal.
 | `REVOKE` | performer | Promised, Reworking | Revoked (scored) | `{reason}` |
 | `PROGRESS` | performer | Promised, Reworking (annotating) | unchanged | `{p_on_time?, note?}` |
 | `REPORT` | performer | Promised, Reworking; Requested in T0/T1 | Reported | `x` tags for artifacts; `{result?: <inline JSON ≤16 KiB>, contract?: <id>, derivation?: <hash>, note?}` |
-| `SATISFY` | requester | Reported | Satisfied | `{preimage?: <hex>}`; required when the terms carry a hashlock |
+| `SATISFY` | requester (by hand, or automatically by its binding under a pre-set policy, §8.2) | Reported | Satisfied | `{preimage?: <hex>}`; required when the terms carry a hashlock |
 | `REJECT` | requester | Reported | Reworking, or Rejected at the rework limit (always Rejected in T0/T1) | `{gaps: [{condition, evidence: [..], note?}]}`, non-empty; conditions must exist in terms |
 | `DISPUTE` | either | Reported; Rejected (if disputable) | Disputed | `{reason, evidence?: [..]}`; terms must name an arbiter |
 | `RULING` | arbiter | Disputed | Satisfied or Rejected (final) | `{decision: "performer"\|"requester", rationale?: <hash>, preimage?: <hex>}` |
@@ -338,9 +342,9 @@ Otherwise they are stored on Blossom and supplied to the validator as a document
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `v` | string | Terms schema version (`acn-terms/0.2`) |
+| `v` | string | Terms schema version (`acn-terms/0.3`; `acn-terms/0.2` documents still parse, without `judged` conditions) |
 | `deliverable` | object | `description`; optional `output_schema` hash, `output_contract` id, `tool` name, `input` arguments |
-| `conditions` | array | Conditions of satisfaction; each has `id`, `class`, and class-specific fields |
+| `conditions` | array | Conditions of satisfaction; each has `id`, `class` (`mechanical`, `grounding`, `judged`, `interpretive`, `human`), and class-specific fields |
 | `deadline` | unix s | Latest `REPORT` time |
 | `review_window` | seconds | Time the requester has after `REPORT` to `SATISFY` or `REJECT` |
 | `rework_limit` | integer | Max `REJECT` → rework cycles before Rejected (0 in T profiles) |
@@ -360,9 +364,42 @@ INV-8 is enforced.
   a mechanical attestation from a listed verifier.
 - **`grounding`:** agreement with an external referent (dataset, resolved market, sensor log),
   named by hash and source. Satisfied only by a grounding attestation.
+- **`judged`:** a pinned judge (e.g. an LLM with a fixed prompt, harness and sampling) scored the
+  work at or above a threshold. Satisfied only by a judged attestation (`K_ATTEST_JUDGED`, §9)
+  from a listed runner (V-17). A `judged` condition certifies that the pinned judges produced
+  the stated score; it **never certifies that the work is good** (INV-8). Class-specific fields:
+
+  | Field | Type | Meaning |
+  | --- | --- | --- |
+  | `judges` | array, ≥ 1 | Each: `model_id`, `model_version` (provider-pinned), `prompt_template_hash`, `harness_hash`, `sampling` (temperature, max tokens, seed if supported) |
+  | `rubric_hash` | sha256 | Hash of the rubric text. The rubric itself MAY be withheld until evaluation (`rubric_disclosure`) |
+  | `rubric_disclosure` | enum | `public` (rubric published with the terms) or `commit_reveal` (only the hash is published; the text is revealed in the attestation) |
+  | `scale` | object | Score range, e.g. `{min: 0, max: 10}` |
+  | `threshold` | number | θ; pass when the aggregate score ≥ θ. MUST lie within `scale` |
+  | `aggregation` | enum | `all` (every judge ≥ θ), `mean`, or `median` (across judges) |
+  | `repeats` | integer, ≥ 1 | Runs per judge; the per-judge score is the median of its runs (non-determinism control) |
+  | `runners` | pubkeys, ≥ 1 | Keys allowed to run the judges and sign the attestation: the requester (its binding) or a third party. MUST NOT include the performer |
+
+  Terms whose `judged` conditions lack these fields, carry any other field, or are inconsistent
+  (no judges, `repeats` 0, no runners, θ outside the scale, a malformed `rubric_hash`) do not
+  parse; inline terms are then `malformed` (V-3, V-9). `judged` requires `acn-terms/0.3`.
+
+  **A `judged` condition is a minimum floor.** Terms that want more assurance add an audit as a
+  further condition of satisfaction, of a stronger class (for example `mechanical` tests, a
+  `grounding` check, or the requester's own `human` review), with its own verifiers. Every
+  condition must be met, so the judges and the audit both have to pass before a `SATISFY` is
+  warranted, including an automatic one (§8.2). There is no post-settlement audit, sampling or
+  holdback.
 - **`interpretive`:** quality judgement (rubric). Interpretive reports MAY inform it, but the
   requester always judges it in the end.
 - **`human`:** the requester's own judgement, expressed by `SATISFY` or `REJECT`.
+
+**Assurance labels.** Every condition carries a derived assurance label: `check`
+(`mechanical`), `grounded` (`grounding`), `opinion` (`judged` and `interpretive`), `human`
+(`human`). A commitment's **overall assurance** is its weakest condition's label, ordered
+`grounded` > `check` > `human` > `opinion` (D-14); a commitment without conditions is `human`.
+The label is computed by the validator from the terms in force, never asserted by a party, and
+clients MUST display it (§12).
 
 **Templates.** Service advertisements publish terms templates by hash. A request that uses a
 template unchanged references the template hash directly, which keeps transactional calls cheap.
@@ -406,6 +443,12 @@ late redemption is a race, not a hard cutoff.
 
 **Timing constraint.** `L` MUST exceed `deadline + review_window + redeem_margin`. Recommended
 `redeem_margin` ≥ 24 h.
+
+**Auto-satisfy (CR-001).** A requester's binding MAY issue `SATISFY` automatically when every
+condition is met (for example, `c1` passes mechanically and `c2` passes as judged). The
+`SATISFY` is signed with the requester's key and remains the requester's act (INV-5): the
+policy is the requester's pre-commitment, not a transfer of closure. Validators neither can nor
+need to tell an automatic `SATISFY` from a manual one.
 
 ### 8.3 T0
 
@@ -453,6 +496,7 @@ fields and kinds, so no consumer can mistake one for another.
 | Correctness | Mechanical attestation | A named check passed on named hashes, reproducibly | Fitness for purpose |
 | Grounding | Grounding attestation | Agreement with a named external referent | Correctness beyond that referent |
 | Existence-before | External timestamp anchor (D-11) | The event existed before a point in time | Anything about content |
+| Scored opinion | Judged attestation | That pinned judges, run by a listed runner, produced the stated scores on named hashes | That the work is good (INV-8) |
 | Opinion | Interpretive report | What a judge concluded | Anything counted as provenance (INV-8) |
 
 **Artifacts.** Stored on Blossom (NIP-B7, sha256-addressed). `REPORT` lists them in `x` tags.
@@ -469,7 +513,22 @@ execution log), `started`/`ended` (advisory).
 
 - **`K_ATTEST_MECH`:** `{result: "pass"|"fail", method, recipe?, env?}`.
 - **`K_ATTEST_GROUND`:** `{result, referent: {source, hash}, method}`.
-- **`K_INTERP_REPORT`:** `{judge, rubric?, verdict, rationale?}`. Always advisory.
+- **`K_ATTEST_JUDGED`:** signed by a runner key listed in the condition's `runners`. Content:
+  - `judges[]`: per judge, the full fingerprint (`model_id`, `model_version`,
+    `prompt_template_hash`, `harness_hash`, `sampling`, as in §7), every run's score (`runs[]`),
+    their `median`, and a `rationale_hash`;
+  - `aggregate_score` and `result` (`pass` | `fail`);
+  - `rubric_text_hash`, which MUST equal the condition's `rubric_hash`, and `rubric_ref`, a
+    Blossom reference to the rubric text (required under `commit_reveal`). The text MAY also be
+    inlined as `rubric_text` (≤ 16 KiB), in which case validators check its sha256;
+  - `injection_detected` (bool) and, if true, `injection_span_hash`, the hash of the offending
+    span.
+
+  Structure (V-3): every listed field is present, `runs` is non-empty and numeric, and each
+  `median` is the median of its `runs` (`malformed` otherwise). Agreement with the terms is
+  V-17. `K_ATTEST_JUDGED` is the only kind that can satisfy a `judged` condition.
+- **`K_INTERP_REPORT`:** `{judge, rubric?, verdict, rationale?}`. Free-form and always
+  advisory.
 
 **Subcontracting.** A child commitment carries `parent` = the parent commitment id, and the
 parent's derivation record lists it. Accountability to a requester stays with its direct
@@ -513,8 +572,10 @@ list). Every rule failure produces an anomaly with a code and a severity:
     `RULING`. `bad_preimage` (reject). A missing preimage when the terms carry a hashlock is
     `malformed`.
 11. **V-11 Evidence class.** A condition counts as satisfied only with evidence of its class from a
-    listed verifier. Interpretive reports never satisfy mechanical or grounding conditions.
-    `wrong_evidence_class` (flag on the attestation; not counted), `unlisted_verifier` (flag).
+    listed verifier (for `judged`: a listed runner, V-17). A `judged` condition is satisfied only by
+    `K_ATTEST_JUDGED`. `K_INTERP_REPORT` never satisfies `mechanical`, `grounding` or `judged`
+    conditions. `wrong_evidence_class` (flag on the attestation; not counted),
+    `unlisted_verifier` (flag; not counted).
 12. **V-12 Availability.** *Moved out of the validator* (it needs network I/O). Availability is a
     liveness annotation computed by clients and bindings, alongside `status_at`. It never changes
     the fold.
@@ -529,7 +590,32 @@ list). Every rule failure produces an anomaly with a code and a severity:
 16. **V-16 Rejection grounding (new).** A `REJECT` gap that names a `mechanical` condition with a
     passing attestation from a listed verifier, and no failing one, is flagged
     `contradicted_rejection` (flag). The rejection still applies (INV-5); the contradiction is
-    visible.
+    visible. `judged` conditions are deliberately not covered: a judged pass is an opinion, so
+    rejecting it contradicts no check (CR-001).
+
+17. **V-17 Judged evidence (new, CR-001).** A `K_ATTEST_JUDGED` counts toward its `judged`
+    condition only if every check below passes. Each failure records its own anomaly; all are
+    `flag` severity (the attestation is retained, INV-11).
+    1. The signer is in `runners` and is not the performer. A performer signer is
+       `self_judged` (not counted); an unlisted signer is `unlisted_verifier` (not counted).
+       Terms (on `REQUEST` or `COUNTER`) that list the performer as a runner are flagged
+       `self_judged` on that act.
+    2. Every judge fingerprint matches the terms exactly, as a set. `judge_mismatch` (not
+       counted).
+    3. Every judge's run count equals `repeats`. `judge_mismatch` (not counted).
+    4. `rubric_text_hash` equals `rubric_hash`; under `commit_reveal`, `rubric_ref` is present;
+       an inline `rubric_text` hashes to `rubric_hash`. `rubric_mismatch` (not counted).
+       Fetching `rubric_ref` is I/O and is left to clients and bindings, like V-12.
+    5. `injection_detected` is false. If true, the attestation counts as a **fail** and
+       `injection_detected` is recorded on the performer's `REPORT`.
+    6. The aggregate score meets θ under the declared aggregation: per judge, the median of its
+       runs; then `all` (the minimum per-judge score), `mean` or `median` across judges. Below θ it
+       counts as a **fail**, flagged `below_threshold`.
+
+    The validator recomputes the aggregate and the result. An attestation whose declared
+    `aggregate_score` or `result` disagrees is `malformed` (reject). Checks 5–6 apply only to an
+    attestation that passes 1–4, so an uncounted attestation can't record anything on the
+    performer. The condition is `fail` if any counted attestation fails, `pass` if one passes.
 
 Deadline-related flags: `late` (flag) for a `REPORT` after the deadline or a `SATISFY`/`REJECT`
 after the review window.
@@ -538,12 +624,32 @@ after the review window.
 state and anomalies. A property test MUST show identical output for every permutation of arrival
 order (INV-2).
 
+**Judged-condition vectors (CR-001).** Each also runs under every arrival-order permutation.
+
+| Id | Setup | Expected |
+| --- | --- | --- |
+| J-1 | Both judges pass; runner is the requester | Condition met; auto-`SATISFY` valid; state Satisfied |
+| J-2 | `K_INTERP_REPORT` offered for a `judged` condition | Not counted; `wrong_evidence_class` |
+| J-3 | Attestation signed by the performer | Not counted; `self_judged` on the performer's attestation |
+| J-3b | Terms list the performer as a runner | `self_judged` on the act carrying those terms |
+| J-4 | One judge's `model_version` differs from the terms | Not counted; `judge_mismatch` |
+| J-5 | `commit_reveal`; revealed rubric hash differs | Not counted; `rubric_mismatch` |
+| J-6 | `injection_detected` true | Condition failed; `injection_detected` on the performer's `REPORT` |
+| J-7 | Aggregation `all`; one judge below θ | Condition failed; `below_threshold` |
+| J-8 | `repeats` 3; attestation carries 2 runs | Not counted; `judge_mismatch` |
+| J-9, J-10 | *(holdback vectors)* | Dropped with the holdback (Appendix B) |
+| J-11 | One `mechanical` and one `judged` condition | Overall assurance `opinion` |
+| J-12 | Declared aggregate/result disagree; an unlisted runner | `malformed`; `unlisted_verifier`; not counted |
+| J-13 | Judged floor plus a `mechanical` audit condition; judges pass, audit fails | `c2` pass, audit fail: not every condition is met; assurance `opinion` |
+| J-14 | A judged condition carries an unknown field (e.g. `holdback`) | Terms don't parse; the `REQUEST` is `malformed`, no commitment |
+
 ## 11. Bindings, governance and reputation
 
 ACN Core defines what is signed and how it is judged. How an agent decides what to sign is its
 binding's concern. A **binding** is the adapter that lets an external harness's agents take part
 in the network and offer value-added terms of satisfaction (their own condition classes,
-verifiers and governance). Any harness participates by implementing the Binding API.
+verifiers and governance). Any harness participates by implementing the Binding API (draft,
+with worked examples: [binding-api.md](binding-api.md)).
 `acn-mcp-shim`, which wraps MCP tools, is the first reference binding.
 
 **Governance is opt-in and demandable.** A binding MAY gate its own acts (policy checks, human
@@ -566,7 +672,9 @@ A client subscribes, validates, folds and renders; it owns no semantics (INV-12)
 
 **Client obligations.** Use the reference validator library (or pass its conformance scenarios).
 Show anomalies, not just state: a stale or unauthorized act is information. Sign acts only through
-the act schemas. Free-text messages in a commitment thread are ordinary messages and carry no
+the act schemas. Display a commitment's overall assurance label (§7) before the performer signs
+`PROMISE` or `ACCEPT` and before the requester signs `SATISFY`, and name the judges and the
+threshold for any `judged` condition. Free-text messages in a commitment thread are ordinary messages and carry no
 commitment meaning.
 
 **Projections.** All are derived from the same fold, and any can be generated or replaced without
@@ -606,7 +714,12 @@ row needs a scenario test in the conformance suite.
 | Mint failure | A custodial mint exits or censors | Mint named in terms; per-mint caps; mint diversity |
 | Forged token | Bogus proof that shows "unspent" | DLEQ (NUT-12) verification before promising |
 | Arbiter collusion | Arbiter + performer use the escrowed `s` | Arbiters are scored keys; arbiter choice is in the terms; high-value work splits into milestones |
-| Judge gaming | Optimizing for a judge model | Interpretive reports are never sufficient (INV-8, V-11) |
+| Judge gaming | Optimizing for a judge model | Interpretive reports are never sufficient (INV-8, V-11); a `judged` condition is explicitly an opinion and labelled so (§7), with the safeguards below |
+| Judge hill-climbing | Performer runs the known judge and rubric locally and iterates until it passes | `commit_reveal` rubrics; judge ensembles across model families; an audit condition of a stronger class in the terms (§7) |
+| Judge prompt injection | Deliverable contains text addressed to the judge | The harness isolates and sanitizes the artifact; detection fails the condition and is recorded on the performer (V-17.5, vector J-6) |
+| Self-judging | Performer runs the judge or signs as runner | The runner must not be the performer (`self_judged`, V-17.1, vectors J-3, J-3b) |
+| Judge drift or collusion | A judge passes poor work systematically | Audit conditions alongside the judges (§7); outcomes on the record, so runners and judge fingerprints can be scored |
+| Non-determinism disputes | Same input, different scores | `repeats` with the median per judge; every run's score in the attestation (V-17.3, vector J-8) |
 | Timestamp lies | Backdated `created_at` | Causal order from hashes (INV-3); V-15 monotonicity bounds backdating to the predecessor |
 | Metadata leakage | A public commitment graph reveals business relationships | Private mode (§5.5); encrypted tokens. Reputation then needs a disclosure mechanism (D-13) |
 | Highlight-reel reputation | Parties publish only flattering outcomes from private commitments | Open (D-13): disclosure consent in the terms; negatives published by the party with the incentive, with signed proof |
@@ -669,12 +782,27 @@ silence is handled by scoring only. Above it, performers SHOULD require an arbit
   arbiters. **Affects:** §11, the terms schema (§7), a new receipt kind (§5.1), the
   whitepaper's track-record claims.
 
+From CR-001 (the `judged` condition class; its OD-1…OD-6):
+
+- [ ] **D-14 Assurance ordering (CR-001 OD-1).** Whether `human` ranks above `opinion`, and whether
+  `check` and `grounded` are comparable at all or should be reported side by side (§7).
+- [x] **D-15 Verifiable audit sampling (CR-001 OD-2).** Closed, not needed: audits are conditions
+  of satisfaction, applied to every commitment that names them (§7), so nothing is sampled.
+- [ ] **D-16 Rubric reveal timing (CR-001 OD-3).** Reveal inside the attestation (current text) or
+  in a separate event before judging.
+- [ ] **D-17 Model deprecation (CR-001 OD-4).** What happens when a pinned judge model is withdrawn
+  mid-commitment: renegotiation via `COUNTER`, a named fallback judge in the terms, or lapse.
+- [ ] **D-18 Injection detection standard (CR-001 OD-5).** Harness-defined and pinned by
+  `harness_hash` (current text), or a shared reference harness maintained with ACN.
+- [ ] **D-19 Rationale disclosure (CR-001 OD-6).** Whether judge rationales are published by hash
+  only or made available to the performer as diagnostics.
+
 ## 15. Implementation phases and acceptance criteria
 
 Each phase is gated by acceptance criteria that a coding agent can test mechanically.
 
 1. **P0 Grammar and validator crate (`acn-core`).** Act schemas, terms schema, JCS hashing, the
-   fold, sibling resolution, V-1…V-11 and V-13…V-16, anomaly codes, `status_at`.
+   fold, sibling resolution, V-1…V-11 and V-13…V-17, anomaly codes, `status_at`.
    - Gate: scenario tests for every act and every anomaly code pass.
    - Gate: a property test shows identical state and anomalies under arrival-order permutations
      of each scenario (INV-2).
@@ -716,3 +844,9 @@ invent patterns. Kind numbers and tag letters are symbolic until D-1 closes.
 | §5.1 | Concrete provisional kind table incl. `K_PRIVATE_ACT`, `K_SVC` 37700 | Implementable |
 | §4 | `K_SVC` supersedes the nmesh agent manifest; data-handling fields | Alignment with the nmesh prototype |
 | §11, §13, §14 | Reputation inputs qualified for private commitments; new open decision D-13 and threat row | §11 assumed public outcomes while §5.5 makes them private |
+
+## Appendix B. Change requests after v0.2
+
+| CR | Date | Sections | Change | Status |
+|---|---|---|---|---|
+| CR-001 `judged` condition class | 2026-11-08 | INV-8, §3, §5.1, §6.2, §7, §8.2, §9, §10 (V-11, V-17, vectors), §12, §13, §14 (D-14…D-19), §15 | New condition class `judged` with derived assurance labels; `K_ATTEST_JUDGED` (7725); V-11 amended; new V-17 with codes `self_judged`, `judge_mismatch`, `rubric_mismatch`, `injection_detected`, `below_threshold`; INV-8 clarified (judged attestations are evidence about an opinion and satisfy only `judged`); client display of assurance; auto-satisfy by the requester's binding; five threat rows; open decisions D-14…D-19; worked example in [binding-api.md](binding-api.md) | Applied, with wire versions bumped to `acn/0.3` and `acn-terms/0.3` (`judged` requires terms 0.3; 0.2 terms still parse). **Dropped by decision:** the §2.4 holdback and the `audit` / `holdback` fields (vectors J-9, J-10; OD-2 → D-15 closed). The holdback would have changed INV-6 and the §6.2 state machine, and let a requester keep the held part by inaction. Instead an audit is an ordinary condition of satisfaction of a stronger class (§7); a `judged` condition alone is the minimum floor. Added vectors J-13 (judged + audit condition) and J-14 (unknown judged field) |
