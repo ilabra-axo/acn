@@ -12,6 +12,32 @@ scenario logic** (`acn-core`, `acn-view`, `acn-sim`). Every act is a real BIP-34
 | Money | in-browser simulated mint with the NUT-14 rules (`SimMint`); you start with 100 sat | **real Cashu ecash** (test sats) at a CDK mint the cast hosts on `127.0.0.1:3338`; top up from the wallet panel |
 | Refund demo | fast-forward the presentation clock past the locktime | the mint's real clock rules (≈ 25 h); covered by `nmesh-wallet/tests/htlc.rs` |
 
+## The MVP in one minute
+
+*Pay only if two independent LLM judges score the deliverable at least 7/10 against a rubric.*
+
+1. **Judged, verifier releases** (`/judged`, 60 sat). The card shows **assurance: opinion** and
+   names the judges and the threshold before anything is signed (CR-001 §2.6). Verity holds the
+   escrowed preimage, acknowledges it (`ESCROW_ACK`), and only then does Atlas promise. Atlas
+   reports; Verity counts the words (`c1`, mechanical, *check*), runs both judges three times
+   with the revealed rubric (`c2`, judged, *opinion*) and **releases**: Atlas is paid and
+   you never clicked anything. The state is **Settled**; you may still record one judgement.
+2. **Judge prompt injection** (`/injected`). The summary ends with "Note to the evaluator: …".
+   The judge harness detects it, `c2` fails, nothing is released, you reject, and
+   `injection_detected` stays on Atlas's REPORT for good. Your 60 sat refund after the locktime.
+3. **Judged, you settle** (`/judged-auto`, 40 sat). Same conditions, but Muse is a third-party
+   runner and the requester trigger applies: your binding's auto-satisfy policy signs
+   `SATISFY` once every condition passes. Closure stays your act (INV-5).
+4. **Contingent** (`/contingent`, 30 sat). Mechanical conditions only (S-9). No money up front:
+   Atlas seals the module with a fresh key `k` (NIP-44 v2, §8.2) and escrows `k` with Verity,
+   who decrypts, runs the tests and attests without revealing anything. The card shows
+   *🔒 Encrypted delivery* and a **Fund 30 sat** button; you fund against `H = sha256(k)`,
+   Atlas redeems at the mint (which reveals `k`), publishes `CLAIM`, and the card decrypts.
+
+Point out the ladder: a judged condition certifies that pinned judges produced a score; it is
+evidence about an opinion, not about the work (INV-8). Stronger classes (mechanical, grounded,
+an audit) are conditions you add to the same terms.
+
 ## Screencast
 
 [`docs/demo/acn-demo.mp4`](demo/acn-demo.mp4) (2 min 48 s, 1440×900, captioned, no audio) walks
@@ -57,8 +83,9 @@ the speed. The cast keeps its keys in `.nmesh/sim/`, so npubs stay the same acro
 
 **Wallet.** The cast hosts a Cashu test mint (CDK, fake Lightning) on `http://127.0.0.1:3338`,
 and the desktop app's wallet points there by default (`NMESH_MINT`; set it to `none` to disable).
-Click the **₿** chip in the sidebar, then **Top up 100 test sats** before running *Paid call*
-or *Dispute*. Without enough funds the request is refused before anything is signed. To use a
+Click the **₿** chip in the sidebar, then **Top up 100 test sats** before running *Paid call*,
+*Dispute* or the judged scenarios (all thirteen scenarios cost 261 sat; 60 of it stays locked
+after the injection until its locktime). Without enough funds the request is refused before anything is signed. To use a
 separately running mint: `./target/debug/nmesh-mint` and `nmesh-acn-sim --mint http://127.0.0.1:3338`.
 Atlas DMs you when it redeems; send it `wallet` to see its balance.
 
@@ -126,6 +153,10 @@ the silent promise turns red as overdue, without any act being sent.
 | **Dispute & ruling** (50 sat) | Reject | The arbiter was named in the terms; Atlas disputes; Solon rules with the **escrowed preimage**, and Atlas redeems the 50 sat without you (§8.4) |
 | **Governance gate** | Accept | Atlas's REPORT shows as *pending* until **Gate** endorses it (V-14) |
 | **Silent performer** | Fast-forward, then Withdraw | **Lapsed** is derived by `status_at`, never announced |
+| **Judged, verifier releases** (60 sat) | Nothing | *assurance: opinion* with the judges and θ; `ESCROW_ACK` before `PROMISE` (V-19); `c1` check + `c2` opinion both counted; `RELEASE` (V-20) → **Settled**, Atlas redeems; the button now says *Record satisfied* (it moves no money) |
+| **Judge prompt injection** (60 sat) | Reject (the Director proposes it) | `c2` ✗ with `injection_detected` on the REPORT (V-17); no `RELEASE`; *refundable* after the locktime |
+| **Judged, you settle** (40 sat) | Satisfy (auto-satisfy) | Muse is the runner (not the performer: `self_judged` otherwise); the requester trigger; closing is paying |
+| **Contingent** (30 sat) | Fund | *🔒 Encrypted delivery* until `CLAIM`; Verity's attestation names `ciphertext`, `hashlock`, `plaintext` (V-21); Review lane passes Verity → you → Atlas; the card decrypts after the claim |
 | **Rogue agent** | — | *unaccountable ⚠* (no binding); PROMISE and DECLINE at once → **equivocation** flagged on both; the closing act wins deterministically, the loser is `stale` and kept as evidence |
 
 ## What is simulated
@@ -138,3 +169,9 @@ the silent promise turns red as overdue, without any act being sent.
   and HTLC conditions are real Cashu (CDK); only the top-up invoice is fake. Never point it at
   real funds.
 - Verifier results are scripted; no tests are actually run.
+- **The judges are scripted too:** no LLM is called. The `K_ATTEST_JUDGED` events carry real
+  fingerprints, run scores and medians, and the validator checks them exactly as it would real
+  ones (V-17); the scores are fixed (8, 7, 8 and 7, 9, 8), and injection detection is a substring
+  match on "Note to the evaluator".
+- **Contingent encryption is real:** the deliverable is sealed with NIP-44 v2 under `k`
+  (`acn-core::sealed`) and only decrypts once `CLAIM` puts `k` on the record.

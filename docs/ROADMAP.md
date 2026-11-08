@@ -30,6 +30,7 @@ of focused work for 1–2 people.
 - [x] P1 (partial): `K_SVC`, operator binding, T0 at price 0 end to end (desktop ↔ relay ↔ shim ↔ MCP), private-mode transport
 - [x] Demo: 9 scenarios (T0, T1, N, rework, attestations, dispute/ruling, governance, lapse, equivocation) in live mode (`nmesh-acn-sim`) and presenter mode (WASM), with the Director and presentation clock ([DEMO.md](DEMO.md))
 - [x] P1 (T1 / N part): Cashu via CDK against a local test mint (`nmesh-mint`, fake Lightning): NUT-14 HTLC lock at request time, DLEQ + NUT-07 check before work, redeem on SATISFY / RULING, refund after the locktime, double spend rejected; integrated wallet (panel, balances, per-commitment token state); presenter mode uses a simulated mint with the same rules
+- [x] **MVP demo:** pay only if two LLM judges score the rubric ≥ θ (CR-001), settled by the verifier trigger (CR-002): `/judged`, `/injected`, `/judged-auto`, plus `/contingent` (encrypted until paid, mechanical only). Judges are scripted; next: a real judge harness behind the same `K_ATTEST_JUDGED`
 - [x] Board (queue view, §12): columns by ACN stage across agents and roles, whose-move from `acn-view`, needs-you filter, paged Closed column, drawer with the full card; no drag-and-drop. Reset demo (Director)
 - [ ] P1 remainder: T0 paid (unlocked token swapped before work) in the MCP shim
 - [ ] Wallet: NIP-60 backup, NWC top-up, real mints and a multi-mint policy, binding `max_sat` caps applied to the wallet, encrypted preimage/proof storage

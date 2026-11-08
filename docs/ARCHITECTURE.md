@@ -102,9 +102,9 @@ flowchart TB
 |---|---|---|---|---|---|
 | `nmesh-proto` | lib | nmesh wire format: kinds, structured messages, actions, manifests, NIP-CD slash commands | `StructuredMessage`, `Action`, `AgentManifest`, `SlashCommandDefinition`, `parse_invocation`, `bind_args` | none | 890 |
 | `nmesh-contracts` | lib | Data contracts: JSON Schema registry, hash pinning, renderer resolution, trust policy | `ContractRegistry`, `schema_hash`, `resolve_renderer`, `TrustPolicy`, `builtin::*` | none | 450 |
-| `acn-core` | lib | ACN grammar and validator: event model, BIP-340 verification, JCS, terms, bindings, the deterministic fold, `status_at`, act drafting | `fold`, `status_at`, `Draft`, `Terms`, `Template`, `instantiate`, `binding_status`, `Code` | none, no C deps | 3,460 |
+| `acn-core` | lib | ACN grammar and validator: event model, BIP-340 verification, JCS, terms, bindings, the deterministic fold, `status_at`, act drafting, contingent sealing (NIP-44 v2 keyed by `k`) | `fold`, `status_at`, `Draft`, `Terms`, `Template`, `instantiate`, `binding_status`, `Code`, `sealed::{seal, open, ciphertext_hash}` | none, no C deps | 3,460 |
 | `acn-view` | lib | Projections of the fold for UIs: timeline, evidence, counter diff, settlement, allowed acts | `project`, `Projection`, `Entry`, `ConditionView`, `SettlementView` | none | 600 |
-| `acn-sim` | lib | Demo scenarios: the cast, terms templates, reactions, requester hints | `SCENARIOS`, `template`, `react`, `requester_hint`, `requester_draft` | none | 940 |
+| `acn-sim` | lib | Demo scenarios: the cast, terms templates, reactions (incl. scripted judges and the contingent seal), requester hints | `SCENARIOS`, `template`, `react`, `react_with` (escrow, payments, contingent keys), `Move.escrow`, `requester_hint`, `requester_draft` | none | 1,400 |
 | `acn-wallet` | lib | Wallet views shared by all hosts; `SimMint`, a pure Cashu-shaped mint with NUT-14 rules for presenter mode; settlement advice derived from the fold | `WalletView`, `Lock`, `SimMint`, `settlement::{check_payment, advise, request_token}` | none | 510 |
 | `acn-wasm` | cdylib | Browser entry point: JSON-in/JSON-out ABI over core + view + sim + wallet | `acn_invoke` (`op`: `fold`, `project`, `react`, `hint`, `sign`, `mint_*`, `payment_check`, `advise`, ...) | none | 300 |
 | `nmesh-wallet` | lib | Cashu wallet over CDK (wallet feature only): top up, HTLC lock, inspect (DLEQ + NUT-07 + lock shape), redeem, NUT-14 refund (manual swap), lock index + history per commitment | `CashuWallet` | mint HTTP; SQLite + JSON index | 500 |
@@ -112,7 +112,7 @@ flowchart TB
 | `nmesh-core` | lib | Nostr session: keys, relays, NIP-17 send/receive, inbox stream, peer discovery, ACN transport, MLS spike | `Session`, `Inbound`, `Body`, `PeerInfo`, `sign_act`, `send_act`, `acn_public`, `find_acn_services` | relays, key files | 810 |
 | `nmesh-app` | lib | Application state and view models for UIs: contacts, history, consent, commitments, wallet, presenter clock and hints | `App`, `AppEvent`, `ContactView`, `MessageView`, `CommitmentView`, `WalletView` | via `nmesh-core` and `nmesh-wallet`; `contacts.json`, `wallet/` | 1,600 |
 | `nmesh-agent-bridge` | lib + 2 bins | MCP servers as a Nostr agent; ACN T0 shim | `Bridge`, `McpHub`, `shim::Shim`; bins `nmesh-agent`, `nmesh-echo-mcp` | relays, MCP, key files | 1,530 |
-| `nmesh-acn-sim` | lib + bin | The demo cast as live Nostr peers; hosts the test mint; Atlas verifies tokens and redeems | `start(Config) -> Running`, `MintSetup` | relays, key files, mint | 700 |
+| `nmesh-acn-sim` | lib + bin | The demo cast as live Nostr peers; hosts the test mint; decrypts escrow for its holder (arbiter or settlement verifier); Atlas verifies tokens (REQUEST or FUND), redeems, and claims with `k` | `start(Config) -> Running`, `MintSetup` | relays, key files, mint | 800 |
 | `nmesh-cli` | bin | Dev client (`chat`, `send`, `card`, `listen`) and in-memory dev relay (`relay`) | `nmesh` | relays | 280 |
 | `apps/desktop/src-tauri` | bin | Tauri shell: 22 commands delegating to `nmesh_app::App`; forwards `AppEvent`s | `nmesh-desktop` | WebView IPC | — |
 | `apps/desktop/src` | Svelte 5 | UI: sidebar, conversation, renderers, commitment card, Director, wallet panel; Tauri or presenter backend | `store.svelte.ts`, `api.ts`, `presenter/*`, `WalletPanel.svelte` | IPC or WASM | 4,000 total incl. shell |
@@ -390,7 +390,7 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | `judged` condition class, assurance labels | §7, INV-8, CR-001 | `terms::{Judged, Assurance}`, `Terms::assurance`; `Commitment.assurance`; card / tile labels | J-11 | ✅ |
 | Judged evidence | V-11, V-17, CR-001 | `act::judged_content` (V-3), `Ctx::judged_evidence` | `cr001_judged_vectors_under_every_arrival_order` (J-1…J-8, J-3b, J-11…J-14) | ✅ |
 | Settlement triggers: requester (default) and verifier | §7, §8.2, V-18…V-20, CR-002 Phase A | `Terms::settlement_combo`; `Ctx::{require_escrow, conditions_at}`, `K_ESCROW_ACK`, `K_RELEASE`, `Phase::Settled`; `Party::Verifier` lapse; app escrow + `SettlementPolicy`; shim `trigger_unsupported` | `cr002_verifier_trigger_vectors_under_every_arrival_order` (S-2, S-4…S-8c), `cr002_settlement_combinations`, `performer_redeems_after_release` | ✅ |
-| Contingent settlement (encrypted until paid) | CR-002 Phase C, V-21…V-23 | fold: Offered/Funded, `K_FUND`, `K_CLAIM`, attestation binding, `passed_at`; `status_at` lapses; `acn_wallet::settlement` contingent advice; `CashuWallet::revealed_preimage`; `App::fund`; requester policy + `mint_has_capability` | `cr002_contingent_vectors_under_every_arrival_order` (S-9, S-11…S-18), `contingent_advice`, `htlc` (payer reads the preimage), `rail_capability_is_read_from_the_service_advertisement` | ✅ protocol; no demo performer yet |
+| Contingent settlement (encrypted until paid) | CR-002 Phase C, V-21…V-23 | fold: Offered/Funded, `K_FUND`, `K_CLAIM`, attestation binding, `passed_at`; `status_at` lapses; `acn_wallet::settlement` contingent advice; `CashuWallet::revealed_preimage`; `App::fund`; requester policy + `mint_has_capability` | `cr002_contingent_vectors_under_every_arrival_order` (S-9, S-11…S-18), `contingent_advice`, `htlc` (payer reads the preimage), `rail_capability_is_read_from_the_service_advertisement` | ✅ incl. demo (`/contingent`: sealed with `acn_core::sealed`, Verity decrypts and attests, `FUND`, Atlas redeems with `k` and `CLAIM`s, `acn-view` decrypts the card) |
 | Audit as a condition (no holdback) | §7, CR-001 §2.4 (holdback dropped) | ordinary conditions; `Judged` rejects unknown fields | J-13, J-14 | ✅ |
 | Governance endorsements | V-14 | `needs_endorsement` / `endorsed` | `governance` | ✅ |
 | Causal monotonicity, late flags | V-15, §6.5 | `step` | `time_regress`, `late` | ✅ |
@@ -421,12 +421,13 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 
 | Capability | Implementation | Verified by | Status |
 |---|---|---|---|
-| Nine scenarios, scripted cast | `acn_sim::SCENARIOS`, `react`, `template` | `playthrough` | ✅ |
-| Live cast on relays | `nmesh-acn-sim` | `live` (all nine via the app layer) | ✅ |
+| Thirteen scenarios, scripted cast | `acn_sim::SCENARIOS`, `react_with`, `template` | `playthrough` (outcomes and lanes) | ✅ |
+| MVP: pay only if two judges score ≥ θ | `/judged` (verifier trigger, Verity runs the judges and `RELEASE`s), `/injected` (`injection_detected`, no release), `/judged-auto` (Muse runs, requester auto-satisfies); judges are scripted, no LLM calls | `playthrough`, `live`, `presenter.mjs` | ✅ |
+| Live cast on relays | `nmesh-acn-sim` | `live` (all thirteen via the app layer; balances 39 / 201 sat, 60 locked) | ✅ |
 | Director: next step, autopilot, clock | `requester_hint` / `run_hint`; `Director.svelte`; `set_clock_offset` | `live`, `scripts/presenter.mjs` | ✅ |
-| Presenter mode in the browser | `acn-wasm` + `presenter/*` | `scripts/presenter.mjs` (all nine, no page errors) | ✅ |
+| Presenter mode in the browser | `acn-wasm` + `presenter/*` | `scripts/presenter.mjs` (all thirteen, no page errors) | ✅ |
 | Reset demo | `App::reset_demo` (epoch cutoff + cleared ids, persisted); presenter `AcnWorld::reset`; the cast ignores requests older than its start | `live` (incl. restart), `presenter.mjs`, `board.mjs` | ✅ |
-| Money in the demo | live: real ecash at the cast's test mint (`127.0.0.1:3338`); presenter: `SimMint`. Balances in the Director and wallet panel | `live`, `presenter.mjs` (29 / 71 sat, refund) | ✅ |
+| Money in the demo | live: real ecash at the cast's test mint (`127.0.0.1:3338`); presenter: `SimMint`. Balances in the Director and wallet panel | `live`, `presenter.mjs` (29 / 71 sat, refund; then 10 / 130 sat after the judged and contingent runs) | ✅ |
 | Screencast | `scripts/screencast.mjs` → `docs/demo/acn-demo.mp4` | manual review | ✅ |
 
 ## 7. State, keys and persistence
