@@ -10,6 +10,8 @@ pub enum Party {
     Requester,
     Performer,
     Arbiter,
+    /// The settlement verifier (CR-002 verifier trigger).
+    Verifier,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -36,13 +38,20 @@ pub fn status_at(c: &Commitment, now: u64) -> Status {
         };
     };
     let now_i = now as i64;
+    let verifier = terms.settlement_trigger == crate::terms::SettlementTrigger::Verifier;
+    let failing = c
+        .conditions
+        .values()
+        .any(|s| *s == crate::fold::ConditionStatus::Fail);
     let rejected_final = st.ruled
         || terms.arbiter.is_none()
         || st
             .rejected_at
             .is_some_and(|r| now > r.saturating_add(terms.review_window));
     let terminal = match st.phase {
-        Phase::Satisfied | Phase::Declined | Phase::Withdrawn | Phase::Revoked => true,
+        Phase::Satisfied | Phase::Declined | Phase::Withdrawn | Phase::Revoked | Phase::Settled => {
+            true
+        }
         Phase::Rejected => rejected_final,
         _ => false,
     };
@@ -61,6 +70,12 @@ pub fn status_at(c: &Commitment, now: u64) -> Status {
                 None,
             )
         }
+        // Verifier trigger: the verifier releases on pass; a failing attestation hands the
+        // move to the requester (REJECT for rework).
+        Phase::Reported if verifier && !failing => (
+            Some(Party::Verifier),
+            st.report_at.map(|r| r.saturating_add(terms.review_window)),
+        ),
         Phase::Reported => (
             Some(Party::Requester),
             st.report_at.map(|r| r.saturating_add(terms.review_window)),
@@ -80,7 +95,13 @@ pub fn status_at(c: &Commitment, now: u64) -> Status {
                 .report_at
                 .is_some_and(|r| now > r.saturating_add(terms.review_window)) =>
         {
-            Some(Party::Requester)
+            // Verifier trigger: no RELEASE and no failing attestation in time is the verifier's
+            // fault; the payment refunds at the locktime.
+            Some(if verifier && !failing {
+                Party::Verifier
+            } else {
+                Party::Requester
+            })
         }
         _ => None,
     };

@@ -11,7 +11,7 @@ pub const INLINE_LIMIT: usize = 16 * 1024;
 /// Sibling-resolution class (spec §5.4). Lower wins.
 pub fn class_rank(kind: u16) -> u8 {
     match kind {
-        K_WITHDRAW | K_DECLINE | K_REVOKE | K_SATISFY | K_RULING => 0,
+        K_WITHDRAW | K_DECLINE | K_REVOKE | K_SATISFY | K_RULING | K_RELEASE => 0,
         K_PROMISE | K_ACCEPT | K_REPORT | K_REJECT | K_DISPUTE => 1,
         _ => 2, // COUNTER
     }
@@ -185,7 +185,12 @@ pub fn parse(ev: &Event) -> R<Option<Parsed<'_>>> {
     let is_commitment_event = ACTS.contains(&ev.kind)
         || matches!(
             ev.kind,
-            K_ATTEST_MECH | K_ATTEST_GROUND | K_ATTEST_JUDGED | K_INTERP_REPORT | K_ENDORSE
+            K_ATTEST_MECH
+                | K_ATTEST_GROUND
+                | K_ATTEST_JUDGED
+                | K_INTERP_REPORT
+                | K_ENDORSE
+                | K_ESCROW_ACK
         );
 
     if ev.kind == K_REQUEST {
@@ -265,6 +270,16 @@ pub fn parse(ev: &Event) -> R<Option<Parsed<'_>>> {
             _ => return malformed("attestation result must be `pass` or `fail`"),
         },
         K_INTERP_REPORT => need("verdict")?,
+        K_RELEASE => need("preimage")?,
+        K_ESCROW_ACK => {
+            if !content
+                .get("hashlock")
+                .and_then(Value::as_str)
+                .is_some_and(|h| is_hex(h, 64))
+            {
+                return malformed("ESCROW_ACK requires `hashlock`, a lowercase sha256 hex");
+            }
+        }
         K_ATTEST_JUDGED => judged_content(&content).map_err(|m| (Code::Malformed, m))?,
         _ => {}
     }

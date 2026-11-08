@@ -3,8 +3,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const TERMS_VERSION: &str = "acn-terms/0.3";
-/// Still parsed (no `judged` conditions); CR-001 introduced 0.3.
+pub const TERMS_VERSION: &str = "acn-terms/0.4";
+/// Still parsed, without the fields introduced later (`judged`: 0.3, CR-001; settlement
+/// triggers: 0.4, CR-002).
+pub const TERMS_VERSION_0_3: &str = "acn-terms/0.3";
 pub const TERMS_VERSION_0_2: &str = "acn-terms/0.2";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -35,6 +37,34 @@ pub struct Terms {
     pub disclosure: Disclosure,
     #[serde(default)]
     pub governance: Option<Governance>,
+    /// Who can release payment (CR-002). Default: the requester.
+    #[serde(default, skip_serializing_if = "SettlementTrigger::is_requester")]
+    pub settlement_trigger: SettlementTrigger,
+    /// Holds the escrowed secret and releases it on pass (`verifier` trigger).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settlement_verifier: Option<String>,
+    /// Seconds the requester has to fund after a passing attestation (`contingent`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fund_window: Option<u64>,
+}
+
+/// Who can cause payment to be released (spec §7, §8; CR-002).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SettlementTrigger {
+    /// The requester's `SATISFY` reveals the secret (default).
+    #[default]
+    Requester,
+    /// The `settlement_verifier` holds the secret and reveals it in `RELEASE` on pass.
+    Verifier,
+    /// The performer holds the key to an encrypted deliverable; paying reveals it (Phase C).
+    Contingent,
+}
+
+impl SettlementTrigger {
+    pub fn is_requester(&self) -> bool {
+        *self == SettlementTrigger::Requester
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -249,7 +279,7 @@ pub enum GovernedParty {
 impl Terms {
     pub fn parse(v: &Value) -> Result<Self, String> {
         let t: Terms = serde_json::from_value(v.clone()).map_err(|e| e.to_string())?;
-        if t.v != TERMS_VERSION && t.v != TERMS_VERSION_0_2 {
+        if ![TERMS_VERSION, TERMS_VERSION_0_3, TERMS_VERSION_0_2].contains(&t.v.as_str()) {
             return Err(format!("unsupported terms version `{}`", t.v));
         }
         if t.v == TERMS_VERSION_0_2
@@ -258,6 +288,12 @@ impl Terms {
                 .any(|c| c.class == ConditionClass::Judged)
         {
             return Err("`judged` conditions need acn-terms/0.3".into());
+        }
+        let settlement_fields = !t.settlement_trigger.is_requester()
+            || t.settlement_verifier.is_some()
+            || t.fund_window.is_some();
+        if settlement_fields && t.v != TERMS_VERSION {
+            return Err("settlement triggers need acn-terms/0.4".into());
         }
         let mut ids: Vec<&str> = t.conditions.iter().map(|c| c.id.as_str()).collect();
         ids.sort_unstable();
@@ -286,6 +322,53 @@ impl Terms {
             .map(|c| c.class.assurance())
             .min()
             .unwrap_or(Assurance::Human)
+    }
+
+    /// CR-002 valid combinations (spec §7). The fold reports a failure as
+    /// `invalid_settlement_combo` on the act carrying the terms.
+    pub fn settlement_combo(&self) -> Result<(), String> {
+        match self.settlement_trigger {
+            SettlementTrigger::Requester => {
+                if self.settlement_verifier.is_some() || self.fund_window.is_some() {
+                    return Err(
+                        "settlement_verifier / fund_window need a verifier or contingent trigger"
+                            .into(),
+                    );
+                }
+            }
+            SettlementTrigger::Verifier => {
+                if self.settlement_verifier.is_none() {
+                    return Err("the verifier trigger needs a settlement_verifier".into());
+                }
+                if self.hashlock().is_none() {
+                    return Err("the verifier trigger needs a hash-locked payment".into());
+                }
+                if self.arbiter.is_some() {
+                    return Err("an arbiter is only available with the requester trigger".into());
+                }
+                if self.fund_window.is_some() {
+                    return Err("fund_window belongs to the contingent trigger".into());
+                }
+                if self.conditions.is_empty() {
+                    return Err("the verifier trigger needs conditions to verify".into());
+                }
+                if let Some(c) = self.conditions.iter().find(|c| {
+                    matches!(
+                        c.class,
+                        ConditionClass::Human | ConditionClass::Interpretive
+                    )
+                }) {
+                    return Err(format!(
+                        "condition `{}` is {:?}: no attestation can pass it, so a verifier can't release on it",
+                        c.id, c.class
+                    ));
+                }
+            }
+            SettlementTrigger::Contingent => {
+                return Err("the contingent trigger is not available in this version".into());
+            }
+        }
+        Ok(())
     }
 
     pub fn hashlock(&self) -> Option<&str> {

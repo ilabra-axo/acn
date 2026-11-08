@@ -84,9 +84,9 @@ export interface Contact {
 
 export type Phase =
   | "requested" | "countered" | "promised" | "reported" | "reworking"
-  | "satisfied" | "rejected" | "disputed" | "declined" | "withdrawn" | "revoked";
+  | "satisfied" | "rejected" | "disputed" | "declined" | "withdrawn" | "revoked" | "settled";
 
-export type Party = "requester" | "performer" | "arbiter";
+export type Party = "requester" | "performer" | "arbiter" | "verifier";
 export type Role = "requester" | "performer" | "arbiter" | "verifier" | "governance" | "other";
 export type Severity = "reject" | "flag" | "pending";
 

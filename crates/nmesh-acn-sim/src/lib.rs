@@ -331,7 +331,9 @@ async fn advertise(s: &Session, agent: Actor, cast: &Cast) -> anyhow::Result<()>
         "tools": tools,
         "profiles": scenarios.iter().map(|x| x.profile).collect::<HashSet<_>>(),
         "price": {"min": 0, "unit": "sat"},
-        "mints": [cast.mint],
+        // Rail capabilities per mint (Core.md §8.6, CR-002). Bindings check them before
+        // committing; `reveals_preimage_to_payer` waits for the Phase B spike decision.
+        "mints": [{"url": cast.mint, "capabilities": ["hashlock", "timelock_refund", "p2pk"]}],
         "transport": "nostr",
         "terms_defaults": {"deadline_secs": 600, "review_window_secs": 3600},
         "silence_threshold_sat": 0,

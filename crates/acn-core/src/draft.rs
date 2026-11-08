@@ -300,6 +300,9 @@ pub fn tool_call_terms(
         subcontracting: false,
         disclosure: Default::default(),
         governance: None,
+        settlement_trigger: Default::default(),
+        settlement_verifier: None,
+        fund_window: None,
     })
     .expect("terms serialize")
 }

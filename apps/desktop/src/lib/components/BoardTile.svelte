@@ -31,7 +31,7 @@
     if (c.lane === "closed") {
       const p = c.phase ?? "closed";
       const ruled = c.chain[c.chain.length - 1]?.act === "RULING";
-      return { cls: p === "satisfied" ? "ok" : "end", text: ruled ? `Ruled · ${p}` : p[0].toUpperCase() + p.slice(1) };
+      return { cls: p === "satisfied" || p === "settled" ? "ok" : "end", text: ruled ? `Ruled · ${p}` : p[0].toUpperCase() + p.slice(1) };
     }
     if (c.needs_me) {
       const what = c.lane === "review" ? "satisfy or reject" : c.lane === "negotiating" ? "accept or counter" : c.lane === "dispute" ? "respond" : "act";

@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod judged;
+pub mod settlement;
 
 use std::collections::BTreeMap;
 
@@ -65,7 +66,7 @@ pub fn parties() -> [String; 2] {
 /// Base terms; `f` customises them.
 pub fn terms(f: impl FnOnce(&mut Value)) -> Value {
     let mut t = json!({
-        "v": "acn-terms/0.3",
+        "v": "acn-terms/0.4",
         "deliverable": { "description": "do the thing" },
         "conditions": [],
         "deadline": 2000,

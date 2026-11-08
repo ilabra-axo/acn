@@ -180,7 +180,14 @@ impl Shim<'_> {
         };
 
         let now = Timestamp::now().as_secs();
-        let draft = if cm.profile != Profile::T0 {
+        // Performer-side settlement policy (Binding API policy filters): this binding only
+        // settles through the requester.
+        let draft = if !terms.settlement_trigger.is_requester() {
+            decline(
+                "trigger_unsupported",
+                "this agent accepts the requester settlement trigger only".into(),
+            )
+        } else if cm.profile != Profile::T0 {
             decline("profile_unsupported", "this agent offers T0 only".into())
         } else if terms.price.amount > 0 {
             decline(
