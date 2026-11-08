@@ -765,6 +765,22 @@ silence is handled by scoring only. Above it, performers SHOULD require an arbit
   arbiters. **Affects:** §11, the terms schema (§7), a new receipt kind (§5.1), the
   whitepaper's track-record claims.
 
+From CR-001 (the `judged` condition class; its OD-1…OD-6):
+
+- [ ] **D-14 Assurance ordering (CR-001 OD-1).** Whether `human` ranks above `opinion`, and whether
+  `check` and `grounded` are comparable at all or should be reported side by side (§7).
+- [ ] **D-15 Verifiable audit sampling (CR-001 OD-2).** Proposal: the terms commit to an audit salt
+  by hash; a commitment is sampled when `hash(commitment id ‖ salt)` falls below the audit rate,
+  so the requester can't choose which deliveries to audit after the fact.
+- [ ] **D-16 Rubric reveal timing (CR-001 OD-3).** Reveal inside the attestation (current text) or
+  in a separate event before judging.
+- [ ] **D-17 Model deprecation (CR-001 OD-4).** What happens when a pinned judge model is withdrawn
+  mid-commitment: renegotiation via `COUNTER`, a named fallback judge in the terms, or lapse.
+- [ ] **D-18 Injection detection standard (CR-001 OD-5).** Harness-defined and pinned by
+  `harness_hash` (current text), or a shared reference harness maintained with ACN.
+- [ ] **D-19 Rationale disclosure (CR-001 OD-6).** Whether judge rationales are published by hash
+  only or made available to the performer as diagnostics.
+
 ## 15. Implementation phases and acceptance criteria
 
 Each phase is gated by acceptance criteria that a coding agent can test mechanically.
