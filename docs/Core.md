@@ -76,7 +76,7 @@ underneath it.
 |---|---|---|
 | **Requester** | `REQUEST`, `COUNTER`, `ACCEPT`, `WITHDRAW`, `SATISFY`, `REJECT`, `DISPUTE` | the payment preimage `s` |
 | **Performer** | `PROMISE`, `COUNTER`, `ACCEPT`, `DECLINE`, `REVOKE`, `PROGRESS`, `REPORT`, `DISPUTE` | a binding to an operator |
-| **Verifier** | `K_ATTEST_MECH`, `K_ATTEST_GROUND`, `K_INTERP_REPORT` | a verifier-scoped binding |
+| **Verifier** | `K_ATTEST_MECH`, `K_ATTEST_GROUND`, `K_INTERP_REPORT`; as a listed **runner** of a `judged` condition, `K_ATTEST_JUDGED` | a verifier-scoped binding |
 | **Arbiter** | `RULING` | an escrowed copy of `s` (§8.4), if named in the terms |
 | **Operator / governance** | `K_BIND`, `K_BIND_REVOKE`, `K_ENDORSE` | long-lived accountable keys |
 
@@ -161,7 +161,7 @@ geocaching 7516–7517). Code MUST reference symbolic names.
 | 7707 | `K_PROGRESS` | 7732 | `K_BIND_REVOKE` |
 | 7708 | `K_REPORT` | 7739 | `K_PRIVATE_ACT` (rumor-only, §5.5) |
 | 7709 | `K_SATISFY` | 37700 | `K_SVC` (addressable) |
-| 7710 | `K_REJECT` | | |
+| 7710 | `K_REJECT` | 7725 | `K_ATTEST_JUDGED` (CR-001) |
 | 7711 | `K_DISPUTE` | | |
 | 7712 | `K_RULING` | | |
 
@@ -480,6 +480,7 @@ fields and kinds, so no consumer can mistake one for another.
 | Correctness | Mechanical attestation | A named check passed on named hashes, reproducibly | Fitness for purpose |
 | Grounding | Grounding attestation | Agreement with a named external referent | Correctness beyond that referent |
 | Existence-before | External timestamp anchor (D-11) | The event existed before a point in time | Anything about content |
+| Scored opinion | Judged attestation | That pinned judges, run by a listed runner, produced the stated scores on named hashes | That the work is good (INV-8) |
 | Opinion | Interpretive report | What a judge concluded | Anything counted as provenance (INV-8) |
 
 **Artifacts.** Stored on Blossom (NIP-B7, sha256-addressed). `REPORT` lists them in `x` tags.
@@ -496,7 +497,22 @@ execution log), `started`/`ended` (advisory).
 
 - **`K_ATTEST_MECH`:** `{result: "pass"|"fail", method, recipe?, env?}`.
 - **`K_ATTEST_GROUND`:** `{result, referent: {source, hash}, method}`.
-- **`K_INTERP_REPORT`:** `{judge, rubric?, verdict, rationale?}`. Always advisory.
+- **`K_ATTEST_JUDGED`:** signed by a runner key listed in the condition's `runners`. Content:
+  - `judges[]`: per judge, the full fingerprint (`model_id`, `model_version`,
+    `prompt_template_hash`, `harness_hash`, `sampling`, as in §7), every run's score (`runs[]`),
+    their `median`, and a `rationale_hash`;
+  - `aggregate_score` and `result` (`pass` | `fail`);
+  - `rubric_text_hash`, which MUST equal the condition's `rubric_hash`, and `rubric_ref`, a
+    Blossom reference to the rubric text (required under `commit_reveal`). The text MAY also be
+    inlined as `rubric_text` (≤ 16 KiB), in which case validators check its sha256;
+  - `injection_detected` (bool) and, if true, `injection_span_hash`, the hash of the offending
+    span.
+
+  Structure (V-3): every listed field is present, `runs` is non-empty and numeric, and each
+  `median` is the median of its `runs` (`malformed` otherwise). Agreement with the terms is
+  V-17. `K_ATTEST_JUDGED` is the only kind that can satisfy a `judged` condition.
+- **`K_INTERP_REPORT`:** `{judge, rubric?, verdict, rationale?}`. Free-form and always
+  advisory.
 
 **Subcontracting.** A child commitment carries `parent` = the parent commitment id, and the
 parent's derivation record lists it. Accountability to a requester stays with its direct

@@ -533,7 +533,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
         for p in self.members.iter() {
             match p.kind() {
                 K_PROGRESS => self.progress(acc, &run, &snapshots, p, &mut commitment),
-                K_ATTEST_MECH | K_ATTEST_GROUND | K_INTERP_REPORT => {
+                K_ATTEST_MECH | K_ATTEST_GROUND | K_ATTEST_JUDGED | K_INTERP_REPORT => {
                     self.attestation(acc, &run, &snapshots, p, &mut evidence)
                 }
                 _ => {}
@@ -683,6 +683,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
         let kind_class = match p.kind() {
             K_ATTEST_MECH => ConditionClass::Mechanical,
             K_ATTEST_GROUND => ConditionClass::Grounding,
+            K_ATTEST_JUDGED => ConditionClass::Judged,
             _ => ConditionClass::Interpretive,
         };
         if kind_class != condition.class {

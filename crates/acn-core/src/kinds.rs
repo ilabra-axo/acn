@@ -21,6 +21,8 @@ pub const K_ATTEST_GROUND: u16 = 7721;
 pub const K_INTERP_REPORT: u16 = 7722;
 pub const K_ENDORSE: u16 = 7723;
 pub const K_SCORE: u16 = 7724;
+/// Judged attestation (CR-001): pinned judges' scores for a `judged` condition.
+pub const K_ATTEST_JUDGED: u16 = 7725;
 
 pub const K_BIND: u16 = 7730;
 pub const K_BIND_ACK: u16 = 7731;
@@ -45,6 +47,7 @@ pub fn is_known(kind: u16) -> bool {
             kind,
             K_ATTEST_MECH
                 | K_ATTEST_GROUND
+                | K_ATTEST_JUDGED
                 | K_INTERP_REPORT
                 | K_ENDORSE
                 | K_SCORE
@@ -74,6 +77,7 @@ pub fn name(kind: u16) -> &'static str {
         K_RULING => "RULING",
         K_ATTEST_MECH => "ATTEST_MECH",
         K_ATTEST_GROUND => "ATTEST_GROUND",
+        K_ATTEST_JUDGED => "ATTEST_JUDGED",
         K_INTERP_REPORT => "INTERP_REPORT",
         K_ENDORSE => "ENDORSE",
         K_SCORE => "SCORE",

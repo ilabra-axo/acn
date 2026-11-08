@@ -351,6 +351,26 @@ fn summary(e: &Event) -> String {
             };
             format!("{}: {}{m}", tag(e, "cond").unwrap_or("?"), s(&v, "result"))
         }
+        K_ATTEST_JUDGED => {
+            let judges: Vec<String> = v["judges"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|j| format!("{} {}", s(j, "model_id"), j["median"]))
+                .collect();
+            format!(
+                "{}: {} · score {} ({}) · judged opinion{}",
+                tag(e, "cond").unwrap_or("?"),
+                s(&v, "result"),
+                v["aggregate_score"],
+                judges.join(", "),
+                if v["injection_detected"] == true {
+                    " · injection detected"
+                } else {
+                    ""
+                }
+            )
+        }
         K_INTERP_REPORT => format!(
             "{}: \"{}\" (opinion, advisory)",
             tag(e, "cond").unwrap_or("?"),
@@ -413,7 +433,12 @@ fn one(
             EntryStatus::Pending
         } else if matches!(
             e.kind,
-            K_PROGRESS | K_ATTEST_MECH | K_ATTEST_GROUND | K_INTERP_REPORT | K_ENDORSE
+            K_PROGRESS
+                | K_ATTEST_MECH
+                | K_ATTEST_GROUND
+                | K_ATTEST_JUDGED
+                | K_INTERP_REPORT
+                | K_ENDORSE
         ) {
             EntryStatus::Annotation
         } else {
@@ -473,7 +498,7 @@ fn one(
                 .map(|cond| {
                     let evidence = members
                         .iter()
-                        .filter(|e| matches!(e.kind, K_ATTEST_MECH | K_ATTEST_GROUND | K_INTERP_REPORT))
+                        .filter(|e| matches!(e.kind, K_ATTEST_MECH | K_ATTEST_GROUND | K_ATTEST_JUDGED | K_INTERP_REPORT))
                         .filter(|e| tag(e, "cond") == Some(cond.id.as_str()))
                         .filter(|e| report.as_ref().is_some_and(|r| e_marked(e, "report") == Some(r.id.as_str())))
                         .map(|e| {
