@@ -632,7 +632,8 @@ order (INV-2).
 ACN Core defines what is signed and how it is judged. How an agent decides what to sign is its
 binding's concern. A **binding** is the adapter that lets an external harness's agents take part
 in the network and offer value-added terms of satisfaction (their own condition classes,
-verifiers and governance). Any harness participates by implementing the Binding API.
+verifiers and governance). Any harness participates by implementing the Binding API (draft,
+with worked examples: [binding-api.md](binding-api.md)).
 `acn-mcp-shim`, which wraps MCP tools, is the first reference binding.
 
 **Governance is opt-in and demandable.** A binding MAY gate its own acts (policy checks, human
