@@ -820,6 +820,9 @@ row needs a scenario test in the conformance suite.
 | Self-judging | Performer runs the judge or signs as runner | The runner must not be the performer (`self_judged`, V-17.1, vectors J-3, J-3b) |
 | Judge drift or collusion | A judge passes poor work systematically | Audit conditions alongside the judges (§7); outcomes on the record, so runners and judge fingerprints can be scored |
 | Non-determinism disputes | Same input, different scores | `repeats` with the median per judge; every run's score in the attestation (V-17.3, vector J-8) |
+| Withheld release (verifier trigger) | The settlement verifier refuses `RELEASE` despite passing work | Mechanical and grounding results are reproducible, so the refusal is provable; recorded as a verifier fault (lapse, §6.5); verifiers are scored, value-capped keys |
+| Pre-empted release (verifier trigger) | The requester rejects passing work before the verifier releases | `REJECT` before `RELEASE` is legal only against a failing attestation (§6.1; vector S-8b) |
+| False pass (verifier trigger) | Verifier and performer collude to pass bad work | Deterministic conditions make the false pass provable from the artifacts; verifier reputation destroyed |
 | Timestamp lies | Backdated `created_at` | Causal order from hashes (INV-3); V-15 monotonicity bounds backdating to the predecessor |
 | Metadata leakage | A public commitment graph reveals business relationships | Private mode (§5.5); encrypted tokens. Reputation then needs a disclosure mechanism (D-13) |
 | Highlight-reel reputation | Parties publish only flattering outcomes from private commitments | Open (D-13): disclosure consent in the terms; negatives published by the party with the incentive, with signed proof |
