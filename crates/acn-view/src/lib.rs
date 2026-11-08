@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use acn_core::kinds::*;
-use acn_core::terms::ConditionClass;
+use acn_core::terms::{Aggregation, Assurance, ConditionClass, RubricDisclosure};
 use acn_core::{
     fold, status_at, BindingStatus, Commitment, ConditionStatus, Event, Output, Party, Phase,
     Profile, Severity,
@@ -77,9 +77,28 @@ pub struct Evidence {
 pub struct ConditionView {
     pub id: String,
     pub class: ConditionClass,
+    /// Derived assurance label (spec §7).
+    pub assurance: Assurance,
     pub description: String,
     pub status: Option<ConditionStatus>,
     pub evidence: Vec<Evidence>,
+    /// For `judged` conditions: who judges and against what (clients MUST show it, §12).
+    pub judged: Option<JudgedView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JudgedView {
+    /// `model_id model_version` per judge.
+    pub judges: Vec<String>,
+    pub threshold: f64,
+    pub scale_min: f64,
+    pub scale_max: f64,
+    pub aggregation: Aggregation,
+    pub repeats: u32,
+    pub rubric_disclosure: RubricDisclosure,
+    pub runners: Vec<String>,
+    pub audit_rate: Option<f64>,
+    pub holdback_fraction: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -198,6 +217,8 @@ pub struct Projection {
     pub binding: BindingStatus,
     pub anomalies: Vec<AnomalyView>,
     pub allowed: Allowed,
+    /// Overall assurance (weakest condition), computed by the validator (spec §7, §12).
+    pub assurance: Option<Assurance>,
     // --- board ---
     pub lane: Lane,
     /// The local user's role in this commitment.
@@ -511,7 +532,8 @@ fn one(
                                 by: e.pubkey.clone(),
                                 role: role(&e.pubkey, c),
                                 verdict,
-                                counted: notes.is_empty() && e.kind != K_INTERP_REPORT,
+                                // A below-threshold judged attestation still counts, as a fail.
+                                counted: notes.iter().all(|n| n.code == "below_threshold") && e.kind != K_INTERP_REPORT,
                                 why: notes.first().map(|n| n.detail.clone()).or_else(|| {
                                     (e.kind == K_INTERP_REPORT).then(|| "opinion: informs the requester, never satisfies a condition".to_string())
                                 }),
@@ -521,9 +543,22 @@ fn one(
                     ConditionView {
                         id: cond.id.clone(),
                         class: cond.class,
+                        assurance: cond.class.assurance(),
                         description: cond.description.clone(),
                         status: c.conditions.get(&cond.id).cloned(),
                         evidence,
+                        judged: cond.judged().ok().map(|j| JudgedView {
+                            judges: j.judges.iter().map(|f| format!("{} {}", f.model_id, f.model_version)).collect(),
+                            threshold: j.threshold,
+                            scale_min: j.scale.min,
+                            scale_max: j.scale.max,
+                            aggregation: j.aggregation,
+                            repeats: j.repeats,
+                            rubric_disclosure: j.rubric_disclosure,
+                            runners: j.runners.clone(),
+                            audit_rate: j.audit.as_ref().map(|a| a.rate),
+                            holdback_fraction: j.holdback.as_ref().map(|h| h.fraction),
+                        }),
                     }
                 })
                 .collect()
@@ -652,6 +687,7 @@ fn one(
 
     Projection {
         lane,
+        assurance: c.assurance,
         needs_me: next.is_some() && next == Some(my_role),
         my_role,
         next,

@@ -131,12 +131,30 @@ export interface Evidence {
   why: string | null;
 }
 
+/** Derived by the validator (spec §7); weakest first: opinion < human < check < grounded. */
+export type Assurance = "opinion" | "human" | "check" | "grounded";
+
+export interface JudgedView {
+  judges: string[];
+  threshold: number;
+  scale_min: number;
+  scale_max: number;
+  aggregation: "all" | "mean" | "median";
+  repeats: number;
+  rubric_disclosure: "public" | "commit_reveal";
+  runners: string[];
+  audit_rate: number | null;
+  holdback_fraction: number | null;
+}
+
 export interface ConditionView {
   id: string;
-  class: "mechanical" | "grounding" | "interpretive" | "human";
+  class: "mechanical" | "grounding" | "judged" | "interpretive" | "human";
+  assurance: Assurance;
   description: string;
   status: ConditionStatus | null;
   evidence: Evidence[];
+  judged: JudgedView | null;
 }
 
 export interface CounterView {
@@ -207,6 +225,8 @@ export interface Commitment {
   settlement: SettlementView | null;
   anomalies: AnomalyView[];
   allowed: Allowed;
+  /** Overall assurance (weakest condition); null while the terms are unavailable. */
+  assurance: Assurance | null;
   result: Body | null;
   performer_binding: BindingView;
   // Board (computed in acn-view)

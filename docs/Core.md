@@ -655,7 +655,9 @@ A client subscribes, validates, folds and renders; it owns no semantics (INV-12)
 
 **Client obligations.** Use the reference validator library (or pass its conformance scenarios).
 Show anomalies, not just state: a stale or unauthorized act is information. Sign acts only through
-the act schemas. Free-text messages in a commitment thread are ordinary messages and carry no
+the act schemas. Display a commitment's overall assurance label (§7) before the performer signs
+`PROMISE` or `ACCEPT` and before the requester signs `SATISFY`, and name the judges and the
+threshold for any `judged` condition. Free-text messages in a commitment thread are ordinary messages and carry no
 commitment meaning.
 
 **Projections.** All are derived from the same fold, and any can be generated or replaced without
