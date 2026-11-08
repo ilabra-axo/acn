@@ -3,14 +3,13 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// The only terms version this prototype accepts: one coherent set of rules, no older meanings.
 pub const TERMS_VERSION: &str = "acn-terms/0.5";
-/// Still parsed, without the fields introduced later (`judged`: 0.3, CR-001; settlement
-/// triggers: 0.4, CR-002; public rubric references: 0.5, CR-003).
-pub const TERMS_VERSION_0_4: &str = "acn-terms/0.4";
-pub const TERMS_VERSION_0_3: &str = "acn-terms/0.3";
-pub const TERMS_VERSION_0_2: &str = "acn-terms/0.2";
 
+/// Unknown fields are an error, so a field the parties believe binds (a `holdback`, an `audit`
+/// window) can't be silently ignored: commitments are atomic (spec §1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Terms {
     pub v: String,
     #[serde(default)]
@@ -47,13 +46,14 @@ pub struct Terms {
     /// Seconds the requester has to fund after a passing attestation (`contingent`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fund_window: Option<u64>,
-    /// Public predicates whose attested hit fails the commitment (CR-003 §2.2; 0.5).
+    /// Public predicates whose attested hit fails the commitment (CR-003 §2.2).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disqualifiers: Vec<Disqualifier>,
 }
 
 /// A disqualifier (spec §7, CR-003 §2.2): an act the performer agreed not to commit. An attested
-/// `hit` is breach, distinct from a condition that scored low.
+/// `hit` is breach, distinct from a condition that scored low. Commitments are atomic, so a
+/// disqualifier is checked before settlement and there is no audit window after it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Disqualifier {
     pub id: String,
@@ -61,20 +61,14 @@ pub struct Disqualifier {
     pub class: ConditionClass,
     #[serde(default)]
     pub description: String,
-    pub window: DisqualifierWindow,
-    /// Class fields: `runners` (keys allowed to attest it) and, for `judged`, the judged fields.
+    /// Class fields: `runners` (keys allowed to attest it); for `mechanical` also `check_hash` /
+    /// `check_ref`; for `judged`, the judged fields.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DisqualifierWindow {
-    /// Checked until the requester's SATISFY (or the trigger's release).
-    UntilSatisfy,
-    /// Needs a holdback, which acn-terms doesn't have (CR-001 dropped it): rejected for now.
-    UntilAuditEnd,
-}
+/// Fields a `mechanical` disqualifier may carry besides `id`, `class` and `description`.
+const MECHANICAL_DISQUALIFIER_FIELDS: &[&str] = &["runners", "check_hash", "check_ref"];
 
 /// What an attestation says about a disqualifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,11 +126,22 @@ impl Disqualifier {
             }
             _ => return bad("must be mechanical or judged (open decision D-29)"),
         }
-        if self.window == DisqualifierWindow::UntilAuditEnd {
-            return bad("until_audit_end needs a holdback, which acn-terms doesn't have (open decision D-31)");
+        for f in ["window", "holdback", "audit"] {
+            if self.extra.contains_key(f) {
+                return bad(&format!("`{f}`: commitments are atomic, so a disqualifier is checked before settlement and nothing is held back after it"));
+            }
         }
         if self.extra.contains_key("instances") {
             return bad("instances arrive with CR-003 Phase B");
+        }
+        if self.class == ConditionClass::Mechanical {
+            if let Some(f) = self
+                .extra
+                .keys()
+                .find(|k| !MECHANICAL_DISQUALIFIER_FIELDS.contains(&k.as_str()))
+            {
+                return bad(&format!("unknown field `{f}`"));
+            }
         }
         let runners = self.runners();
         if runners.is_empty()
@@ -196,7 +201,7 @@ pub enum ConditionClass {
     Judged,
     Interpretive,
     Human,
-    /// Not yet drafted (CR-003 §2.4, 0.5): the requester's intent in prose, to be closed in a
+    /// Not yet drafted (CR-003 §2.4): the requester's intent in prose, to be closed in a
     /// COUNTER before anyone can promise.
     Open,
 }
@@ -237,17 +242,6 @@ pub struct JudgeFingerprint {
     pub sampling: Value,
 }
 
-/// Terms before `acn-terms/0.5` only (CR-001). `commit_reveal` no longer parses at any version:
-/// it is a hidden criterion (CR-003, INV-14).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RubricDisclosure {
-    /// The rubric is published with the terms.
-    Public,
-    /// Only `rubric_hash` is published; the text is revealed in the attestation.
-    CommitReveal,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Aggregation {
@@ -271,14 +265,11 @@ pub struct Scale {
 pub struct Judged {
     pub judges: Vec<JudgeFingerprint>,
     pub rubric_hash: String,
-    /// Before 0.5 only (required there); removed in 0.5.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rubric_disclosure: Option<RubricDisclosure>,
-    /// From 0.5, required: a retrievable reference (Blossom) to the rubric text (INV-14).
+    /// Required: a retrievable reference (Blossom) to the rubric text (INV-14). Missing is
+    /// `hidden_criteria`, so it is checked by [`Terms::check`] rather than by serde.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rubric_ref: Option<String>,
-    /// From 0.5, optional: the rubric text inline (≤ 16 KiB with the terms); must hash to
-    /// `rubric_hash`.
+    /// Optional: the rubric text inline (≤ 16 KiB with the terms); must hash to `rubric_hash`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rubric_text: Option<String>,
     pub scale: Scale,
@@ -405,16 +396,33 @@ impl Terms {
     pub fn check(v: &Value) -> Result<Self, (crate::anomaly::Code, String)> {
         use crate::anomaly::Code;
         let malformed = |e: String| (Code::Malformed, e);
+        if let Some(id) = Self::commit_reveal(v) {
+            return Err((
+                Code::HiddenCriteria,
+                format!("`{id}`: a commit_reveal rubric is a hidden criterion"),
+            ));
+        }
         let t: Terms = serde_json::from_value(v.clone()).map_err(|e| malformed(e.to_string()))?;
         t.check_inner().map_err(malformed)?;
         t.hidden_criteria()?;
         Ok(t)
     }
 
+    /// The judged / check fields named in `v`, before parsing: a `commit_reveal` rubric is a
+    /// hidden criterion, not merely an unknown field.
+    fn commit_reveal(v: &Value) -> Option<String> {
+        let lists = [&v["conditions"], &v["disqualifiers"]];
+        lists
+            .iter()
+            .filter_map(|l| l.as_array())
+            .flatten()
+            .find(|c| c["rubric_disclosure"] == "commit_reveal")
+            .map(|c| c["id"].as_str().unwrap_or("?").to_string())
+    }
+
     /// INV-14 (CR-003 §2.1): every criterion is readable by the performer before it promises.
     fn hidden_criteria(&self) -> Result<(), (crate::anomaly::Code, String)> {
         use crate::anomaly::Code;
-        let v05 = self.v == TERMS_VERSION;
         let disq: Vec<Condition> = self
             .disqualifiers
             .iter()
@@ -423,27 +431,6 @@ impl Terms {
         for c in self.conditions.iter().chain(&disq) {
             if c.class == ConditionClass::Judged {
                 let j = c.judged().map_err(|e| (Code::Malformed, e))?;
-                if j.rubric_disclosure == Some(RubricDisclosure::CommitReveal) {
-                    return Err((
-                        Code::HiddenCriteria,
-                        format!("`{}`: a commit_reveal rubric is a hidden criterion", c.id),
-                    ));
-                }
-                if !v05 {
-                    if j.rubric_disclosure.is_none() {
-                        return Err((Code::Malformed, format!("`{}`: judged conditions before acn-terms/0.5 need rubric_disclosure", c.id)));
-                    }
-                    if j.rubric_ref.is_some() || j.rubric_text.is_some() {
-                        return Err((
-                            Code::Malformed,
-                            format!("`{}`: rubric_ref / rubric_text need acn-terms/0.5", c.id),
-                        ));
-                    }
-                    continue;
-                }
-                if j.rubric_disclosure.is_some() {
-                    return Err((Code::Malformed, format!("`{}`: rubric_disclosure was removed in acn-terms/0.5 (rubrics are public)", c.id)));
-                }
                 if j.rubric_ref.as_deref().is_none_or(|r| r.trim().is_empty()) {
                     return Err((
                         Code::HiddenCriteria,
@@ -462,7 +449,7 @@ impl Terms {
                         format!("`{}`: rubric_text does not hash to rubric_hash", c.id),
                     ));
                 }
-            } else if v05 && Self::check_hidden(c) {
+            } else if Self::check_hidden(c) {
                 return Err((
                     Code::HiddenCriteria,
                     format!(
@@ -488,40 +475,17 @@ impl Terms {
 
     fn check_inner(&self) -> Result<(), String> {
         let t = self;
-        if ![
-            TERMS_VERSION,
-            TERMS_VERSION_0_4,
-            TERMS_VERSION_0_3,
-            TERMS_VERSION_0_2,
-        ]
-        .contains(&t.v.as_str())
-        {
-            return Err(format!("unsupported terms version `{}`", t.v));
-        }
-        if t.v == TERMS_VERSION_0_2
-            && t.conditions
-                .iter()
-                .any(|c| c.class == ConditionClass::Judged)
-        {
-            return Err("`judged` conditions need acn-terms/0.3".into());
-        }
-        let settlement_fields = !t.settlement_trigger.is_requester()
-            || t.settlement_verifier.is_some()
-            || t.fund_window.is_some();
-        if settlement_fields && ![TERMS_VERSION, TERMS_VERSION_0_4].contains(&t.v.as_str()) {
-            return Err("settlement triggers need acn-terms/0.4".into());
-        }
-        if !t.disqualifiers.is_empty() && t.v != TERMS_VERSION {
-            return Err("disqualifiers need acn-terms/0.5".into());
+        if t.v != TERMS_VERSION {
+            return Err(format!(
+                "unsupported terms version `{}` (this prototype accepts {TERMS_VERSION} only)",
+                t.v
+            ));
         }
         for c in t
             .conditions
             .iter()
             .filter(|c| c.class == ConditionClass::Open)
         {
-            if t.v != TERMS_VERSION {
-                return Err("open conditions need acn-terms/0.5".into());
-            }
             if let Some(s) = c.extra.get("suggested_class") {
                 match serde_json::from_value::<ConditionClass>(s.clone()) {
                     Ok(ConditionClass::Open) | Err(_) => {
@@ -578,7 +542,7 @@ impl Terms {
 
     /// CR-003 §2.4 closure rule: why these terms can't be promised or accepted yet, if so. A
     /// condition is closed when it has a class other than `open`, every field its class needs,
-    /// public criteria (checked at parse, INV-14) and, from 0.5, a named evidence producer: a
+    /// public criteria (checked at parse, INV-14) and a named evidence producer: a
     /// listed verifier of its class (`mechanical`, `grounding`), its runners (`judged`), or the
     /// requester itself (`human`, `interpretive`). Disqualifiers name their runners at parse.
     pub fn unclosed(&self) -> Option<String> {
@@ -588,9 +552,6 @@ impl Terms {
             .find(|c| c.class == ConditionClass::Open)
         {
             return Some(format!("condition `{}` is still open", c.id));
-        }
-        if self.v != TERMS_VERSION {
-            return None;
         }
         self.conditions
             .iter()

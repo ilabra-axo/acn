@@ -141,8 +141,6 @@ export interface JudgedView {
   scale_max: number;
   aggregation: "all" | "mean" | "median";
   repeats: number;
-  /** Terms before acn-terms/0.5 only. */
-  rubric_disclosure: "public" | "commit_reveal" | null;
   /** Where the performer reads the rubric (INV-14). */
   rubric_ref: string | null;
   rubric_text: string | null;
@@ -215,7 +213,7 @@ export interface TermsCard {
     rework_limit: number;
     fund_window: number | null;
   };
-  disqualified_if: { id: string; class: ConditionClass; assurance: Assurance | null; description: string; window: string }[];
+  disqualified_if: { id: string; class: ConditionClass; assurance: Assurance | null; description: string }[];
   /** Why this version can't be promised or accepted yet. */
   unclosed: string | null;
 }

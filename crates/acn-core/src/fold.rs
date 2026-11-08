@@ -880,7 +880,8 @@ impl<'a, 'e> Ctx<'a, 'e> {
     }
 
     /// An attestation on a disqualifier (CR-003 §2.2): only the keys it names count, it must say
-    /// `hit` or `clear`, and under `until_satisfy` it must come before the settling act.
+    /// `hit` or `clear`, and it must come before the act that settles the REPORT (commitments are
+    /// atomic: nothing is checked after settlement).
     #[allow(clippy::too_many_arguments)]
     fn disqualifier_attestation(
         &self,
@@ -923,7 +924,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
             );
             return;
         }
-        // until_satisfy: the window closes with the act that settles this REPORT.
+        // Checked before settlement only: the act that settles this REPORT closes it.
         let closed = snaps
             .values()
             .filter(|s| s.report.as_deref() == Some(report))
@@ -935,7 +936,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 p.id(),
                 Code::Late,
                 format!(
-                    "disqualifier `{}` attested after the commitment settled (until_satisfy)",
+                    "disqualifier `{}` attested after the commitment settled; disqualifiers are checked before settlement",
                     d.id
                 ),
             );
@@ -1222,9 +1223,9 @@ impl<'a, 'e> Ctx<'a, 'e> {
         (conditions, disqualifiers)
     }
 
-    /// A REJECT's gaps against the disqualifiers: whether one names a counted hit (the
-    /// commitment fails outright, CR-003 §2.2), and a flag for each gap naming a disqualifier
-    /// without one (a pretextual disqualification, recorded on the requester).
+    /// A REJECT against the disqualifiers: whether any has a counted hit (the commitment then
+    /// fails outright, whatever the gaps name: CR-003 §2.2), and a flag for each gap naming a
+    /// disqualifier without one (a pretextual disqualification, recorded on the requester).
     fn reject_disqualifiers(
         &self,
         run: &Run,
@@ -1240,22 +1241,17 @@ impl<'a, 'e> Ctx<'a, 'e> {
             .filter_map(|g| g["condition"].as_str())
             .filter(|c| terms.disqualifier(c).is_some())
             .collect();
-        if named.is_empty() {
+        if named.is_empty() && terms.disqualifiers.is_empty() {
             return false;
         }
         let hits = self.hits_at(run, terms, st);
-        let mut breach = false;
-        for d in named {
-            if hits.contains(d) {
-                breach = true;
-            } else {
-                flags.push((
-                    Code::UnsupportedDisqualification,
-                    format!("REJECT names disqualifier `{d}`, which has no counted hit"),
-                ));
-            }
+        for d in named.into_iter().filter(|d| !hits.contains(*d)) {
+            flags.push((
+                Code::UnsupportedDisqualification,
+                format!("REJECT names disqualifier `{d}`, which has no counted hit"),
+            ));
         }
-        breach
+        !hits.is_empty()
     }
 
     /// V-15, V-5, V-6, V-9, V-10, V-8 for one candidate act at the current head.
@@ -1605,7 +1601,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 if late_review(terms, st, k) {
                     flags.push((Code::Late, "REJECT after the review window".into()));
                 }
-                // A REJECT naming a hit disqualifier fails the commitment: breach, no rework.
+                // With a disqualifier hit, a REJECT fails the commitment: breach, no rework.
                 let breach = self.reject_disqualifiers(run, terms, st, k, &mut flags);
                 if n && !breach && st.rework_count < terms.rework_limit {
                     next.rework_count += 1;

@@ -339,7 +339,7 @@ only against a failing attestation, and `SATISFY` is not legal. From Funded, the
 | `PROGRESS` | performer | Promised, Reworking (annotating) | unchanged | `{p_on_time?, note?}` |
 | `REPORT` | performer | Promised, Reworking; Requested in T0/T1 | Reported (Offered under `contingent`) | `x` tags for artifacts; `{result?: <inline JSON ≤16 KiB>, contract?: <id>, derivation?: <hash>, note?}`; under `contingent` also `{ciphertext, hashlock, sealed?: <NIP-44 v2 payload>}` (§8.2) |
 | `SATISFY` | requester (by hand, or automatically by its binding under a pre-set policy, §8.2) | Reported (requester trigger); Settled (judgement, once) | Satisfied; unchanged after Settled | `{preimage?: <hex>}`; required when the terms carry a hashlock and the trigger is `requester` |
-| `REJECT` | requester | Reported (under `verifier`: only with a failing attestation or a disqualifier hit); Settled (judgement, once) | Reworking, or Rejected at the rework limit (always Rejected in T0/T1, and when it names a hit disqualifier, CR-003); unchanged after Settled | `{gaps: [{condition, evidence: [..], note?}]}`, non-empty; conditions must exist in terms |
+| `REJECT` | requester | Reported (under `verifier`: only with a failing attestation or a disqualifier hit); Settled (judgement, once) | Reworking, or Rejected at the rework limit (always Rejected in T0/T1, and whenever a disqualifier is hit, CR-003); unchanged after Settled | `{gaps: [{condition, evidence: [..], note?}]}`, non-empty; conditions must exist in terms |
 | `DISPUTE` | either | Reported; Rejected (if disputable) | Disputed | `{reason, evidence?: [..]}`; terms must name an arbiter |
 | `RULING` | arbiter | Disputed | Satisfied or Rejected (final) | `{decision: "performer"\|"requester", rationale?: <hash>, preimage?: <hex>}` |
 | `K_ESCROW_ACK` | settlement verifier (or arbiter) | annotating; any time | unchanged; under `verifier`, enables promising | `c` tag; `{hashlock}`: the `H` the escrowed secret was checked against |
@@ -399,7 +399,7 @@ Otherwise they are stored on Blossom and supplied to the validator as a document
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `v` | string | Terms schema version (`acn-terms/0.5`; 0.4, 0.3 and 0.2 documents still parse, without the fields introduced after them: `judged` in 0.3, settlement triggers in 0.4, CR-003 fields in 0.5) |
+| `v` | string | Terms schema version: `acn-terms/0.5`, the only one accepted. Unknown fields anywhere in the terms are `malformed`, so nothing the parties believe binds (a `holdback`, an `audit` window) is silently ignored |
 | `deliverable` | object | `description`; optional `output_schema` hash, `output_contract` id, `tool` name, `input` arguments |
 | `conditions` | array | Conditions of satisfaction; each has `id`, `class` (`mechanical`, `grounding`, `judged`, `interpretive`, `human`), and class-specific fields |
 | `deadline` | unix s | Latest `REPORT` time |
@@ -416,14 +416,14 @@ Otherwise they are stored on Blossom and supplied to the validator as a document
 | `settlement_trigger` | enum | Who can release payment: `requester` (default), `verifier`, or `contingent` (§8.2; CR-002) |
 | `settlement_verifier` | pubkey | Required with `verifier`: holds the escrowed secret and releases it on pass |
 | `fund_window` | seconds | `contingent` only: time the requester has to fund after a passing attestation |
-| `disqualifiers` | array | From 0.5: public predicates whose attested hit fails the commitment (CR-003; below) |
+| `disqualifiers` | array | Public predicates whose attested hit fails the commitment (CR-003; below) |
 
 **Condition classes.** The class decides which evidence can satisfy a condition. This is where
 INV-8 is enforced.
 
 - **`mechanical`:** a deterministic check (tests, schema validation, hash match). Satisfied only by
   a mechanical attestation from a listed verifier. A check named by `check_hash` MUST also carry
-  `check_ref`, a retrievable reference to its definition (0.5; INV-14, V-24). The same applies to
+  `check_ref`, a retrievable reference to its definition (INV-14, V-24). The same applies to
   `grounding`.
 - **`grounding`:** agreement with an external referent (dataset, resolved market, sensor log),
   named by hash and source. Satisfied only by a grounding attestation.
@@ -436,9 +436,12 @@ INV-8 is enforced.
   | --- | --- | --- |
   | `judges` | array, ≥ 1 | Each: `model_id`, `model_version` (provider-pinned), `prompt_template_hash`, `harness_hash`, `sampling` (temperature, max tokens, seed if supported) |
   | `rubric_hash` | sha256 | Hash of the rubric text |
-  | `rubric_ref` | string | From 0.5, required: a retrievable reference (Blossom) to the rubric text, so the performer reads it before promising (INV-14) |
-  | `rubric_text` | string | From 0.5, optional: the rubric inline; MUST hash to `rubric_hash` |
-  | `rubric_disclosure` | enum | Before 0.5 only, and only `public`. `commit_reveal` (the text withheld until evaluation) is a hidden criterion at every version: terms declaring it are rejected, `hidden_criteria` (V-24) |
+  | `rubric_ref` | string | Required: a retrievable reference (Blossom) to the rubric text, so the performer reads it before promising (INV-14) |
+  | `rubric_text` | string | Optional: the rubric inline; MUST hash to `rubric_hash` |
+
+  CR-001's `rubric_disclosure` is gone: rubrics are public. Terms still declaring
+  `rubric_disclosure: commit_reveal` (the text withheld until evaluation) are rejected as
+  `hidden_criteria` (V-24); any other value is an unknown field.
   | `scale` | object | Score range, e.g. `{min: 0, max: 10}` |
   | `threshold` | number | θ; pass when the aggregate score ≥ θ. MUST lie within `scale` |
   | `aggregation` | enum | `all` (every judge ≥ θ), `mean`, or `median` (across judges) |
@@ -448,8 +451,7 @@ INV-8 is enforced.
   Terms whose `judged` conditions lack these fields, carry any other field, or are inconsistent
   (no judges, `repeats` 0, no runners, θ outside the scale, a malformed `rubric_hash`, an inline
   `rubric_text` that doesn't hash to it) do not parse; inline terms are then `malformed` (V-3,
-  V-9). A missing `rubric_ref` (0.5) is `hidden_criteria` instead (V-24). `judged` requires
-  `acn-terms/0.3`.
+  V-9). A missing `rubric_ref` is `hidden_criteria` instead (V-24).
 
   **A `judged` condition is a minimum floor.** Terms that want more assurance add an audit as a
   further condition of satisfaction, of a stronger class (for example `mechanical` tests, a
@@ -460,14 +462,14 @@ INV-8 is enforced.
 - **`interpretive`:** quality judgement (rubric). Interpretive reports MAY inform it, but the
   requester always judges it in the end.
 - **`human`:** the requester's own judgement, expressed by `SATISFY` or `REJECT`.
-- **`open` (CR-003, 0.5):** not yet drafted. `id`, `description` (the requester's intent in prose)
+- **`open` (CR-003):** not yet drafted. `id`, `description` (the requester's intent in prose)
   and an optional `suggested_class`. Allowed in the terms of a `REQUEST` or `COUNTER`; never a
   disqualifier. It has no assurance label, so terms with one have no overall label yet.
 
 **Drafting and closure (CR-003).** Either party may draft conditions; the performer typically
 closes them in its `COUNTER`, in effect a quote of what it will be held to. A condition is
 **closed** when its class isn't `open`, it has every field its class requires, its criteria are
-public (INV-14), and (from 0.5) it names an evidence producer: a listed verifier of its class
+public (INV-14), and it names an evidence producer: a listed verifier of its class
 (`mechanical`, `grounding`), its `runners` (`judged`), or the requester (`human`,
 `interpretive`). A disqualifier is closed on the same test (its `runners`). **Closure rule:**
 `PROMISE`, `ACCEPT`, and a T0/T1 `REPORT` from Requested (the implicit promise) are valid only
@@ -480,26 +482,28 @@ is its position along the effective chain, `prev` is the version before it, and 
 the act's signer. All three are derived from the signed chain, not fields of the terms, so a
 version's author can't be misattributed. Clients show them (§12).
 
-**Disqualifiers (CR-003, 0.5).** A disqualifier is a public predicate about the deliverable or
-the way it was produced, e.g. "modifies or deletes existing tests". When attested as hit, the
+**Disqualifiers (CR-003).** A disqualifier is a public predicate about the deliverable or the
+way it was produced, e.g. "modifies or deletes existing tests". When attested as hit, the
 commitment fails regardless of how its conditions scored. The performer accepted it as a term,
 so a hit is breach, not a quality dispute. Fields: `id` (unique across conditions and
 disqualifiers), `description` (the disqualifying act), `class` (`mechanical` or `judged`),
-`window` (`until_satisfy`), `runners` (the keys allowed to attest it), and for `judged` the
-judged fields above.
+`runners` (the keys allowed to attest it); for `mechanical` optionally `check_hash` and
+`check_ref`, for `judged` the judged fields above. Anything else is `malformed`.
 
 - **Attestation.** With the attestation kind of its class, `cond` = the disqualifier id, and
   `result` = `hit` or `clear`. For a `judged` disqualifier the pinned judges score whether the act
   happened: an aggregate at or above θ is a `hit`, and so is a detected injection. Only the
   disqualifier's `runners` count (V-25).
-- **Window.** `until_satisfy`: an attestation after the act that settles the `REPORT`
-  (`SATISFY`, `RELEASE`, `CLAIM` or a performer-side `RULING`) is `late` and not counted.
+- **Checked before settlement.** Commitments are atomic (§1): there is no audit window and
+  nothing is held back. An attestation after the act that settles the `REPORT` (`SATISFY`,
+  `RELEASE`, `CLAIM` or a performer-side `RULING`) is `late` and not counted.
 - **Effects of a counted hit.** `disqualified` is recorded on the performer's `REPORT`. The
   requester MUST NOT `SATISFY`, and auto-satisfy is blocked (§8.2). Under `verifier`, `RELEASE` is
-  invalid (V-20). A `REJECT` is legal under every trigger (as with a failing attestation), and a
-  `REJECT` naming the hit disqualifier moves straight to **Rejected**, with no rework: a breach is
-  not repaired by trying again. `status_at` treats a hit as failing: nobody is obliged to release,
-  fund or satisfy.
+  invalid (V-20). A `REJECT` is legal under every trigger (as with a failing attestation), and
+  while a hit stands any `REJECT`, whatever its gaps name, moves straight to **Rejected**, with no
+  rework: a breach is not repaired by trying again. `status_at` treats a hit as failing: nobody
+  is obliged to release, fund or satisfy, and the requester's silence afterwards is no lapse (the
+  performer is the one at fault).
 - **Withholding without a hit** (on an attested `clear`, or no attestation) is a requester fault,
   as for any review lapse (§6.5). A `REJECT` naming a disqualifier with no counted hit still applies
   (INV-5) but is flagged `unsupported_disqualification` on the requester.
@@ -509,8 +513,7 @@ judged fields above.
   as a quality miss.
 
 Not yet: `human` disqualifiers (no declaration kind exists, D-30), `grounding` or `interpretive`
-ones (D-29), `until_audit_end` (needs a holdback, which acn-terms doesn't have, D-31), and
-`instances` (CR-003 Phase B).
+ones (D-29), and `instances` (CR-003 Phase B).
 
 **Assurance labels.** Every condition carries a derived assurance label: `check`
 (`mechanical`), `grounded` (`grounding`), `opinion` (`judged` and `interpretive`), `human`
@@ -829,8 +832,8 @@ list). Every rule failure produces an anomaly with a code and a severity:
     `sha256(key) = H`. `bad_key` (reject).
 24. **V-24 No hidden criteria (new, CR-003).** Terms on a `REQUEST` or `COUNTER` whose criteria
     the performer can't read are rejected with the act carrying them: a `judged` condition that
-    declares `commit_reveal` (any version) or, from 0.5, lacks `rubric_ref`; a check named by
-    `check_hash` without `check_ref` (0.5). `hidden_criteria` (reject; on a `REQUEST`, no
+    declares `commit_reveal` or lacks `rubric_ref`; a check named by `check_hash` without
+    `check_ref`. `hidden_criteria` (reject; on a `REQUEST`, no
     commitment). Whether a reference actually resolves is I/O, left to clients and bindings, like
     V-12.
 25. **V-25 Disqualifiers (new, CR-003).** An attestation naming a disqualifier counts only if it
@@ -843,8 +846,7 @@ list). Every rule failure produces an anomaly with a code and a severity:
     the `REJECT`). Effects on `SATISFY`, `REJECT` and `RELEASE`: §7 "Disqualifiers".
 26. **V-26 Closure (new, CR-003).** `PROMISE`, `ACCEPT`, and a T0/T1 `REPORT` from Requested are
     applied only against terms in which every condition and disqualifier is closed (§7 "Drafting
-    and closure"). `unclosed_condition` (reject, on the act). Before 0.5, "closed" means only "not
-    `open`", so older terms keep their meaning.
+    and closure"). `unclosed_condition` (reject, on the act).
 
 V-18 also covers the contingent constraint that every condition is `mechanical`:
 `contingent_nondeterministic` (reject; on a `REQUEST`, no commitment).
@@ -916,23 +918,26 @@ permutation.
 
 | Id | Setup | Expected |
 | --- | --- | --- |
-| C-1 | 0.5 terms declare `commit_reveal` | `REQUEST` rejected; `hidden_criteria` |
+| C-1 | Terms declare `commit_reveal` | `REQUEST` rejected; `hidden_criteria` |
 | C-2 | `judged` condition without `rubric_ref` | `REQUEST` rejected; `hidden_criteria` |
 | C-2b | A check named by `check_hash` without `check_ref` | `REQUEST` rejected; `hidden_criteria` |
 | C-2c | Inline `rubric_text` that doesn't hash to `rubric_hash` | `REQUEST` rejected; `malformed` (inconsistent, not hidden) |
-| C-6 | Conditions pass; mechanical disqualifier hit before `SATISFY`; requester rejects naming it | `disqualified` on the `REPORT`; auto-satisfy blocked (binding); Rejected with rework still available (breach path) |
+| C-6 | Conditions pass; mechanical disqualifier hit before `SATISFY`; requester rejects naming it | `disqualified` on the `REPORT`; auto-satisfy blocked (binding); Rejected although a rework was available (breach) |
+| C-6d | `contingent`; tests pass on the plaintext; disqualifier hit; requester rejects | No funding deadline (no requester lapse); Rejected, no rework |
+| C-6e | A hit stands; the `REJECT` names a condition, not the disqualifier | Still breach: Rejected, no rework |
+| C-6f | A hit stands; the requester stays silent past the review window | No lapse (the performer is at fault); the move is still the requester's |
 | C-6b | `verifier` trigger; conditions pass; disqualifier hit | `RELEASE` not applied (`bad_release`); `REJECT` legal; Rejected |
 | C-6c | Hit attested after `SATISFY` | Not counted; `late`; no `disqualified` |
 | C-6j | `judged` disqualifier; judges score ≥ θ | Counted as `hit`; `disqualified` |
 | C-7 | Hit signed by an unnamed key; requester withholds | Hit not counted; `unsupported_disqualification`; requester fault once the review window lapses |
 | C-7b | As C-7; requester rejects naming the disqualifier | `REJECT` applies (Reworking); `unsupported_disqualification` on it |
 | C-3 | `PROMISE` against a version with an `open` condition | Not applied; `unclosed_condition`; overall assurance none yet |
-| C-4 | `PROMISE` against a 0.5 `mechanical` condition with no listed verifier | Not applied; `unclosed_condition` |
+| C-4 | `PROMISE` against a `mechanical` condition with no listed verifier | Not applied; `unclosed_condition` |
 | C-5 | Performer `COUNTER` closes the open condition and adds a disqualifier; requester accepts | Binds (Promised on the counter's hash); `drafted_by` is the performer |
 | C-5b | Performer `ACCEPT`s a requester counter that leaves a condition open | Not applied; `unclosed_condition` |
 | C-5c | T1 `REPORT` (implicit promise) against terms with an open condition | Not applied; `unclosed_condition` |
-| C-9 | Commitment uses none of the new fields (0.4 terms, mechanical with no listed verifier) | Behaves exactly as before CR-003: every earlier vector passes unchanged |
-| C-8 | `until_audit_end` disqualifier | Resolved by decision: terms don't parse (`malformed`; no holdback exists, D-31). The CR's expectation (main settlement stands, holdback refunds) waits for D-31 |
+| C-9 | Terms with none of the CR-003 additions (no disqualifiers, nothing open) | Promise, report, pass, satisfy as before; no new anomalies. Every earlier vector passes unchanged |
+| C-8 | A disqualifier with an audit window (`window: until_audit_end`) | Replaced by decision: commitments are atomic, so there is no audit window or holdback; the terms don't parse (`malformed`). The CR's expectation (main settlement stands, holdback refunds) does not apply |
 
 ## 11. Bindings, governance and reputation
 
@@ -1163,10 +1168,10 @@ From CR-003 (conditions-of-satisfaction authorship; its OD-1…OD-7, plus three 
   invites pretextual disqualification. Options: a `K_DECLARE` kind signed by a named declarer
   (not a party), or leave human judgement to `REJECT` and the dispute path. Phase A rejects
   `human` disqualifiers at parse.
-- [ ] **D-31 Audit window without a holdback.** `until_audit_end` needs CR-001's holdback, which
-  was dropped (Appendix B, CR-001). Phase A rejects it at parse, so vector C-8's expectation
-  (main settlement stands, holdback refunds) waits for this. Options: reintroduce a holdback as a
-  second hash-locked token with its own trigger, or record post-settlement hits for scoring only.
+- [x] **D-31 Audit window.** Closed, not applicable: CR-003 §2.2's `until_audit_end` assumed
+  CR-001's holdback, which was dropped, and commitments are atomic (CR-002). A disqualifier is
+  checked before settlement; an audit is a condition of the same commitment (§7); work that
+  needs checking later is a later commitment.
 - [ ] **D-32 Pool burning (CR-003 OD-3).** Whether revealed pool items are marked spent per
   `pool_root`, and how readers detect reuse across commitments.
 - [ ] **D-33 Performer bond (CR-003 OD-1).** Whether a disqualification should cost more than the
@@ -1240,5 +1245,5 @@ invent patterns. Kind numbers and tag letters are symbolic until D-1 closes.
 | Payment dependency, overruled judgement | 2026-11-08 | §12, §13, §14 (D-28) | Clients SHOULD show what payment depends on before the performer promises; new threat row "withheld satisfaction (requester trigger)"; open decision D-28 on flagging rejections of passed `judged` conditions | Clarification, no wire change. Reference: `acn_view::Projection.payment_depends_on`, shown on the card |
 | Reference judge harness | 2026-11-08 | §14 (D-18) | `acn-judge/1`: pinned judges on OpenAI-compatible endpoints, producing `K_ATTEST_JUDGED` that V-17 counts; noted as a D-18 candidate | No spec change; D-18 stays open |
 | D-28 closed: overruled judgement | 2026-11-08 | §10 (V-16, vectors J-15…J-17), §13, §14 | New flag `overruled_judgement` on a `REJECT` gap naming a `judged` condition with a counted passing attestation; per gap; no exemption for disagreeing judges | Applied, no wire change (flag only, INV-5 unchanged) |
-| CR-003 conditions-of-satisfaction authorship, Phase A | 2026-11-09 | INV-14, §6.2, §7, §8.2, §9, §10 (V-16, V-17, V-20, V-24…V-26, vectors), §12, §13, §14 (D-16 closed; D-29…D-37) | No hidden criteria (INV-14): `commit_reveal` rejected at every version, `rubric_ref` required and `check_ref` for hashed checks from `acn-terms/0.5`; `disqualifiers[]` with `hit`/`clear` attestations by named runners, `disqualified` on the `REPORT`, breach rejects without rework, `RELEASE` and auto-satisfy blocked; `open` conditions and the closure rule for `PROMISE`/`ACCEPT`/T-`REPORT`; terms versions derived from the chain; the terms card; codes `hidden_criteria`, `disqualified`, `unsupported_disqualification`, `unclosed_condition`; seven threat rows; J-5 amended, J-18 added (the old J-5 check); vectors C-1…C-9 | Phase A applied. Terms version `acn-terms/0.5` (0.4 and older still parse; the wire stays `acn/0.4`). **Changed from CR-003 by decision:** `version` / `prev` / `drafted_by` are derived from the signed chain rather than added as terms fields (they can't then be misattributed); "evidence producer" means a listed verifier of the class, the runners, or the requester, and applies from 0.5 only (C-9); `human`, `grounding` and `interpretive` disqualifiers and `until_audit_end` are rejected at parse pending D-29…D-31, so C-8 is resolved as a parse error; a hit is a `REJECT` ground under every trigger and a `REJECT` naming it skips rework; condition and disqualifier ids share one namespace. Demo: `/drafted`, `/disqualified`. Phases B (instances, seeds), C (templates) and D (authoring aids) pending |
+| CR-003 conditions-of-satisfaction authorship, Phase A | 2026-11-09 | INV-14, §6.2, §7, §8.2, §9, §10 (V-16, V-17, V-20, V-24…V-26, vectors), §12, §13, §14 (D-16 closed; D-29…D-37) | No hidden criteria (INV-14): `commit_reveal` rejected at every version, `rubric_ref` required and `check_ref` for hashed checks from `acn-terms/0.5`; `disqualifiers[]` with `hit`/`clear` attestations by named runners, `disqualified` on the `REPORT`, breach rejects without rework, `RELEASE` and auto-satisfy blocked; `open` conditions and the closure rule for `PROMISE`/`ACCEPT`/T-`REPORT`; terms versions derived from the chain; the terms card; codes `hidden_criteria`, `disqualified`, `unsupported_disqualification`, `unclosed_condition`; seven threat rows; J-5 amended, J-18 added (the old J-5 check); vectors C-1…C-9 | Phase A applied. Terms version `acn-terms/0.5`, the only one accepted: a prototype baseline with one set of rules, so the compatibility paths for 0.2–0.4 are removed and unknown terms fields are `malformed` (the wire stays `acn/0.4`). **CR-003 corrected:** it assumed CR-001's holdback and audit windows, which were dropped, and commitments are atomic (CR-002); the earlier decisions hold. So disqualifiers have no `window` (checked before settlement), `until_audit_end` and the audit-window effects of §2.2 don't exist, C-8 is replaced (an audit window is `malformed`), D-31 is closed, and §2.7's "split, holdback" are not on the card. **Also changed by decision:** `version` / `prev` / `drafted_by` are derived from the signed chain rather than added as terms fields (they can't then be misattributed); "evidence producer" means a listed verifier of the class, the runners, or the requester; `human`, `grounding` and `interpretive` disqualifiers are rejected at parse pending D-29, D-30; the spec has no separate breach path, so a hit makes `REJECT` legal under every trigger and, while it stands, any `REJECT` ends in Rejected without rework (C-6…C-6f), and the requester's silence after a hit is no lapse; condition and disqualifier ids share one namespace. Demo: `/drafted`, `/disqualified`. Phases B (instances, seeds), C (templates) and D (authoring aids) pending; §4's template examples still carry `audit` / `holdback` / `window` and need the same correction in Phase C |
 | Contingent sealing format | 2026-11-08 | §6.2 (`REPORT`), §8.2 step 2 | The sealed deliverable `C` is a NIP-44 v2 payload keyed directly by `k`; inline as `content.sealed` or on Blossom; `ciphertext` = sha256 of the payload bytes. Reference: `acn-core::sealed`, interop-tested against rust-nostr | Clarification, no wire version change. Implemented end to end in the demo cast (`/contingent`), with `/judged`, `/injected` and `/judged-auto` for CR-001 |

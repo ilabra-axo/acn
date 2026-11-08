@@ -43,7 +43,7 @@ Price 2,000 sat; deadline 1 hour; review window 30 minutes. Overall assurance: *
 
 ```json
 {
-  "v": "acn-terms/0.3",
+  "v": "acn-terms/0.5",
   "deliverable": {"description": "500-word technical summary of <document hash>"},
   "conditions": [
     {"id": "c1", "class": "mechanical", "description": "plain text, at most 500 words"},
@@ -54,7 +54,7 @@ Price 2,000 sat; deadline 1 hour; review window 30 minutes. Overall assurance: *
        {"model_id": "<family B model>", "model_version": "<pinned>", "prompt_template_hash": "<sha256>",
         "harness_hash": "<sha256>", "sampling": {"temperature": 0, "max_tokens": 512}}
      ],
-     "rubric_hash": "<sha256 of the rubric text>", "rubric_disclosure": "commit_reveal",
+     "rubric_hash": "<sha256 of the rubric text>", "rubric_ref": "<Blossom URL of the rubric text>",
      "scale": {"min": 0, "max": 10}, "threshold": 7, "aggregation": "all", "repeats": 3,
      "runners": ["<requester key>"]}
   ],
@@ -75,10 +75,10 @@ performer (V-17.1). The requester also lists itself as the mechanical verifier f
 |---|---|---|---|
 | 1 | Requester binding (Terms Author) | fills a judged template | Clients show "assurance: opinion; judged by J1 and J2, threshold 7/10 (each judge, ×3)" (§12) |
 | 2 | Requester | `REQUEST` (profile `N`) with the 2,000 sat token hash-locked to the performer in `content.token`, NIP-44 to the performer | V-9 parses the terms, including the judged fields (§7) |
-| 3 | Performer | `PROMISE` | Its client shows the same label before signing (§12); V-9 binds the terms hash |
+| 3 | Performer | `PROMISE` | Its client shows the terms card and the rubric before signing (§12, INV-14); V-9 binds the terms hash; V-26 checks every condition is closed |
 | 4 | Performer | `REPORT` with the summary's hash in `x` | |
 | 5a | Requester binding | `K_ATTEST_MECH` on `c1` (`{"result": "pass", "method": "word count"}`) | V-11: counted (listed verifier, right class) |
-| 5b | Requester binding | runs both judges three times each, then `K_ATTEST_JUDGED` on `c2`, revealing the rubric | V-17 checks runner, fingerprints, run counts, the rubric reveal, injection and θ; `c2` = pass |
+| 5b | Requester binding | runs both judges three times each, then `K_ATTEST_JUDGED` on `c2`, against the public rubric the terms reference | V-17 checks runner, fingerprints, run counts, the rubric hash, injection and θ; `c2` = pass |
 | 6 | Requester binding | auto-issues `SATISFY` with `s`, because every condition is met | Closure stays the requester's act (INV-5): the binding signs with the requester key under a policy the requester set in advance. The performer redeems the 2,000 sat |
 
 The judged attestation of step 5b (abridged; every field is required, Core.md §9):
@@ -152,7 +152,7 @@ Covered by the conformance vectors (Core.md §10):
   runner: `self_judged` on the act carrying them (J-3b);
 - a judge whose `model_version` differs from the terms, or the wrong number of runs:
   `judge_mismatch` (J-4, J-8);
-- a revealed rubric that doesn't hash to `rubric_hash`: `rubric_mismatch` (J-5);
+- an attestation whose rubric doesn't hash to `rubric_hash`: `rubric_mismatch` (J-18); terms that withhold the rubric (`commit_reveal`) or omit `rubric_ref` never form a commitment: `hidden_criteria` (J-5, C-2);
 - one judge below θ under `all`: `below_threshold`, condition failed (J-7);
 - a judged condition with a field the spec doesn't define (e.g. `holdback`): the terms don't
   parse and the `REQUEST` is `malformed` (J-14).

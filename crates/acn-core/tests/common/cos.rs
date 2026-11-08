@@ -12,7 +12,7 @@ use super::*;
 /// `d1`: a mechanical disqualifier VER may attest.
 pub fn d1() -> Value {
     json!({"id": "d1", "class": "mechanical", "description": "modifies or deletes existing tests",
-           "window": "until_satisfy", "runners": [pk(&VER)]})
+           "runners": [pk(&VER)]})
 }
 
 /// REQUEST (0.5 terms with `c1` and `d1`, one rework) → PROMISE → REPORT → `c1` passes.
@@ -93,7 +93,7 @@ pub fn c6b() -> W {
     d.w
 }
 
-/// C-6c: a hit attested after SATISFY is outside the `until_satisfy` window.
+/// C-6c: a hit attested after SATISFY comes too late: a disqualifier is checked before settlement.
 pub fn c6c() -> W {
     let mut d = disq(3108, |_| {});
     let (r, rep) = (d.r.clone(), d.rep.clone());
@@ -225,17 +225,62 @@ pub fn c5c() -> W {
     w
 }
 
-/// C-9: older terms use none of the new fields: a mechanical condition with no listed verifier
-/// can still be promised, exactly as before CR-003.
+/// C-9: terms with none of the CR-003 additions (no disqualifiers, nothing open) run as before:
+/// promise, report, pass, satisfy, with no new anomalies.
 pub fn c9() -> W {
-    let mut w = W::default();
-    let t = terms(|t| {
-        t["deadline"] = json!(3118);
-        t["conditions"] = json!([{"id": "c1", "class": "mechanical", "description": "tests"}]);
+    let mut d = {
+        let mut w = W::default();
+        let t = cos_terms(3118, |_| {});
+        let r = request(&mut w, "N", &t);
+        let p = w.add(d_promise(&r, &r, &terms_hash(&t)), &PERF, 1100);
+        let rep = w.add(d_report(&r, &p), &PERF, 1200);
+        Disq { w, r, rep }
+    };
+    d.attest("c1", "pass", &VER, 1250);
+    let (r, rep) = (d.r.clone(), d.rep.clone());
+    d.w.add(d_satisfy(&r, &rep, None), &REQ, 1300);
+    d.w
+}
+
+/// C-6d: contingent: the conditions pass on the plaintext, but a disqualifier is hit. The
+/// requester owes no FUND (no requester lapse), and may REJECT; the commitment fails outright.
+pub fn c6d() -> W {
+    use super::settlement::*;
+    let (mut k, rep) = contingent(3119, |t| {
+        t["disqualifiers"] = json!([d1()]);
     });
-    let r = request(&mut w, "N", &t);
-    w.add(d_promise(&r, &r, &terms_hash(&t)), &PERF, 1100);
-    w
+    k.attest(&rep, "pass", &ciphertext(), 1250);
+    let d = Draft::attest(
+        K_ATTEST_MECH,
+        &k.r.id,
+        &rep.id,
+        "d1",
+        json!({
+            "result": "hit", "method": "diff", "ciphertext": ciphertext(),
+            "hashlock": key_hash(), "plaintext": plaintext()
+        }),
+    );
+    k.w.add(d, &VER, 1260);
+    let r = k.r.clone();
+    k.w.add(d_reject(&r, &rep, "tests"), &REQ, 1300);
+    k.w
+}
+
+/// C-6e: requester trigger, a hit stands, and the REJECT names a *condition*, not the
+/// disqualifier. Still breach: Rejected, no rework.
+pub fn c6e() -> W {
+    let mut d = disq(3120, |_| {});
+    d.attest("d1", "hit", &VER, 1260);
+    d.reject("c1", 1300);
+    d.w
+}
+
+/// C-6f: a hit stands and the requester stays silent past the review window: not a requester
+/// fault (the performer is in breach).
+pub fn c6f() -> W {
+    let mut d = disq(3121, |_| {});
+    d.attest("d1", "hit", &VER, 1260);
+    d.w
 }
 
 /// A judged disqualifier: the judges score whether the act happened; at or above θ is a hit.
@@ -243,7 +288,6 @@ pub fn c_judged_hit() -> W {
     let mut dq = judged_terms(|_| {})["conditions"][1].clone();
     dq["id"] = json!("d2");
     dq["description"] = json!("repeats rubric terms without substance");
-    dq["window"] = json!("until_satisfy");
     dq["runners"] = json!([pk(&VER)]);
     let mut d = disq(3112, |t| t["disqualifiers"] = json!([d1(), dq]));
     let mut a = super::judged::attestation(super::judged::PASSING, false);
@@ -260,7 +304,6 @@ pub fn c_judged_hit() -> W {
 /// Base `acn-terms/0.5` terms with one mechanical condition checked by VER.
 pub fn cos_terms(deadline: u64, f: impl FnOnce(&mut Value)) -> Value {
     terms(|t| {
-        t["v"] = json!("acn-terms/0.5");
         t["deadline"] = json!(deadline);
         t["conditions"] =
             json!([{"id": "c1", "class": "mechanical", "description": "the test suite passes"}]);

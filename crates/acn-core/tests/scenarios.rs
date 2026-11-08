@@ -673,8 +673,37 @@ fn check_cos(name: &str, w: &W, out: &acn_core::Output) {
         }
         "C-9" => {
             let st = out.commitments[&req.id].state.clone().unwrap();
-            assert_eq!(st.phase, Phase::Promised, "{ctx}");
-            assert!(!has(1, Code::UnclosedCondition), "{ctx}");
+            assert_eq!(st.phase, Phase::Satisfied, "{ctx}");
+            assert!(
+                out.anomalies.iter().all(|a| a.code == Code::Unbound),
+                "{ctx}"
+            );
+        }
+        // e: REQUEST, PROMISE, REPORT(Offered), tests pass, d1 hit, REJECT
+        "C-6d" => {
+            let c = &out.commitments[&req.id];
+            assert!(has(2, Code::Disqualified), "{ctx}");
+            // Before the REJECT: no funding deadline, so no requester lapse.
+            assert_eq!(c.state.as_ref().unwrap().phase, Phase::Rejected, "{ctx}");
+            assert_eq!(c.state.as_ref().unwrap().rework_count, 0, "{ctx}");
+        }
+        // A hit stands; the REJECT names `c1`, not the disqualifier: still breach.
+        "C-6e" => {
+            let c = &out.commitments[&req.id];
+            assert_eq!(c.state.as_ref().unwrap().phase, Phase::Rejected, "{ctx}");
+            assert!(out.anomalies_for(&e[5].id).next().is_none(), "{ctx}");
+        }
+        "C-6f" => {
+            let c = &out.commitments[&req.id];
+            let st = c.state.as_ref().unwrap();
+            assert_eq!(st.phase, Phase::Reported, "{ctx}");
+            let s = status_at(c, st.report_at.unwrap() + 501);
+            assert_eq!(
+                s.lapsed, None,
+                "breach: the requester's silence is no fault: {ctx}"
+            );
+            assert_eq!(s.awaiting, Some(Party::Requester), "{ctx}");
+            assert!(!c.disqualifiers.is_empty() && c.disqualified());
         }
         "C-6j" => {
             let c = &out.commitments[&req.id];
@@ -722,31 +751,34 @@ fn cr003_cos_vectors_under_every_arrival_order() {
     }
 }
 
-/// C-9 (part): terms before 0.5 keep their meaning; only `commit_reveal` stops parsing.
+/// One terms version, no older meanings: anything else is malformed, and so is any field the
+/// schema doesn't define (a `holdback` or `audit` that would silently not bind).
 #[test]
-fn cr003_older_terms_keep_their_meaning() {
-    let old = |f: fn(&mut serde_json::Value)| {
-        common::judged::judged_terms(|t| {
-            t["v"] = json!("acn-terms/0.4");
-            let c = t["conditions"][1].as_object_mut().unwrap();
-            c.remove("rubric_ref");
-            c.insert("rubric_disclosure".into(), json!("public"));
-            f(t);
-        })
+fn cr003_one_coherent_terms_version() {
+    use acn_core::Terms;
+    let code = |t: serde_json::Value| Terms::check(&t).err().map(|e| e.0);
+    assert_eq!(code(terms(|_| {})), None);
+    for old in ["acn-terms/0.2", "acn-terms/0.3", "acn-terms/0.4"] {
+        assert_eq!(
+            code(terms(|t| t["v"] = json!(old))),
+            Some(Code::Malformed),
+            "{old}"
+        );
+    }
+    // rubric_disclosure no longer exists; commit_reveal is singled out as a hidden criterion.
+    let disclosed = |v: &str| {
+        common::judged::judged_terms(|t| t["conditions"][1]["rubric_disclosure"] = json!(v))
     };
-    assert!(acn_core::Terms::parse(&old(|_| {})).is_ok());
-    let reveal = acn_core::Terms::check(&old(|t| {
-        t["conditions"][1]["rubric_disclosure"] = json!("commit_reveal")
-    }));
-    assert_eq!(reveal.unwrap_err().0, Code::HiddenCriteria);
-    // The 0.5 fields don't exist before 0.5.
-    assert!(
-        acn_core::Terms::parse(&old(|t| t["conditions"][1]["rubric_ref"] = json!("x"))).is_err()
-    );
-    // In 0.5, rubric_disclosure is gone (rubrics are public).
-    let v05 =
-        common::judged::judged_terms(|t| t["conditions"][1]["rubric_disclosure"] = json!("public"));
-    assert_eq!(acn_core::Terms::check(&v05).unwrap_err().0, Code::Malformed);
+    assert_eq!(code(disclosed("public")), Some(Code::Malformed));
+    assert_eq!(code(disclosed("commit_reveal")), Some(Code::HiddenCriteria));
+    // Commitments are atomic: no holdback or audit window anywhere in the terms.
+    for f in ["holdback", "audit"] {
+        assert_eq!(
+            code(terms(|t| t[f] = json!({"fraction": 0.2}))),
+            Some(Code::Malformed),
+            "{f}"
+        );
+    }
 }
 
 // ---------- CR-001 vectors (spec §10 conformance table) ----------
@@ -897,15 +929,6 @@ fn cr001_judged_vectors_under_every_arrival_order() {
             check_judged(name, &w, &acn_core::fold(&shuffled, &w.docs));
         }
     }
-}
-
-/// `judged` needs acn-terms/0.3; 0.2 documents without it still parse.
-#[test]
-fn cr001_judged_requires_terms_0_3() {
-    let judged = common::judged::judged_terms(|t| t["v"] = json!("acn-terms/0.2"));
-    assert!(acn_core::Terms::parse(&judged).is_err());
-    assert!(acn_core::Terms::parse(&terms(|t| t["v"] = json!("acn-terms/0.2"))).is_ok());
-    assert!(acn_core::Terms::parse(&terms(|t| t["v"] = json!("acn-terms/9.9"))).is_err());
 }
 
 /// The validator rejects a judged condition satisfied by an interpretive report, by a
@@ -1160,11 +1183,8 @@ fn cr002_settlement_combinations() {
     ] {
         assert!(parse(t).settlement_combo().is_err(), "{why}");
     }
-    // New fields need acn-terms/0.4; plain 0.3 terms still parse and default to requester.
-    assert!(
-        acn_core::Terms::parse(&verifier_terms(1, |t| t["v"] = json!("acn-terms/0.3"))).is_err()
-    );
-    let old = parse(terms(|t| t["v"] = json!("acn-terms/0.3")));
+    // Terms without the settlement fields default to the requester trigger.
+    let old = parse(terms(|_| {}));
     assert_eq!(
         old.settlement_trigger,
         acn_core::terms::SettlementTrigger::Requester

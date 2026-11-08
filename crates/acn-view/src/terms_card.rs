@@ -3,7 +3,7 @@
 //! plus who drafted the version, and a diff against the previous one. Derived from the terms
 //! only; nothing here has semantics (INV-12).
 
-use acn_core::terms::{Assurance, ConditionClass, DisqualifierWindow, SettlementTrigger, Terms};
+use acn_core::terms::{Assurance, ConditionClass, SettlementTrigger, Terms};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -90,7 +90,6 @@ pub struct DisqualifierItem {
     pub class: ConditionClass,
     pub assurance: Option<Assurance>,
     pub description: String,
-    pub window: DisqualifierWindow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -166,7 +165,6 @@ pub fn card(t: &Terms, v: &TermsVersionView) -> TermsCard {
                 class: d.class,
                 assurance: d.class.assurance(),
                 description: d.description.clone(),
-                window: d.window,
             })
             .collect(),
         unclosed: t.unclosed(),

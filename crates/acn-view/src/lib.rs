@@ -12,7 +12,7 @@ pub use terms_card::{
 };
 
 use acn_core::kinds::*;
-use acn_core::terms::{Aggregation, Assurance, ConditionClass, RubricDisclosure};
+use acn_core::terms::{Aggregation, Assurance, ConditionClass};
 use acn_core::{
     fold, status_at, BindingStatus, Commitment, ConditionStatus, Event, Output, Party, Phase,
     Profile, Severity,
@@ -111,8 +111,6 @@ pub struct JudgedView {
     pub scale_max: f64,
     pub aggregation: Aggregation,
     pub repeats: u32,
-    /// Terms before 0.5 only.
-    pub rubric_disclosure: Option<RubricDisclosure>,
     /// Where the performer reads the rubric (INV-14), and the text when it is inline.
     pub rubric_ref: Option<String>,
     pub rubric_text: Option<String>,
@@ -720,7 +718,6 @@ fn one(
                             scale_max: j.scale.max,
                             aggregation: j.aggregation,
                             repeats: j.repeats,
-                            rubric_disclosure: j.rubric_disclosure,
                             rubric_ref: j.rubric_ref.clone(),
                             rubric_text: j.rubric_text.clone(),
                             runners: j.runners.clone(),

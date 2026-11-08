@@ -116,12 +116,15 @@ pub fn status_at(c: &Commitment, now: u64) -> Status {
                 .is_some_and(|r| now > r.saturating_add(terms.review_window)) =>
         {
             // Verifier trigger: no RELEASE and no failing attestation in time is the verifier's
-            // fault; the payment refunds at the locktime.
-            Some(if verifier && !failing {
-                Party::Verifier
+            // fault; the payment refunds at the locktime. After a disqualifier hit the performer
+            // is in breach, so not closing it in time is nobody's new fault.
+            if c.disqualified() {
+                None
+            } else if verifier && !failing {
+                Some(Party::Verifier)
             } else {
-                Party::Requester
-            })
+                Some(Party::Requester)
+            }
         }
         // Unfunded passing offer: requester fault (it never got the key, so it gains nothing).
         Phase::Offered if passed.is_some_and(|d| now > d) => Some(Party::Requester),

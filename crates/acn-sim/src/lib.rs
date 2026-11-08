@@ -884,9 +884,9 @@ fn react_settlement(
             });
             t["disqualifiers"] = json!([
                 {"id": "d1", "class": "mechanical", "description": "Disables or skips the benchmark",
-                 "window": "until_satisfy", "runners": [cast.verifier]},
+                 "runners": [cast.verifier]},
                 {"id": "d2", "class": "mechanical", "description": "Modifies or deletes existing tests or their assertions",
-                 "window": "until_satisfy", "runners": [cast.verifier]}
+                 "runners": [cast.verifier]}
             ]);
             let d = Draft::counter(c, head, parties, &t, "c2: closed as a benchmark check (p95 within 5%). d1: so the check can't be dodged. d2: so the suite can't be weakened to pass c1.").ok()?;
             push(mv(Actor::Performer, 1300, "Atlas's drafter closes c2 as a benchmark check with a retrievable definition, and proposes two disqualifiers: in effect a quote of what it will be held to. You can't be promised against an open condition; you can accept this version.", d, ctx));

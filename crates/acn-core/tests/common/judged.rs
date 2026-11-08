@@ -32,7 +32,6 @@ pub fn rubric_ref() -> String {
 /// public rubric by reference (CR-003), 0-10, θ = 7, all, 3 repeats, runner = the requester).
 pub fn judged_terms(f: impl FnOnce(&mut Value)) -> Value {
     terms(|t| {
-        t["v"] = json!("acn-terms/0.5");
         t["deliverable"] = json!({"description": "500-word technical summary"});
         t["conditions"] = json!([
             {"id": "c1", "class": "mechanical", "description": "plain text, at most 500 words"},
