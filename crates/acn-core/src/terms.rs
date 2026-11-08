@@ -196,17 +196,21 @@ pub enum ConditionClass {
     Judged,
     Interpretive,
     Human,
+    /// Not yet drafted (CR-003 §2.4, 0.5): the requester's intent in prose, to be closed in a
+    /// COUNTER before anyone can promise.
+    Open,
 }
 
 impl ConditionClass {
-    /// Derived assurance label (spec §7). Never asserted by a party.
-    pub fn assurance(self) -> Assurance {
-        match self {
+    /// Derived assurance label (spec §7). Never asserted by a party. `None` for `open`.
+    pub fn assurance(self) -> Option<Assurance> {
+        Some(match self {
             ConditionClass::Mechanical => Assurance::Check,
             ConditionClass::Grounding => Assurance::Grounded,
             ConditionClass::Judged | ConditionClass::Interpretive => Assurance::Opinion,
             ConditionClass::Human => Assurance::Human,
-        }
+            ConditionClass::Open => return None,
+        })
     }
 }
 
@@ -510,6 +514,26 @@ impl Terms {
         if !t.disqualifiers.is_empty() && t.v != TERMS_VERSION {
             return Err("disqualifiers need acn-terms/0.5".into());
         }
+        for c in t
+            .conditions
+            .iter()
+            .filter(|c| c.class == ConditionClass::Open)
+        {
+            if t.v != TERMS_VERSION {
+                return Err("open conditions need acn-terms/0.5".into());
+            }
+            if let Some(s) = c.extra.get("suggested_class") {
+                match serde_json::from_value::<ConditionClass>(s.clone()) {
+                    Ok(ConditionClass::Open) | Err(_) => {
+                        return Err(format!(
+                            "open condition `{}`: suggested_class must be a closed class",
+                            c.id
+                        ))
+                    }
+                    Ok(_) => {}
+                }
+            }
+        }
         // Attestations name a condition or a disqualifier by id, so ids share one namespace.
         let mut ids: Vec<&str> = t
             .conditions
@@ -543,13 +567,45 @@ impl Terms {
     }
 
     /// Overall assurance: the weakest condition's label. With no conditions, closure rests on
-    /// the requester's own judgement (`human`).
-    pub fn assurance(&self) -> Assurance {
+    /// the requester's own judgement (`human`). `None` while a condition is still `open`.
+    pub fn assurance(&self) -> Option<Assurance> {
         self.conditions
             .iter()
             .map(|c| c.class.assurance())
-            .min()
-            .unwrap_or(Assurance::Human)
+            .collect::<Option<Vec<_>>>()
+            .map(|v| v.into_iter().min().unwrap_or(Assurance::Human))
+    }
+
+    /// CR-003 §2.4 closure rule: why these terms can't be promised or accepted yet, if so. A
+    /// condition is closed when it has a class other than `open`, every field its class needs,
+    /// public criteria (checked at parse, INV-14) and, from 0.5, a named evidence producer: a
+    /// listed verifier of its class (`mechanical`, `grounding`), its runners (`judged`), or the
+    /// requester itself (`human`, `interpretive`). Disqualifiers name their runners at parse.
+    pub fn unclosed(&self) -> Option<String> {
+        if let Some(c) = self
+            .conditions
+            .iter()
+            .find(|c| c.class == ConditionClass::Open)
+        {
+            return Some(format!("condition `{}` is still open", c.id));
+        }
+        if self.v != TERMS_VERSION {
+            return None;
+        }
+        self.conditions
+            .iter()
+            .find(|c| {
+                matches!(
+                    c.class,
+                    ConditionClass::Mechanical | ConditionClass::Grounding
+                ) && !self.verifiers.iter().any(|v| v.classes.contains(&c.class))
+            })
+            .map(|c| {
+                format!(
+                    "condition `{}` names no evidence producer (no listed {:?} verifier)",
+                    c.id, c.class
+                )
+            })
     }
 
     /// CR-002 valid combinations (spec §7). The fold reports a failure with the returned code
@@ -560,10 +616,11 @@ impl Terms {
         self.settlement_combo_inner()
             .map_err(|e| (Code::InvalidSettlementCombo, e))?;
         if self.settlement_trigger == SettlementTrigger::Contingent {
+            // Open conditions are checked once a COUNTER closes them (CR-003 §2.4).
             if let Some(c) = self
                 .conditions
                 .iter()
-                .find(|c| c.class != ConditionClass::Mechanical)
+                .find(|c| !matches!(c.class, ConditionClass::Mechanical | ConditionClass::Open))
             {
                 return Err((
                     Code::ContingentNondeterministic,

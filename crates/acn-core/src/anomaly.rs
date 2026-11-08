@@ -61,6 +61,7 @@ pub enum Code {
     HiddenCriteria,
     Disqualified,
     UnsupportedDisqualification,
+    UnclosedCondition,
 }
 
 impl Code {
@@ -105,6 +106,7 @@ impl Code {
         Code::HiddenCriteria,
         Code::Disqualified,
         Code::UnsupportedDisqualification,
+        Code::UnclosedCondition,
     ];
 
     pub fn severity(self) -> Severity {
@@ -174,6 +176,7 @@ impl Code {
             HiddenCriteria => "hidden_criteria",
             Disqualified => "disqualified",
             UnsupportedDisqualification => "unsupported_disqualification",
+            UnclosedCondition => "unclosed_condition",
         }
     }
 }

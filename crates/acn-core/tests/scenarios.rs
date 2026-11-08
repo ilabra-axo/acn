@@ -568,6 +568,12 @@ const ALL: &[Scenario] = &[
     ("C-7b", common::cos::c7b),
     ("C-8", common::cos::c8),
     ("C-6j", common::cos::c_judged_hit),
+    ("C-3", common::cos::c3),
+    ("C-4", common::cos::c4),
+    ("C-5", common::cos::c5),
+    ("C-5b", common::cos::c5b),
+    ("C-5c", common::cos::c5c),
+    ("C-9", common::cos::c9),
 ];
 
 // ---------- CR-003 vectors (spec §10 conformance table) ----------
@@ -624,6 +630,52 @@ fn check_cos(name: &str, w: &W, out: &acn_core::Output) {
             assert!(has(5, Code::UnsupportedDisqualification), "{ctx}");
             assert_eq!(c.state.as_ref().unwrap().phase, Phase::Reworking, "{ctx}");
         }
+        // Underspecified requests are allowed; underspecified promises are not.
+        "C-3" | "C-4" | "C-5c" => {
+            let c = &out.commitments[&req.id];
+            assert!(has(1, Code::UnclosedCondition), "{ctx}");
+            assert_eq!(c.state.as_ref().unwrap().phase, Phase::Requested, "{ctx}");
+            if name == "C-3" {
+                assert_eq!(
+                    c.assurance, None,
+                    "an open condition has no label yet: {ctx}"
+                );
+            }
+        }
+        // e: REQUEST (v1, open c2), COUNTER by the performer (v2, closed), ACCEPT by the requester
+        "C-5" => {
+            let c = &out.commitments[&req.id];
+            let st = c.state.as_ref().unwrap();
+            assert_eq!(st.phase, Phase::Promised, "{ctx}");
+            assert_eq!(
+                Some(&st.terms),
+                e[1].tags.iter().find(|t| t[0] == "terms").map(|t| &t[1]),
+                "{ctx}"
+            );
+            // drafted_by: the signer of the act that carried the version in force.
+            assert_eq!(e[1].pubkey, pk(&PERF));
+            let t = c.terms.as_ref().unwrap();
+            assert!(
+                t.unclosed().is_none() && t.disqualifier("d1").is_some(),
+                "{ctx}"
+            );
+            assert_eq!(c.assurance, Some(acn_core::Assurance::Check), "{ctx}");
+            assert!(
+                out.anomalies.iter().all(|a| a.code == Code::Unbound),
+                "{ctx}"
+            );
+        }
+        // e: REQUEST, COUNTER by the requester (open c2), ACCEPT by the performer
+        "C-5b" => {
+            assert!(has(2, Code::UnclosedCondition), "{ctx}");
+            let st = out.commitments[&req.id].state.clone().unwrap();
+            assert_eq!(st.phase, Phase::Countered, "{ctx}");
+        }
+        "C-9" => {
+            let st = out.commitments[&req.id].state.clone().unwrap();
+            assert_eq!(st.phase, Phase::Promised, "{ctx}");
+            assert!(!has(1, Code::UnclosedCondition), "{ctx}");
+        }
         "C-6j" => {
             let c = &out.commitments[&req.id];
             assert!(has(2, Code::Disqualified), "{ctx}");
@@ -650,6 +702,12 @@ const COS: &[Scenario] = &[
     ("C-7b", common::cos::c7b),
     ("C-8", common::cos::c8),
     ("C-6j", common::cos::c_judged_hit),
+    ("C-3", common::cos::c3),
+    ("C-4", common::cos::c4),
+    ("C-5", common::cos::c5),
+    ("C-5b", common::cos::c5b),
+    ("C-5c", common::cos::c5c),
+    ("C-9", common::cos::c9),
 ];
 
 /// CR-003 §5.2: every Phase A vector, under every arrival-order permutation.
@@ -781,7 +839,7 @@ fn check_judged(name: &str, w: &W, out: &acn_core::Output) {
         "J-11" => {
             let t = c.terms.as_ref().unwrap();
             let classes: Vec<_> = t.conditions.iter().map(|c| c.class.assurance()).collect();
-            assert_eq!(classes, [Assurance::Check, Assurance::Opinion]);
+            assert_eq!(classes, [Some(Assurance::Check), Some(Assurance::Opinion)]);
             assert!(
                 out.anomalies.iter().all(|a| a.code == Code::Unbound),
                 "{ctx}"

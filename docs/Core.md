@@ -330,8 +330,8 @@ only against a failing attestation, and `SATISFY` is not legal. From Funded, the
 | --- | --- | --- | --- | --- |
 | `REQUEST` | requester | — (root) | Requested | `terms` tag; content: `{terms?: <inline doc>, token?: <NIP-44 ciphertext to performer>, note?}` |
 | `COUNTER` | either | Requested, Countered, Promised (N only) | Countered, or Promised with `pending` | new `terms` tag; `{terms?: <inline doc>, reason}` |
-| `ACCEPT` | the non-countering party | Countered, or Promised with `pending` | Promised (`terms` := counter terms) | `terms` tag = pending counter terms |
-| `PROMISE` | performer | Requested (N) | Promised | `terms` tag = current terms; `{p_on_time: 0..1, token_verified: bool}` |
+| `ACCEPT` | the non-countering party | Countered, or Promised with `pending` | Promised (`terms` := counter terms) | `terms` tag = pending counter terms; every condition closed (V-26) |
+| `PROMISE` | performer | Requested (N) | Promised | `terms` tag = current terms; every condition closed (V-26); `{p_on_time: 0..1, token_verified: bool}` |
 | `DECLINE` | performer | Requested, Countered | Declined | `{reason}` |
 | `WITHDRAW` | requester | Requested, Countered, Promised | Withdrawn | `{reason}` |
 | `REVOKE` | performer | Promised, Reworking | Revoked (scored) | `{reason}` |
@@ -459,6 +459,25 @@ INV-8 is enforced.
 - **`interpretive`:** quality judgement (rubric). Interpretive reports MAY inform it, but the
   requester always judges it in the end.
 - **`human`:** the requester's own judgement, expressed by `SATISFY` or `REJECT`.
+- **`open` (CR-003, 0.5):** not yet drafted. `id`, `description` (the requester's intent in prose)
+  and an optional `suggested_class`. Allowed in the terms of a `REQUEST` or `COUNTER`; never a
+  disqualifier. It has no assurance label, so terms with one have no overall label yet.
+
+**Drafting and closure (CR-003).** Either party may draft conditions; the performer typically
+closes them in its `COUNTER`, in effect a quote of what it will be held to. A condition is
+**closed** when its class isn't `open`, it has every field its class requires, its criteria are
+public (INV-14), and (from 0.5) it names an evidence producer: a listed verifier of its class
+(`mechanical`, `grounding`), its `runners` (`judged`), or the requester (`human`,
+`interpretive`). A disqualifier is closed on the same test (its `runners`). **Closure rule:**
+`PROMISE`, `ACCEPT`, and a T0/T1 `REPORT` from Requested (the implicit promise) are valid only
+against terms in which every condition and disqualifier is closed (V-26). Underspecified requests
+are allowed; underspecified promises are not. A performer-drafted version binds only after the
+requester's act on it (its `ACCEPT`), under the existing counter semantics.
+
+**Terms versions.** Each `REQUEST` or `COUNTER` that carries terms is a terms version: its number
+is its position along the effective chain, `prev` is the version before it, and `drafted_by` is
+the act's signer. All three are derived from the signed chain, not fields of the terms, so a
+version's author can't be misattributed. Clients show them (§12).
 
 **Disqualifiers (CR-003, 0.5).** A disqualifier is a public predicate about the deliverable or
 the way it was produced, e.g. "modifies or deletes existing tests". When attested as hit, the
@@ -821,6 +840,10 @@ list). Every rule failure produces an anomaly with a code and a severity:
     `late` (not counted). A counted hit records `disqualified` on the `REPORT` (flag). A `REJECT`
     gap naming a disqualifier without a counted hit is `unsupported_disqualification` (flag, on
     the `REJECT`). Effects on `SATISFY`, `REJECT` and `RELEASE`: §7 "Disqualifiers".
+26. **V-26 Closure (new, CR-003).** `PROMISE`, `ACCEPT`, and a T0/T1 `REPORT` from Requested are
+    applied only against terms in which every condition and disqualifier is closed (§7 "Drafting
+    and closure"). `unclosed_condition` (reject, on the act). Before 0.5, "closed" means only "not
+    `open`", so older terms keep their meaning.
 
 V-18 also covers the contingent constraint that every condition is `mechanical`:
 `contingent_nondeterministic` (reject; on a `REQUEST`, no commitment).
@@ -902,6 +925,12 @@ permutation.
 | C-6j | `judged` disqualifier; judges score ≥ θ | Counted as `hit`; `disqualified` |
 | C-7 | Hit signed by an unnamed key; requester withholds | Hit not counted; `unsupported_disqualification`; requester fault once the review window lapses |
 | C-7b | As C-7; requester rejects naming the disqualifier | `REJECT` applies (Reworking); `unsupported_disqualification` on it |
+| C-3 | `PROMISE` against a version with an `open` condition | Not applied; `unclosed_condition`; overall assurance none yet |
+| C-4 | `PROMISE` against a 0.5 `mechanical` condition with no listed verifier | Not applied; `unclosed_condition` |
+| C-5 | Performer `COUNTER` closes the open condition and adds a disqualifier; requester accepts | Binds (Promised on the counter's hash); `drafted_by` is the performer |
+| C-5b | Performer `ACCEPT`s a requester counter that leaves a condition open | Not applied; `unclosed_condition` |
+| C-5c | T1 `REPORT` (implicit promise) against terms with an open condition | Not applied; `unclosed_condition` |
+| C-9 | Commitment uses none of the new fields (0.4 terms, mechanical with no listed verifier) | Behaves exactly as before CR-003: every earlier vector passes unchanged |
 | C-8 | `until_audit_end` disqualifier | Resolved by decision: terms don't parse (`malformed`; no holdback exists, D-31). The CR's expectation (main settlement stands, holdback refunds) waits for D-31 |
 
 ## 11. Bindings, governance and reputation

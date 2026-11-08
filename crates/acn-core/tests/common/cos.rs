@@ -130,6 +130,114 @@ pub fn c8() -> W {
     w
 }
 
+/// `c2`: an open condition (the requester's intent, not yet drafted).
+pub fn open_c2() -> Value {
+    json!({"id": "c2", "class": "open", "description": "no performance regression",
+           "suggested_class": "mechanical"})
+}
+
+/// v1 of the C-5 demo: `c1` closed, `c2` open.
+pub fn draft_v1(deadline: u64) -> Value {
+    cos_terms(deadline, |t| {
+        t["conditions"].as_array_mut().unwrap().push(open_c2());
+    })
+}
+
+/// C-3: PROMISE against a version with an open condition.
+pub fn c3() -> W {
+    let mut w = W::default();
+    let t = draft_v1(3113);
+    let r = request(&mut w, "N", &t);
+    w.add(d_promise(&r, &r, &terms_hash(&t)), &PERF, 1100);
+    w
+}
+
+/// C-4: PROMISE against a mechanical condition with no evidence producer (no listed verifier).
+pub fn c4() -> W {
+    let mut w = W::default();
+    let t = cos_terms(3114, |t| t["verifiers"] = json!([]));
+    let r = request(&mut w, "N", &t);
+    w.add(d_promise(&r, &r, &terms_hash(&t)), &PERF, 1100);
+    w
+}
+
+/// C-5: the performer's COUNTER closes the open condition and adds a disqualifier; the
+/// requester accepts, and the commitment binds to the performer-drafted version.
+pub fn c5() -> W {
+    let mut w = W::default();
+    let v1 = draft_v1(3115);
+    let r = request(&mut w, "N", &v1);
+    let v2 = cos_terms(3115, |t| {
+        t["conditions"].as_array_mut().unwrap().push(json!({
+            "id": "c2", "class": "mechanical",
+            "description": "p95 latency within 5% of the baseline benchmark",
+            "check_hash": "cd".repeat(32), "check_ref": "https://blossom.example/bench"
+        }));
+        t["disqualifiers"] = json!([d1()]);
+    });
+    let [a, b] = parties();
+    let ctr = w.add(
+        Draft::counter(
+            &r.id,
+            &r.id,
+            &[&a, &b],
+            &v2,
+            "closed c2 as a benchmark check; added d1",
+        )
+        .unwrap(),
+        &PERF,
+        1100,
+    );
+    w.add(
+        Draft::accept(&r.id, &ctr.id, &[&a, &b], &terms_hash(&v2)),
+        &REQ,
+        1150,
+    );
+    w
+}
+
+/// C-5b: the performer can't ACCEPT a counter that still leaves a condition open.
+pub fn c5b() -> W {
+    let mut w = W::default();
+    let v1 = cos_terms(3116, |_| {});
+    let r = request(&mut w, "N", &v1);
+    let v2 = draft_v1(3116);
+    let [a, b] = parties();
+    let ctr = w.add(
+        Draft::counter(&r.id, &r.id, &[&a, &b], &v2, "also no regression").unwrap(),
+        &REQ,
+        1100,
+    );
+    w.add(
+        Draft::accept(&r.id, &ctr.id, &[&a, &b], &terms_hash(&v2)),
+        &PERF,
+        1150,
+    );
+    w
+}
+
+/// C-5c: a T1 REPORT is an implicit promise, so it needs closed terms too.
+pub fn c5c() -> W {
+    let mut w = W::default();
+    let t = draft_v1(3117);
+    let r = request(&mut w, "T1", &t);
+    w.add(d_report(&r, &r), &PERF, 1100);
+    w
+}
+
+/// C-9: older terms use none of the new fields: a mechanical condition with no listed verifier
+/// can still be promised, exactly as before CR-003.
+pub fn c9() -> W {
+    let mut w = W::default();
+    let t = terms(|t| {
+        t["deadline"] = json!(3118);
+        t["conditions"] = json!([{"id": "c1", "class": "mechanical", "description": "tests"}]);
+    });
+    let r = request(&mut w, "N", &t);
+    w.add(d_promise(&r, &r, &terms_hash(&t)), &PERF, 1100);
+    w
+}
+
 /// A judged disqualifier: the judges score whether the act happened; at or above θ is a hit.
 pub fn c_judged_hit() -> W {
     let mut dq = judged_terms(|_| {})["conditions"][1].clone();

@@ -728,7 +728,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
             }
         }
 
-        commitment.assurance = Some(terms_now.assurance());
+        commitment.assurance = terms_now.assurance();
         commitment.terms = Some(terms_now);
         commitment.state = Some(st);
         Some(commitment)
@@ -1347,6 +1347,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
                     ));
                 }
                 if let Some(t) = run.terms.get(&pending.terms) {
+                    require_closed(t)?;
                     self.require_escrow(t)?;
                 }
                 next.terms = pending.terms.clone();
@@ -1367,6 +1368,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
                         "PROMISE terms differ from the terms in force".into(),
                     ));
                 }
+                require_closed(terms)?;
                 self.require_escrow(terms)?;
                 next.promised = true;
                 next.phase = Promised;
@@ -1412,6 +1414,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 }
                 // T1: a REPORT from Requested is the implicit promise.
                 if st.phase == Requested {
+                    require_closed(terms)?;
                     self.require_escrow(terms)?;
                 }
                 if k.at() > terms.deadline {
@@ -1669,6 +1672,14 @@ fn is_sha256_hex(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// CR-003 §2.4: underspecified requests are allowed; underspecified promises are not.
+fn require_closed(t: &Terms) -> Result<(), (Code, String)> {
+    match t.unclosed() {
+        Some(why) => Err((Code::UnclosedCondition, why)),
+        None => Ok(()),
+    }
+}
+
 /// Contingent (V-21): an attestation names the REPORT's ciphertext, hashlock and plaintext hash.
 /// Records `attestation_mismatch` and returns false otherwise.
 fn contingent_bound(acc: &mut Acc, t: &Terms, snap: &State, p: &Parsed) -> bool {
@@ -1702,6 +1713,9 @@ fn disqualifier_status(ev: Option<&Vec<(String, String)>>) -> DisqualifierStatus
 
 fn condition_status(class: ConditionClass, ev: Option<&Vec<(String, String)>>) -> ConditionStatus {
     match class {
+        // Nothing can attest an open condition (its class is unknown); terms with one are never
+        // promised (closure rule).
+        ConditionClass::Open => ConditionStatus::Unverified,
         ConditionClass::Mechanical | ConditionClass::Grounding | ConditionClass::Judged => match ev
         {
             Some(v) if v.iter().any(|(r, _)| r == "fail") => ConditionStatus::Fail,

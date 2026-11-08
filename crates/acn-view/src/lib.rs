@@ -77,8 +77,8 @@ pub struct Evidence {
 pub struct ConditionView {
     pub id: String,
     pub class: ConditionClass,
-    /// Derived assurance label (spec §7).
-    pub assurance: Assurance,
+    /// Derived assurance label (spec §7); `None` for an `open` condition.
+    pub assurance: Option<Assurance>,
     pub description: String,
     pub status: Option<ConditionStatus>,
     pub evidence: Vec<Evidence>,
