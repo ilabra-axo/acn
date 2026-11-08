@@ -1,0 +1,24 @@
+[package]
+name = "nmesh-mint"
+description = "Local Cashu test mint for the demo: CDK mint + fake Lightning backend (real tokens, NUT-11/12/14, test sats)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "nmesh-mint"
+path = "src/main.rs"
+
+[dependencies]
+cdk = { workspace = true, features = ["mint"] }
+cdk-fake-wallet.workspace = true
+cdk-axum.workspace = true
+cdk-sqlite = { workspace = true, features = ["mint"] }
+axum = "0.8"
+bip39 = "2"
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true

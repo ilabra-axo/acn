@@ -1,0 +1,159 @@
+//! Terms documents (spec §7).
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+pub const TERMS_VERSION: &str = "acn-terms/0.2";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Terms {
+    pub v: String,
+    #[serde(default)]
+    pub deliverable: Deliverable,
+    #[serde(default)]
+    pub conditions: Vec<Condition>,
+    /// Latest REPORT time (unix seconds).
+    pub deadline: u64,
+    /// Seconds after REPORT for SATISFY/REJECT.
+    pub review_window: u64,
+    #[serde(default)]
+    pub rework_limit: u32,
+    pub price: Price,
+    #[serde(default)]
+    pub payment: Option<Payment>,
+    #[serde(default)]
+    pub verifiers: Vec<Verifier>,
+    #[serde(default)]
+    pub arbiter: Option<String>,
+    #[serde(default)]
+    pub provenance: Option<Value>,
+    #[serde(default)]
+    pub subcontracting: bool,
+    #[serde(default)]
+    pub disclosure: Disclosure,
+    #[serde(default)]
+    pub governance: Option<Governance>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Deliverable {
+    #[serde(default)]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_contract: Option<String>,
+    /// For MCP-backed services: tool name and arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConditionClass {
+    Mechanical,
+    Grounding,
+    Interpretive,
+    Human,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Condition {
+    pub id: String,
+    pub class: ConditionClass,
+    #[serde(default)]
+    pub description: String,
+    /// Class-specific fields (test ids, referent, rubric hash...).
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Price {
+    pub amount: u64,
+    #[serde(default = "sat")]
+    pub unit: String,
+}
+
+fn sat() -> String {
+    "sat".into()
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Payment {
+    pub mint: String,
+    #[serde(default)]
+    pub keysets: Vec<String>,
+    /// H = sha256(s), hex. Present for conditional profiles (T1, N).
+    #[serde(default)]
+    pub hashlock: Option<String>,
+    #[serde(default)]
+    pub locktime: Option<u64>,
+    #[serde(default)]
+    pub refund_key: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Verifier {
+    pub pubkey: String,
+    pub classes: Vec<ConditionClass>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Disclosure {
+    #[default]
+    Public,
+    Private,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Governance {
+    pub keys: Vec<String>,
+    /// Act kinds by the governed party that need an endorsement.
+    pub kinds: Vec<u16>,
+    /// Seconds after the act within which the endorsement must be created.
+    pub window: u64,
+    /// Which party is governed. Default: performer.
+    #[serde(default)]
+    pub party: GovernedParty,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GovernedParty {
+    #[default]
+    Performer,
+    Requester,
+}
+
+impl Terms {
+    pub fn parse(v: &Value) -> Result<Self, String> {
+        let t: Terms = serde_json::from_value(v.clone()).map_err(|e| e.to_string())?;
+        if !t.v.starts_with("acn-terms/") {
+            return Err(format!("unsupported terms version `{}`", t.v));
+        }
+        let mut ids: Vec<&str> = t.conditions.iter().map(|c| c.id.as_str()).collect();
+        ids.sort_unstable();
+        if ids.windows(2).any(|w| w[0] == w[1]) {
+            return Err("duplicate condition id".into());
+        }
+        Ok(t)
+    }
+
+    pub fn condition(&self, id: &str) -> Option<&Condition> {
+        self.conditions.iter().find(|c| c.id == id)
+    }
+
+    pub fn hashlock(&self) -> Option<&str> {
+        self.payment.as_ref().and_then(|p| p.hashlock.as_deref())
+    }
+
+    pub fn verifier_counts(&self, pubkey: &str, class: ConditionClass) -> bool {
+        self.verifiers
+            .iter()
+            .any(|v| v.pubkey == pubkey && v.classes.contains(&class))
+    }
+}

@@ -1,0 +1,13 @@
+[package]
+name = "acn-wallet"
+description = "Wallet views shared by all hosts, and a pure simulated Cashu-style mint (HTLC locks, redeem, refund, double-spend) for presenter mode and tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+acn-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

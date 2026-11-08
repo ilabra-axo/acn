@@ -1,0 +1,29 @@
+[package]
+name = "nmesh-acn-sim"
+description = "Live ACN demo cast: Atlas, Rogue, Verity, Muse, Solon and Gate as real Nostr peers, driven by acn-sim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+acn-core.workspace = true
+acn-sim.workspace = true
+acn-wallet.workspace = true
+nmesh-wallet.workspace = true
+nmesh-mint.workspace = true
+nmesh-core.workspace = true
+nmesh-proto.workspace = true
+nostr-sdk.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+nmesh-app.workspace = true
+acn-wallet.workspace = true
+acn-view.workspace = true
+nostr-relay-builder.workspace = true

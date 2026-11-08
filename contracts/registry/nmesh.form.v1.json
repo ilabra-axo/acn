@@ -1,0 +1,43 @@
+{
+  "id": "nmesh.form/v1",
+  "title": "Form",
+  "description": "A request for structured input (the XEP-0004 Data Forms equivalent). Submissions are sent as an Action with contract nmesh.form.submit/v1.",
+  "capabilities": ["interactive"],
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["fields"],
+    "properties": {
+      "title": { "type": "string" },
+      "instructions": { "type": "string" },
+      "fields": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "required": ["name", "type"],
+          "properties": {
+            "name": { "type": "string" },
+            "label": { "type": "string" },
+            "type": { "enum": ["text", "multiline", "number", "bool", "select", "multiselect", "date", "pubkey", "location"] },
+            "required": { "type": "boolean" },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["value"],
+                "properties": { "value": { "type": "string" }, "label": { "type": "string" } }
+              }
+            },
+            "default": {}
+          }
+        }
+      },
+      "submit_label": { "type": "string" },
+      "submit_action": {
+        "type": "string",
+        "description": "action_id sent with the submission. If it starts with '/', agents treat it as a slash command and use the form values as named arguments."
+      }
+    }
+  }
+}

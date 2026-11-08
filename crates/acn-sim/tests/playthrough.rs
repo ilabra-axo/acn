@@ -1,0 +1,335 @@
+//! Every scenario plays to its intended end with the requester on autopilot — the same loop the
+//! live simulator and presenter mode run, minus relays and timers.
+
+use std::collections::BTreeMap;
+
+use acn_core::draft::{instantiate, public_key, Draft};
+use acn_core::kinds::*;
+use acn_core::{Event, Phase};
+use acn_sim::*;
+use serde_json::json;
+
+struct World {
+    keys: BTreeMap<Actor, [u8; 32]>,
+    me: [u8; 32],
+    cast: Cast,
+    events: Vec<Event>,
+    clock: u64,
+    escrow: BTreeMap<String, String>,
+    secret: [u8; 32],
+}
+
+impl World {
+    fn new() -> Self {
+        let keys: BTreeMap<Actor, [u8; 32]> = Actor::ALL
+            .iter()
+            .enumerate()
+            .map(|(i, a)| (*a, [i as u8 + 10; 32]))
+            .collect();
+        let pk = |a: Actor| public_key(&keys[&a]).unwrap();
+        let cast = Cast {
+            performer: pk(Actor::Performer),
+            rogue: pk(Actor::Rogue),
+            verifier: pk(Actor::Verifier),
+            judge: pk(Actor::Judge),
+            arbiter: pk(Actor::Arbiter),
+            gatekeeper: pk(Actor::Gatekeeper),
+            mint: SIM_MINT.into(),
+        };
+        Self {
+            keys,
+            me: [1; 32],
+            cast,
+            events: vec![],
+            clock: 1_000_000,
+            escrow: BTreeMap::new(),
+            secret: [9; 32],
+        }
+    }
+
+    fn sign(&mut self, d: &Draft, key: [u8; 32], not_before: u64) -> Event {
+        self.clock = self.clock.max(not_before) + 1;
+        let e = d.sign(&key, self.clock).unwrap();
+        self.events.push(e.clone());
+        e
+    }
+
+    fn request(&mut self, id: &str) -> String {
+        let info = scenario(id).unwrap();
+        let t = template(id, &self.cast).unwrap();
+        let h = acn_core::jcs::sha256_hex(&self.secret);
+        let terms = instantiate(
+            &t,
+            id,
+            json!({"brief": "the demo"}),
+            self.clock,
+            t.hashlock.then_some(h.as_str()),
+        )
+        .unwrap();
+        let d = Draft::request(self.cast.key(info.actor), &t.profile, &terms, None).unwrap();
+        let r = self.sign(&d, self.me, 0);
+        if t.terms["arbiter"].is_string() {
+            self.escrow.insert(r.id.clone(), hex(&self.secret));
+        }
+        r.id
+    }
+
+    /// Run actors and requester autopilot until nothing happens.
+    fn play(&mut self, c: &str) -> Vec<String> {
+        let mut narration = vec![];
+        for _ in 0..40 {
+            let moves = react(&self.cast, &self.events, &self.escrow);
+            if !moves.is_empty() {
+                for m in moves {
+                    narration.push(m.narration.clone());
+                    let key = self.keys[&m.actor];
+                    self.sign(&m.draft, key, m.not_before);
+                }
+                continue;
+            }
+            let hint = requester_hint(&self.events, c, self.clock).unwrap();
+            match &hint.action {
+                HintAction::Done => break,
+                HintAction::Wait => panic!("stuck waiting: {}", hint.narration),
+                HintAction::AdvanceClock { secs } => self.clock += secs,
+                action => {
+                    let pre = hex(&self.secret);
+                    let (d, nb) = requester_draft(&self.events, c, action, Some(&pre)).unwrap();
+                    self.sign(&d, self.me, nb);
+                }
+            }
+            narration.push(hint.narration);
+        }
+        narration
+    }
+
+    fn view(&self, c: &str) -> acn_view::Projection {
+        let me = public_key(&self.me).unwrap();
+        acn_view::project(&self.events, &me, self.clock)
+            .into_iter()
+            .find(|p| p.id == c)
+            .unwrap()
+    }
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn run(id: &str) -> acn_view::Projection {
+    let mut w = World::new();
+    let c = w.request(id);
+    let story = w.play(&c);
+    assert!(!story.is_empty(), "{id}: nothing happened");
+    w.view(&c)
+}
+
+fn codes(p: &acn_view::Projection) -> Vec<&'static str> {
+    p.anomalies.iter().map(|a| a.code).collect()
+}
+
+#[test]
+fn every_scenario_has_a_template_and_reaches_an_end() {
+    for s in SCENARIOS {
+        let p = run(s.id);
+        assert!(p.terminal, "{}: ended in {:?}", s.id, p.phase);
+    }
+}
+
+#[test]
+fn scenario_outcomes() {
+    let acts = |p: &acn_view::Projection| p.chain.iter().map(|e| e.act).collect::<Vec<_>>();
+
+    let p = run("quick");
+    assert_eq!(acts(&p), ["REQUEST", "REPORT", "SATISFY"]);
+
+    let p = run("paid");
+    assert_eq!(p.phase, Some(Phase::Satisfied));
+    let s = p.settlement.unwrap();
+    assert!(s.simulated && s.amount_sat == 21 && s.status == acn_view::SettlementStatus::Paid);
+
+    let p = run("negotiate");
+    assert_eq!(
+        acts(&p),
+        ["REQUEST", "COUNTER", "ACCEPT", "REPORT", "SATISFY"]
+    );
+    assert!(p
+        .timeline
+        .iter()
+        .any(|e| e.act == "PROGRESS" && e.status == acn_view::EntryStatus::Annotation));
+
+    let p = run("rework");
+    assert_eq!(p.phase, Some(Phase::Satisfied));
+    assert_eq!(p.rework_count, 1);
+    assert_eq!(p.report.unwrap().version, 2);
+
+    let p = run("verified");
+    assert!(codes(&p).contains(&"contradicted_rejection"));
+    assert!(codes(&p).contains(&"wrong_evidence_class"));
+    assert_eq!(p.phase, Some(Phase::Satisfied));
+
+    let p = run("dispute");
+    assert_eq!(acts(&p).last(), Some(&"RULING"));
+    assert_eq!(
+        p.settlement.unwrap().status,
+        acn_view::SettlementStatus::Paid
+    );
+
+    let p = run("governed");
+    assert_eq!(p.phase, Some(Phase::Satisfied));
+    assert!(p.timeline.iter().any(|e| e.act == "ENDORSE"));
+
+    let p = run("silent");
+    assert_eq!(p.phase, Some(Phase::Withdrawn));
+
+    let p = run("rogue");
+    assert_eq!(p.phase, Some(Phase::Declined));
+    assert!(codes(&p).contains(&"equivocation"));
+    assert!(
+        codes(&p).contains(&"unbound")
+            || !matches!(p.binding, acn_core::BindingStatus::Bound { .. })
+    );
+}
+
+/// Lanes and whose-move as a scenario plays (deduplicated consecutive states).
+fn lanes(id: &str) -> Vec<(acn_view::Lane, Option<acn_view::Role>)> {
+    let mut w = World::new();
+    let c = w.request(id);
+    let mut seen = vec![];
+    let mut note = |w: &World| {
+        let p = w.view(&c);
+        let s = (p.lane, p.next);
+        if seen.last() != Some(&s) {
+            seen.push(s);
+        }
+    };
+    note(&w);
+    for _ in 0..40 {
+        let moves = react(&w.cast, &w.events, &w.escrow);
+        if !moves.is_empty() {
+            for m in moves {
+                let key = w.keys[&m.actor];
+                w.sign(&m.draft, key, m.not_before);
+                note(&w);
+            }
+            continue;
+        }
+        let hint = requester_hint(&w.events, &c, w.clock).unwrap();
+        match &hint.action {
+            HintAction::Done => break,
+            HintAction::Wait => panic!("stuck"),
+            HintAction::AdvanceClock { secs } => w.clock += secs,
+            action => {
+                let pre = hex(&w.secret);
+                let (d, nb) = requester_draft(&w.events, &c, action, Some(&pre)).unwrap();
+                let me = w.me;
+                w.sign(&d, me, nb);
+            }
+        }
+        note(&w);
+    }
+    seen
+}
+
+#[test]
+fn board_lanes_follow_the_workflow() {
+    use acn_view::{Lane::*, Role::*};
+    assert_eq!(
+        lanes("negotiate"),
+        [
+            (Requested, Some(Performer)),
+            (Negotiating, Some(Requester)),
+            (InProgress, Some(Performer)),
+            (Review, Some(Requester)),
+            (Closed, None)
+        ]
+    );
+    assert_eq!(
+        lanes("dispute"),
+        [
+            (Requested, Some(Performer)),
+            (InProgress, Some(Performer)),
+            (Review, Some(Requester)),
+            (Dispute, Some(Performer)),
+            (Dispute, Some(Arbiter)),
+            (Closed, None)
+        ]
+    );
+    let gov = lanes("governed");
+    assert!(gov.contains(&(InProgress, Some(Governance))), "{gov:?}");
+    assert_eq!(
+        lanes("quick"),
+        [
+            (Requested, Some(Performer)),
+            (Review, Some(Requester)),
+            (Closed, None)
+        ]
+    );
+    // Overdue work stays in progress (lapse is derived, not a state).
+    let silent = lanes("silent");
+    assert_eq!(silent.last(), Some(&(Closed, None)));
+
+    // needs_me is relative to the viewer's role.
+    let mut w = World::new();
+    let c = w.request("quick");
+    let me = public_key(&w.me).unwrap();
+    let p = acn_view::project(&w.events, &me, w.clock)
+        .into_iter()
+        .find(|p| p.id == c)
+        .unwrap();
+    assert!(!p.needs_me && p.my_role == Requester);
+    let atlas = w.cast.performer.clone();
+    let p = acn_view::project(&w.events, &atlas, w.clock)
+        .into_iter()
+        .find(|p| p.id == c)
+        .unwrap();
+    assert!(p.needs_me && p.my_role == Performer);
+}
+
+#[test]
+fn performer_waits_for_and_obeys_the_payment_check() {
+    let mut w = World::new();
+    let c = w.request("paid");
+    let none = BTreeMap::new();
+    assert!(
+        react_paid(&w.cast, &w.events, &w.escrow, &none).is_empty(),
+        "waits for a verdict"
+    );
+
+    let bad = BTreeMap::from([(
+        c.clone(),
+        PaymentCheck::Invalid {
+            reason: "token already spent".into(),
+        },
+    )]);
+    let m = react_paid(&w.cast, &w.events, &w.escrow, &bad);
+    assert_eq!(m.len(), 1);
+    assert_eq!(m[0].draft.kind, K_DECLINE);
+    assert!(m[0].draft.content.contains("payment_invalid"));
+
+    let ok = BTreeMap::from([(c.clone(), PaymentCheck::Ok)]);
+    let m = react_paid(&w.cast, &w.events, &w.escrow, &ok);
+    assert_eq!(m[0].draft.kind, K_REPORT);
+
+    // Free scenarios never wait.
+    let mut w = World::new();
+    w.request("quick");
+    assert!(!react_paid(&w.cast, &w.events, &w.escrow, &none).is_empty());
+}
+
+#[test]
+fn reactions_are_idempotent() {
+    let mut w = World::new();
+    w.request("verified");
+    let a = react(&w.cast, &w.events, &w.escrow);
+    let b = react(&w.cast, &w.events, &w.escrow);
+    let keys = |m: &[Move]| m.iter().map(|m| m.key.clone()).collect::<Vec<_>>();
+    assert_eq!(keys(&a), keys(&b));
+    // Once performed, the same move is not proposed again.
+    for m in a {
+        let k = w.keys[&m.actor];
+        w.sign(&m.draft, k, m.not_before);
+    }
+    let after = react(&w.cast, &w.events, &w.escrow);
+    assert!(after.iter().all(|m| m.draft.kind != K_PROMISE));
+}

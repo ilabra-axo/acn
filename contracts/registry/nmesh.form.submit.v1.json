@@ -1,0 +1,18 @@
+{
+  "id": "nmesh.form.submit/v1",
+  "title": "Form submission / action",
+  "description": "Action payload: a button press (action_id) and/or form values. Always carried in an Action event whose `e` tag points at the originating structured message.",
+  "capabilities": [],
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "action_id": { "type": "string" },
+      "values": { "type": "object" }
+    },
+    "anyOf": [
+      { "required": ["action_id"] },
+      { "required": ["values"] }
+    ]
+  }
+}

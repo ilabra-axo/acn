@@ -1,0 +1,17 @@
+[package]
+name = "nmesh-contracts"
+description = "nmesh data contracts: schema registry, validation, renderer resolution, trust policy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+nmesh-proto.workspace = true
+nostr.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+jsonschema.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,8 @@
+/target
+# local keys and dev state — never commit secrets
+.nmesh/
+*.nsec
+agent.toml
+
+# protoc for building the CDK mint (scripts/fetch-protoc.sh)
+.tools/

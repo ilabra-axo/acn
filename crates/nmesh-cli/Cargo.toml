@@ -1,0 +1,25 @@
+[package]
+name = "nmesh-cli"
+description = "Minimal nmesh terminal client (dev tool)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "nmesh"
+path = "src/main.rs"
+
+[features]
+mls = ["nmesh-core/mls"]
+
+[dependencies]
+nmesh-proto.workspace = true
+nmesh-contracts.workspace = true
+nmesh-core.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["io-std", "io-util"] }
+tracing-subscriber.workspace = true
+clap.workspace = true
+nostr-relay-builder.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "acn-view"
+description = "ACN projections (docs/Core.md §12): thread/evidence/settlement views derived purely from acn-core's fold"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+acn-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true

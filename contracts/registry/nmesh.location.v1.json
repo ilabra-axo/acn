@@ -1,0 +1,63 @@
+{
+  "id": "nmesh.location/v1",
+  "title": "Location",
+  "description": "A geographic point, optionally with an AR anchor. Renders as a map pin in 2D and as an anchored object in AR. See docs/spec/0005-spatial.md.",
+  "capabilities": ["spatial"],
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["lat", "lng"],
+    "properties": {
+      "label": { "type": "string" },
+      "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+      "lng": { "type": "number", "minimum": -180, "maximum": 180 },
+      "alt_m": { "type": "number" },
+      "accuracy_m": { "type": "number", "minimum": 0 },
+      "spatial": { "$ref": "#/$defs/spatial" }
+    },
+    "$defs": {
+      "spatial": {
+        "type": "object",
+        "required": ["anchor"],
+        "properties": {
+          "anchor": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["type", "lat", "lng"],
+                "properties": {
+                  "type": { "const": "geo" },
+                  "lat": { "type": "number" },
+                  "lng": { "type": "number" },
+                  "alt_m": { "type": "number" },
+                  "altitude_mode": { "enum": ["wgs84", "terrain", "rooftop"] },
+                  "heading_deg": { "type": "number" }
+                }
+              },
+              {
+                "type": "object",
+                "required": ["type", "id"],
+                "properties": {
+                  "type": { "const": "cloud" },
+                  "id": { "type": "string" },
+                  "expires_at": { "type": "integer" }
+                }
+              }
+            ]
+          },
+          "model": {
+            "type": "object",
+            "required": ["url", "sha256"],
+            "properties": {
+              "url": { "type": "string" },
+              "sha256": { "type": "string" },
+              "format": { "enum": ["gltf", "glb"] },
+              "scale": { "type": "number", "exclusiveMinimum": 0 }
+            }
+          },
+          "panel": { "description": "Optional nested structured payload rendered as a 2D panel at the anchor.", "type": "object" }
+        }
+      }
+    }
+  }
+}

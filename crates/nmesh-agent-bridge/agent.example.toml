@@ -1,0 +1,45 @@
+# nmesh agent bridge configuration.
+#
+# Run:   cargo run -p nmesh-agent-bridge --bin nmesh-agent -- --config agent.toml
+#
+# The bridge is a Nostr *peer* with its own keypair. Humans DM it `/tool args`
+# (NIP-CD slash command syntax) and it replies with text or nmesh structured messages.
+
+relays = ["ws://127.0.0.1:7777"]
+
+[agent]
+id = "echo"
+name = "Echo agent"
+about = "Demo agent backed by the echo MCP example."
+key_file = ".nmesh/agents/echo.nsec"
+# self_hosted | operator | third_party
+hosting = "self_hosted"
+operator = "me"
+retention = "none"
+# forwards_to = ["api.example-llm.com"]
+# allow = ["npub1..."]
+
+# ACN commitments (docs/Core.md). Tools can be requested as T0 commitments and are answered with
+# signed REPORTs; requesters close them with SATISFY / REJECT.
+[acn]
+enabled = true
+price_sat = 0                  # only free calls until Cashu settlement (P1) lands
+deadline_secs = 600
+review_window_secs = 86400
+# Self-hosted: issue an operator binding for this agent key so clients see it as accountable.
+operator_key_file = ".nmesh/operator.nsec"
+binding_days = 30
+
+# MCP server over stdio. The demo server ships with this crate:
+#   cargo build -p nmesh-agent-bridge   (builds target/debug/nmesh-echo-mcp)
+[[mcp]]
+name = "echo"
+transport = "stdio"
+command = "target/debug/nmesh-echo-mcp"
+args = []
+
+# MCP server over streamable HTTP (remove if you don't have one).
+[[mcp]]
+name = "remote"
+transport = "http"
+url = "http://127.0.0.1:8000/mcp"

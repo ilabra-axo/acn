@@ -1,0 +1,21 @@
+[package]
+name = "acn-core"
+description = "ACN (Agent Commitments over Nostr) core: grammar, JCS hashing, deterministic fold, validation. No I/O, no C deps, WASM-friendly."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_json_canonicalizer = "0.4"
+sha2.workspace = true
+hex.workspace = true
+# Pure-Rust BIP-340 so the crate builds for wasm32-unknown-unknown without a C toolchain.
+k256 = { version = "0.13", default-features = false, features = ["schnorr", "alloc"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+# Cross-check against rust-nostr's event signing.
+nostr.workspace = true

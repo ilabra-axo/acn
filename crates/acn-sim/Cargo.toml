@@ -1,0 +1,15 @@
+[package]
+name = "acn-sim"
+description = "ACN demo scenarios: a scripted cast (performer, verifier, judge, arbiter, gatekeeper, rogue) reacting to real signed acts. Pure; shared by the live simulator and the in-browser presenter mode."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+acn-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+acn-view = { path = "../acn-view" }

@@ -1,0 +1,29 @@
+[package]
+name = "nmesh-core"
+description = "nmesh client core: identity, relays, NIP-17 DMs, structured messages, (feature-gated) Marmot/MLS groups"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+# Marmot (MLS over Nostr) E2E groups via MDK. Off by default while the integration is a spike.
+mls = ["dep:mdk-core", "dep:mdk-memory-storage"]
+
+[dependencies]
+nmesh-proto.workspace = true
+nmesh-contracts.workspace = true
+acn-core.workspace = true
+nostr-sdk.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+mdk-core = { workspace = true, optional = true }
+mdk-memory-storage = { workspace = true, optional = true }
+
+[dev-dependencies]
+nostr-relay-builder.workspace = true
+anyhow.workspace = true

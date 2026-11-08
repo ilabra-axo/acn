@@ -1,0 +1,229 @@
+//! Structural parsing of ACN events (V-2 version/kind, V-3 structure).
+
+use serde_json::Value;
+
+use crate::anomaly::Code;
+use crate::event::Event;
+use crate::kinds::*;
+
+pub const INLINE_LIMIT: usize = 16 * 1024;
+
+/// Sibling-resolution class (spec §5.4). Lower wins.
+pub fn class_rank(kind: u16) -> u8 {
+    match kind {
+        K_WITHDRAW | K_DECLINE | K_REVOKE | K_SATISFY | K_RULING => 0,
+        K_PROMISE | K_ACCEPT | K_REPORT | K_REJECT | K_DISPUTE => 1,
+        _ => 2, // COUNTER
+    }
+}
+
+pub fn is_advancing(kind: u16) -> bool {
+    ACTS.contains(&kind) && kind != K_REQUEST && kind != K_PROGRESS
+}
+
+/// A structurally valid ACN event.
+#[derive(Debug, Clone)]
+pub struct Parsed<'a> {
+    pub ev: &'a Event,
+    pub content: Value,
+    /// `c` (absent only on REQUEST and bindings).
+    pub c: Option<String>,
+    /// `e … prev`.
+    pub prev: Option<String>,
+    pub terms: Option<String>,
+}
+
+impl Parsed<'_> {
+    pub fn kind(&self) -> u16 {
+        self.ev.kind
+    }
+    pub fn id(&self) -> &str {
+        &self.ev.id
+    }
+    pub fn at(&self) -> u64 {
+        self.ev.created_at
+    }
+    pub fn str_field(&self, k: &str) -> Option<&str> {
+        self.content.get(k).and_then(Value::as_str)
+    }
+}
+
+type R<T> = Result<T, (Code, String)>;
+
+fn malformed<T>(msg: impl Into<String>) -> R<T> {
+    Err((Code::Malformed, msg.into()))
+}
+
+fn is_hex(s: &str, len: usize) -> bool {
+    s.len() == len
+        && s.bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
+/// Parse and check structure. Returns `Ok(None)` for events outside ACN entirely (ignored).
+pub fn parse(ev: &Event) -> R<Option<Parsed<'_>>> {
+    if !BLOCK.contains(&ev.kind) && ev.kind != K_SVC {
+        return Ok(None);
+    }
+    if !is_known(ev.kind) {
+        return Err((
+            Code::UnknownKind,
+            format!("kind {} is in the ACN block but unassigned", ev.kind),
+        ));
+    }
+    if ev.kind == K_SVC || ev.kind == K_SCORE || ev.kind == K_PRIVATE_ACT {
+        // Metadata / projections / envelopes: no commitment semantics in the fold.
+        return Ok(None);
+    }
+    match ev.single("v") {
+        Ok(v) if v == VERSION => {}
+        Ok(v) => return Err((Code::BadVersion, format!("unsupported version `{v}`"))),
+        Err(n) => return malformed(format!("expected exactly one `v` tag, found {n}")),
+    }
+    if ev.content.len() > INLINE_LIMIT {
+        return malformed("content exceeds 16 KiB inline limit");
+    }
+    let content: Value = if ev.content.is_empty() {
+        Value::Object(Default::default())
+    } else {
+        match serde_json::from_str(&ev.content) {
+            Ok(v @ Value::Object(_)) => v,
+            Ok(_) => return malformed("content must be a JSON object"),
+            Err(e) => return malformed(format!("content is not JSON: {e}")),
+        }
+    };
+
+    let c = ev
+        .optional("c")
+        .map_err(|n| (Code::Malformed, format!("{n} `c` tags")))?;
+    let prevs = ev.e_marked("prev");
+    let terms = ev
+        .optional("terms")
+        .map_err(|n| (Code::Malformed, format!("{n} `terms` tags")))?;
+    if let Some(t) = terms {
+        if !is_hex(t, 64) {
+            return malformed("`terms` must be a lowercase sha256 hex");
+        }
+    }
+
+    let is_commitment_event = ACTS.contains(&ev.kind)
+        || matches!(
+            ev.kind,
+            K_ATTEST_MECH | K_ATTEST_GROUND | K_INTERP_REPORT | K_ENDORSE
+        );
+
+    if ev.kind == K_REQUEST {
+        if c.is_some() || !prevs.is_empty() {
+            return malformed("REQUEST is the root: no `c` or `prev`");
+        }
+        match ev.single("profile") {
+            Ok("T0" | "T1" | "N") => {}
+            Ok(p) => return malformed(format!("unknown profile `{p}`")),
+            Err(n) => return malformed(format!("expected one `profile` tag, found {n}")),
+        }
+        if ev.values("p").len() != 1 {
+            return malformed("REQUEST must name exactly one performer `p` (v0.2)");
+        }
+        if terms.is_none() {
+            return malformed("REQUEST requires a `terms` tag");
+        }
+    } else if is_commitment_event {
+        let Some(cv) = c else {
+            return malformed("missing `c` tag");
+        };
+        if !is_hex(cv, 64) {
+            return malformed("`c` must be an event id");
+        }
+        let needs_prev = ACTS.contains(&ev.kind);
+        if needs_prev && prevs.len() != 1 {
+            return malformed(format!(
+                "expected exactly one `prev`, found {}",
+                prevs.len()
+            ));
+        }
+    }
+
+    // Per-act content requirements (spec §6.2).
+    let need = |k: &str| -> R<()> {
+        if content.get(k).is_none() {
+            malformed(format!("content.{k} is required"))
+        } else {
+            Ok(())
+        }
+    };
+    match ev.kind {
+        K_COUNTER => {
+            if terms.is_none() {
+                return malformed("COUNTER requires a `terms` tag");
+            }
+            need("reason")?;
+        }
+        K_ACCEPT | K_PROMISE if terms.is_none() => {
+            return malformed("requires a `terms` tag");
+        }
+        K_DECLINE | K_WITHDRAW | K_REVOKE => need("reason")?,
+        K_REJECT => {
+            let gaps = content.get("gaps").and_then(Value::as_array);
+            match gaps {
+                Some(g)
+                    if !g.is_empty()
+                        && g.iter()
+                            .all(|x| x.get("condition").and_then(Value::as_str).is_some()) => {}
+                _ => return malformed("REJECT requires non-empty `gaps` naming conditions"),
+            }
+        }
+        K_DISPUTE => need("reason")?,
+        K_RULING => match content.get("decision").and_then(Value::as_str) {
+            Some("performer" | "requester") => {}
+            _ => return malformed("RULING.decision must be `performer` or `requester`"),
+        },
+        K_PROMISE => {
+            if let Some(p) = content.get("p_on_time") {
+                if !p.as_f64().is_some_and(|x| (0.0..=1.0).contains(&x)) {
+                    return malformed("p_on_time must be within 0..1");
+                }
+            }
+        }
+        K_ATTEST_MECH | K_ATTEST_GROUND => match content.get("result").and_then(Value::as_str) {
+            Some("pass" | "fail") => {}
+            _ => return malformed("attestation result must be `pass` or `fail`"),
+        },
+        K_INTERP_REPORT => need("verdict")?,
+        _ => {}
+    }
+    if matches!(ev.kind, K_ATTEST_MECH | K_ATTEST_GROUND | K_INTERP_REPORT) {
+        if ev.e_marked("report").len() != 1 {
+            return malformed("attestation must reference exactly one REPORT (`e` … `report`)");
+        }
+        if ev.single("cond").is_err() {
+            return malformed("attestation must name exactly one `cond`");
+        }
+    }
+    if ev.kind == K_ENDORSE && ev.e_marked("endorses").len() != 1 {
+        return malformed("ENDORSE must reference exactly one act (`e` … `endorses`)");
+    }
+    if ev.kind == K_BIND {
+        if ev.values("p").len() != 1 {
+            return malformed("BIND must name exactly one agent `p`");
+        }
+        if ev
+            .single("expires")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .is_none()
+        {
+            return malformed("BIND requires a numeric `expires`");
+        }
+    }
+    if matches!(ev.kind, K_BIND_ACK | K_BIND_REVOKE) && ev.values("e").len() != 1 {
+        return malformed("must reference exactly one BIND (`e`)");
+    }
+
+    Ok(Some(Parsed {
+        ev,
+        content,
+        c: c.map(str::to_owned),
+        prev: prevs.first().map(|s| s.to_string()),
+        terms: terms.map(str::to_owned),
+    }))
+}

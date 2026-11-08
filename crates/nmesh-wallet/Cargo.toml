@@ -1,0 +1,25 @@
+[package]
+name = "nmesh-wallet"
+description = "Cashu wallet for ACN settlement (CDK): top up, HTLC lock (NUT-14), verify (NUT-12/07), redeem, refund"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+acn-wallet.workspace = true
+cdk.workspace = true
+cdk-sqlite = { workspace = true, features = ["wallet"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+hex.workspace = true
+sha2.workspace = true
+rand = "0.8"
+
+[dev-dependencies]
+nmesh-mint.workspace = true
+acn-core.workspace = true
+anyhow.workspace = true

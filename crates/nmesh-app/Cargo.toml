@@ -1,0 +1,26 @@
+[package]
+name = "nmesh-app"
+description = "UI-facing application layer: conversations, contacts, view models. Used by the Tauri shell and (later) the FFI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+nmesh-proto.workspace = true
+nmesh-contracts.workspace = true
+nmesh-core.workspace = true
+acn-core.workspace = true
+acn-view.workspace = true
+acn-sim.workspace = true
+acn-wallet.workspace = true
+nmesh-wallet.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+nostr-relay-builder.workspace = true
+anyhow.workspace = true

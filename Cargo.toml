@@ -1,0 +1,74 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/nmesh-proto",
+    "crates/nmesh-contracts",
+    "crates/nmesh-core",
+    "crates/nmesh-agent-bridge",
+    "crates/nmesh-cli",
+    "crates/nmesh-app",
+    "crates/acn-core",
+    "crates/acn-view",
+    "crates/acn-sim",
+    "crates/acn-wasm",
+    "crates/acn-wallet",
+    "crates/nmesh-wallet",
+    "crates/nmesh-mint",
+    "crates/nmesh-acn-sim",
+]
+# Needs webkit2gtk/libsoup system libraries; built separately (see apps/desktop/README.md).
+exclude = ["apps/desktop/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# --- internal ---
+nmesh-proto = { path = "crates/nmesh-proto" }
+nmesh-contracts = { path = "crates/nmesh-contracts" }
+nmesh-core = { path = "crates/nmesh-core" }
+nmesh-agent-bridge = { path = "crates/nmesh-agent-bridge" }
+nmesh-app = { path = "crates/nmesh-app" }
+acn-core = { path = "crates/acn-core" }
+acn-view = { path = "crates/acn-view" }
+acn-sim = { path = "crates/acn-sim" }
+acn-wallet = { path = "crates/acn-wallet" }
+nmesh-wallet = { path = "crates/nmesh-wallet" }
+nmesh-mint = { path = "crates/nmesh-mint" }
+
+# --- nostr ---
+# Pinned to the 0.44 line because mdk-core 0.8 (Marmot / MLS) depends on nostr 0.44.
+# Bump these together. See docs/adr/0002-rust-core.md.
+nostr = { version = "0.44", default-features = false, features = ["std", "nip44", "nip59"] }
+nostr-sdk = { version = "0.44", features = ["nip59"] }
+nostr-relay-builder = "0.44"
+mdk-core = "0.8"
+mdk-memory-storage = "0.8"
+
+# --- Cashu (CDK). No `nostr` feature: it would pull a second nostr-sdk. ---
+cdk = { version = "0.18", default-features = false, features = ["wallet"] }
+cdk-fake-wallet = "0.18"
+cdk-axum = "0.18"
+cdk-sqlite = { version = "0.18", default-features = false }
+
+# --- MCP ---
+rmcp = { version = "3.9", default-features = false }
+
+# --- general ---
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jsonschema = { version = "0.60", default-features = false }
+sha2 = "0.10"
+hex = "0.4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+toml = "1"
+# Single TLS crypto provider (ring) for the whole process; installed explicitly at startup.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

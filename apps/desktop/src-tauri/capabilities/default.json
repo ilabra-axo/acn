@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Main window: core events + opening external links. App commands are allowed by default.",
+  "windows": ["main"],
+  "permissions": ["core:default", "opener:default"]
+}

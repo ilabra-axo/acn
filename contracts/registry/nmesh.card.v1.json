@@ -1,0 +1,50 @@
+{
+  "id": "nmesh.card/v1",
+  "title": "Card",
+  "description": "A titled block of text with optional fields, image and action buttons. The workhorse contract; most agent replies should use it.",
+  "capabilities": ["interactive"],
+  "schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["title"],
+    "properties": {
+      "title": { "type": "string", "maxLength": 200 },
+      "subtitle": { "type": "string", "maxLength": 200 },
+      "body": { "type": "string", "maxLength": 8000 },
+      "image": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": { "type": "string" },
+          "sha256": { "type": "string" },
+          "alt": { "type": "string" }
+        }
+      },
+      "fields": {
+        "type": "array",
+        "maxItems": 50,
+        "items": {
+          "type": "object",
+          "required": ["label", "value"],
+          "properties": {
+            "label": { "type": "string" },
+            "value": { "type": "string" }
+          }
+        }
+      },
+      "actions": {
+        "type": "array",
+        "maxItems": 10,
+        "items": {
+          "type": "object",
+          "required": ["id", "label"],
+          "properties": {
+            "id": { "type": "string" },
+            "label": { "type": "string" },
+            "style": { "enum": ["primary", "secondary", "danger"] }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+[package]
+name = "acn-wasm"
+description = "acn-core + acn-view + acn-sim for the browser (presenter mode). JSON-in/JSON-out ABI, no wasm-bindgen."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+acn-core.workspace = true
+acn-view.workspace = true
+acn-sim.workspace = true
+acn-wallet.workspace = true
+serde.workspace = true
+serde_json.workspace = true
