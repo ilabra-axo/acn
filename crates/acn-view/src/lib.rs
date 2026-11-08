@@ -95,7 +95,11 @@ pub struct JudgedView {
     pub scale_max: f64,
     pub aggregation: Aggregation,
     pub repeats: u32,
-    pub rubric_disclosure: RubricDisclosure,
+    /// Terms before 0.5 only.
+    pub rubric_disclosure: Option<RubricDisclosure>,
+    /// Where the performer reads the rubric (INV-14), and the text when it is inline.
+    pub rubric_ref: Option<String>,
+    pub rubric_text: Option<String>,
     pub runners: Vec<String>,
 }
 
@@ -599,6 +603,8 @@ fn one(
                             aggregation: j.aggregation,
                             repeats: j.repeats,
                             rubric_disclosure: j.rubric_disclosure,
+                            rubric_ref: j.rubric_ref.clone(),
+                            rubric_text: j.rubric_text.clone(),
                             runners: j.runners.clone(),
                         }),
                     }

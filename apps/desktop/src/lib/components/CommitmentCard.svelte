@@ -83,7 +83,7 @@
     const who = j.judges.length === 2 ? `${j.judges[0]} and ${j.judges[1]}` : j.judges.join(", ");
     const agg = j.aggregation === "all" ? "each judge" : j.aggregation;
     const parts = [`judged by ${who}`, `threshold ${j.threshold}/${j.scale_max} (${agg}, ×${j.repeats})`];
-    if (j.rubric_disclosure === "commit_reveal") parts.push("rubric revealed at judging");
+    if (j.rubric_ref || j.rubric_text) parts.push("public rubric");
     return parts.join("; ");
   }
 
@@ -139,7 +139,7 @@
         {/if}
       </div>
       {#each judged as j}
-        <div class="judged-line">⚖︎ <span class="mono">{j.id}</span>: {judgedLine(j.judged!)}</div>
+        <div class="judged-line" title={j.judged?.rubric_text ? `Rubric: ${j.judged.rubric_text}` : (j.judged?.rubric_ref ?? "")}>⚖︎ <span class="mono">{j.id}</span>: {judgedLine(j.judged!)}</div>
       {/each}
     </div>
     <span class="status" data-tone={tone}>{status}</span>

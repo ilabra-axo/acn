@@ -282,12 +282,12 @@ impl<'a, 'e> Ctx<'a, 'e> {
             };
             let tag = p.terms.as_deref().unwrap_or_default();
             match jcs::hash(doc) {
-                Ok(h) if h == tag => match Terms::parse(doc) {
+                Ok(h) if h == tag => match Terms::check(doc) {
                     Ok(t) => {
                         terms.insert(h, t);
                     }
-                    Err(e) => {
-                        acc.push(p.id(), Code::Malformed, format!("terms: {e}"));
+                    Err((code, e)) => {
+                        acc.push(p.id(), code, format!("terms: {e}"));
                         inline_bad.insert(p.id());
                     }
                 },
@@ -916,14 +916,12 @@ impl<'a, 'e> Ctx<'a, 'e> {
             counts = false;
         }
 
-        // 4. The revealed rubric is the committed one.
+        // 4. The rubric used is the committed one (public since INV-14).
         let rubric = p.str_field("rubric_text_hash").unwrap_or_default();
         let inline_ok = p
             .str_field("rubric_text")
             .is_none_or(|text| jcs::sha256_hex(text.as_bytes()) == j.rubric_hash);
-        let reveal_ok = j.rubric_disclosure != crate::terms::RubricDisclosure::CommitReveal
-            || p.str_field("rubric_ref").is_some_and(|r| !r.is_empty());
-        if rubric != j.rubric_hash || !inline_ok || !reveal_ok {
+        if rubric != j.rubric_hash || !inline_ok {
             acc.push(
                 p.id(),
                 Code::RubricMismatch,

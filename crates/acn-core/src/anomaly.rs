@@ -57,6 +57,8 @@ pub enum Code {
     FundMismatch,
     PrematureFund,
     BadKey,
+    // Conditions-of-satisfaction authorship (CR-003).
+    HiddenCriteria,
 }
 
 impl Code {
@@ -98,6 +100,7 @@ impl Code {
         Code::FundMismatch,
         Code::PrematureFund,
         Code::BadKey,
+        Code::HiddenCriteria,
     ];
 
     pub fn severity(self) -> Severity {
@@ -162,6 +165,7 @@ impl Code {
             FundMismatch => "fund_mismatch",
             PrematureFund => "premature_fund",
             BadKey => "bad_key",
+            HiddenCriteria => "hidden_criteria",
         }
     }
 }

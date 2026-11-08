@@ -3,9 +3,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const TERMS_VERSION: &str = "acn-terms/0.4";
+pub const TERMS_VERSION: &str = "acn-terms/0.5";
 /// Still parsed, without the fields introduced later (`judged`: 0.3, CR-001; settlement
-/// triggers: 0.4, CR-002).
+/// triggers: 0.4, CR-002; public rubric references: 0.5, CR-003).
+pub const TERMS_VERSION_0_4: &str = "acn-terms/0.4";
 pub const TERMS_VERSION_0_3: &str = "acn-terms/0.3";
 pub const TERMS_VERSION_0_2: &str = "acn-terms/0.2";
 
@@ -129,6 +130,8 @@ pub struct JudgeFingerprint {
     pub sampling: Value,
 }
 
+/// Terms before `acn-terms/0.5` only (CR-001). `commit_reveal` no longer parses at any version:
+/// it is a hidden criterion (CR-003, INV-14).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RubricDisclosure {
@@ -161,7 +164,16 @@ pub struct Scale {
 pub struct Judged {
     pub judges: Vec<JudgeFingerprint>,
     pub rubric_hash: String,
-    pub rubric_disclosure: RubricDisclosure,
+    /// Before 0.5 only (required there); removed in 0.5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rubric_disclosure: Option<RubricDisclosure>,
+    /// From 0.5, required: a retrievable reference (Blossom) to the rubric text (INV-14).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rubric_ref: Option<String>,
+    /// From 0.5, optional: the rubric text inline (≤ 16 KiB with the terms); must hash to
+    /// `rubric_hash`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rubric_text: Option<String>,
     pub scale: Scale,
     pub threshold: f64,
     pub aggregation: Aggregation,
@@ -278,8 +290,100 @@ pub enum GovernedParty {
 
 impl Terms {
     pub fn parse(v: &Value) -> Result<Self, String> {
-        let t: Terms = serde_json::from_value(v.clone()).map_err(|e| e.to_string())?;
-        if ![TERMS_VERSION, TERMS_VERSION_0_3, TERMS_VERSION_0_2].contains(&t.v.as_str()) {
+        Self::check(v).map_err(|(_, e)| e)
+    }
+
+    /// [`Terms::parse`] with the anomaly code a validator reports on the act carrying the
+    /// terms: `hidden_criteria` (INV-14) or `malformed`.
+    pub fn check(v: &Value) -> Result<Self, (crate::anomaly::Code, String)> {
+        use crate::anomaly::Code;
+        let malformed = |e: String| (Code::Malformed, e);
+        let t: Terms = serde_json::from_value(v.clone()).map_err(|e| malformed(e.to_string()))?;
+        t.check_inner().map_err(malformed)?;
+        t.hidden_criteria()?;
+        Ok(t)
+    }
+
+    /// INV-14 (CR-003 §2.1): every criterion is readable by the performer before it promises.
+    fn hidden_criteria(&self) -> Result<(), (crate::anomaly::Code, String)> {
+        use crate::anomaly::Code;
+        let v05 = self.v == TERMS_VERSION;
+        for c in &self.conditions {
+            if c.class == ConditionClass::Judged {
+                let j = c.judged().map_err(|e| (Code::Malformed, e))?;
+                if j.rubric_disclosure == Some(RubricDisclosure::CommitReveal) {
+                    return Err((
+                        Code::HiddenCriteria,
+                        format!("`{}`: a commit_reveal rubric is a hidden criterion", c.id),
+                    ));
+                }
+                if !v05 {
+                    if j.rubric_disclosure.is_none() {
+                        return Err((Code::Malformed, format!("`{}`: judged conditions before acn-terms/0.5 need rubric_disclosure", c.id)));
+                    }
+                    if j.rubric_ref.is_some() || j.rubric_text.is_some() {
+                        return Err((
+                            Code::Malformed,
+                            format!("`{}`: rubric_ref / rubric_text need acn-terms/0.5", c.id),
+                        ));
+                    }
+                    continue;
+                }
+                if j.rubric_disclosure.is_some() {
+                    return Err((Code::Malformed, format!("`{}`: rubric_disclosure was removed in acn-terms/0.5 (rubrics are public)", c.id)));
+                }
+                if j.rubric_ref.as_deref().is_none_or(|r| r.trim().is_empty()) {
+                    return Err((
+                        Code::HiddenCriteria,
+                        format!(
+                            "`{}`: a judged condition needs rubric_ref, a retrievable rubric",
+                            c.id
+                        ),
+                    ));
+                }
+                if j.rubric_text
+                    .as_deref()
+                    .is_some_and(|text| crate::jcs::sha256_hex(text.as_bytes()) != j.rubric_hash)
+                {
+                    return Err((
+                        Code::Malformed,
+                        format!("`{}`: rubric_text does not hash to rubric_hash", c.id),
+                    ));
+                }
+            } else if v05 && Self::check_hidden(c) {
+                return Err((
+                    Code::HiddenCriteria,
+                    format!(
+                        "`{}`: a check referenced by check_hash needs a retrievable check_ref",
+                        c.id
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// A check definition named only by hash (`check_hash` without `check_ref`).
+    fn check_hidden(c: &Condition) -> bool {
+        let has = |f: &str| {
+            c.extra
+                .get(f)
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.trim().is_empty())
+        };
+        c.extra.contains_key("check_hash") && !has("check_ref")
+    }
+
+    fn check_inner(&self) -> Result<(), String> {
+        let t = self;
+        if ![
+            TERMS_VERSION,
+            TERMS_VERSION_0_4,
+            TERMS_VERSION_0_3,
+            TERMS_VERSION_0_2,
+        ]
+        .contains(&t.v.as_str())
+        {
             return Err(format!("unsupported terms version `{}`", t.v));
         }
         if t.v == TERMS_VERSION_0_2
@@ -292,7 +396,7 @@ impl Terms {
         let settlement_fields = !t.settlement_trigger.is_requester()
             || t.settlement_verifier.is_some()
             || t.fund_window.is_some();
-        if settlement_fields && t.v != TERMS_VERSION {
+        if settlement_fields && ![TERMS_VERSION, TERMS_VERSION_0_4].contains(&t.v.as_str()) {
             return Err("settlement triggers need acn-terms/0.4".into());
         }
         let mut ids: Vec<&str> = t.conditions.iter().map(|c| c.id.as_str()).collect();
@@ -307,7 +411,7 @@ impl Terms {
         {
             c.judged()?;
         }
-        Ok(t)
+        Ok(())
     }
 
     pub fn condition(&self, id: &str) -> Option<&Condition> {

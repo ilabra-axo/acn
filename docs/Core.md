@@ -80,6 +80,11 @@ MAY follow RFC 2119.
     semantics.
 13. **INV-13 Protocol neutrality.** The core names no implementation. Verification, governance,
     scoring and storage are roles filled by keys and bindings.
+14. **INV-14 No hidden criteria (CR-003).** Every criterion a deliverable is evaluated against
+    MUST be readable by the performer before it signs `PROMISE` or `ACCEPT`. Criteria are: rubric
+    text, mechanical check definitions, disqualifiers, and the description and generation rule of
+    any instance pool. Only the selection of evaluation instances may be unpredictable, and only
+    by the two-party seed mechanism (CR-003 §2.3, Phase B).
 
 ## 3. Roles and system layers
 
@@ -393,7 +398,7 @@ Otherwise they are stored on Blossom and supplied to the validator as a document
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `v` | string | Terms schema version (`acn-terms/0.4`; 0.3 and 0.2 documents still parse, without the fields introduced after them: `judged` in 0.3, settlement triggers in 0.4) |
+| `v` | string | Terms schema version (`acn-terms/0.5`; 0.4, 0.3 and 0.2 documents still parse, without the fields introduced after them: `judged` in 0.3, settlement triggers in 0.4, CR-003 fields in 0.5) |
 | `deliverable` | object | `description`; optional `output_schema` hash, `output_contract` id, `tool` name, `input` arguments |
 | `conditions` | array | Conditions of satisfaction; each has `id`, `class` (`mechanical`, `grounding`, `judged`, `interpretive`, `human`), and class-specific fields |
 | `deadline` | unix s | Latest `REPORT` time |
@@ -415,7 +420,9 @@ Otherwise they are stored on Blossom and supplied to the validator as a document
 INV-8 is enforced.
 
 - **`mechanical`:** a deterministic check (tests, schema validation, hash match). Satisfied only by
-  a mechanical attestation from a listed verifier.
+  a mechanical attestation from a listed verifier. A check named by `check_hash` MUST also carry
+  `check_ref`, a retrievable reference to its definition (0.5; INV-14, V-24). The same applies to
+  `grounding`.
 - **`grounding`:** agreement with an external referent (dataset, resolved market, sensor log),
   named by hash and source. Satisfied only by a grounding attestation.
 - **`judged`:** a pinned judge (e.g. an LLM with a fixed prompt, harness and sampling) scored the
@@ -426,8 +433,10 @@ INV-8 is enforced.
   | Field | Type | Meaning |
   | --- | --- | --- |
   | `judges` | array, ≥ 1 | Each: `model_id`, `model_version` (provider-pinned), `prompt_template_hash`, `harness_hash`, `sampling` (temperature, max tokens, seed if supported) |
-  | `rubric_hash` | sha256 | Hash of the rubric text. The rubric itself MAY be withheld until evaluation (`rubric_disclosure`) |
-  | `rubric_disclosure` | enum | `public` (rubric published with the terms) or `commit_reveal` (only the hash is published; the text is revealed in the attestation) |
+  | `rubric_hash` | sha256 | Hash of the rubric text |
+  | `rubric_ref` | string | From 0.5, required: a retrievable reference (Blossom) to the rubric text, so the performer reads it before promising (INV-14) |
+  | `rubric_text` | string | From 0.5, optional: the rubric inline; MUST hash to `rubric_hash` |
+  | `rubric_disclosure` | enum | Before 0.5 only, and only `public`. `commit_reveal` (the text withheld until evaluation) is a hidden criterion at every version: terms declaring it are rejected, `hidden_criteria` (V-24) |
   | `scale` | object | Score range, e.g. `{min: 0, max: 10}` |
   | `threshold` | number | θ; pass when the aggregate score ≥ θ. MUST lie within `scale` |
   | `aggregation` | enum | `all` (every judge ≥ θ), `mean`, or `median` (across judges) |
@@ -435,8 +444,10 @@ INV-8 is enforced.
   | `runners` | pubkeys, ≥ 1 | Keys allowed to run the judges and sign the attestation: the requester (its binding) or a third party. MUST NOT include the performer |
 
   Terms whose `judged` conditions lack these fields, carry any other field, or are inconsistent
-  (no judges, `repeats` 0, no runners, θ outside the scale, a malformed `rubric_hash`) do not
-  parse; inline terms are then `malformed` (V-3, V-9). `judged` requires `acn-terms/0.3`.
+  (no judges, `repeats` 0, no runners, θ outside the scale, a malformed `rubric_hash`, an inline
+  `rubric_text` that doesn't hash to it) do not parse; inline terms are then `malformed` (V-3,
+  V-9). A missing `rubric_ref` (0.5) is `hidden_criteria` instead (V-24). `judged` requires
+  `acn-terms/0.3`.
 
   **A `judged` condition is a minimum floor.** Terms that want more assurance add an audit as a
   further condition of satisfaction, of a stronger class (for example `mechanical` tests, a
@@ -639,7 +650,7 @@ execution log), `started`/`ended` (advisory).
     their `median`, and a `rationale_hash`;
   - `aggregate_score` and `result` (`pass` | `fail`);
   - `rubric_text_hash`, which MUST equal the condition's `rubric_hash`, and `rubric_ref`, a
-    Blossom reference to the rubric text (required under `commit_reveal`). The text MAY also be
+    Blossom reference to the rubric text. The text MAY also be
     inlined as `rubric_text` (≤ 16 KiB), in which case validators check its sha256;
   - `injection_detected` (bool) and, if true, `injection_span_hash`, the hash of the offending
     span.
@@ -727,9 +738,9 @@ list). Every rule failure produces an anomaly with a code and a severity:
     2. Every judge fingerprint matches the terms exactly, as a set. `judge_mismatch` (not
        counted).
     3. Every judge's run count equals `repeats`. `judge_mismatch` (not counted).
-    4. `rubric_text_hash` equals `rubric_hash`; under `commit_reveal`, `rubric_ref` is present;
-       an inline `rubric_text` hashes to `rubric_hash`. `rubric_mismatch` (not counted).
-       Fetching `rubric_ref` is I/O and is left to clients and bindings, like V-12.
+    4. `rubric_text_hash` equals `rubric_hash`, and an inline `rubric_text` hashes to it: the
+       rubric used is the public one the terms committed to (INV-14). `rubric_mismatch` (not
+       counted). Fetching `rubric_ref` is I/O and is left to clients and bindings, like V-12.
     5. `injection_detected` is false. If true, the attestation counts as a **fail** and
        `injection_detected` is recorded on the performer's `REPORT`.
     6. The aggregate score meets θ under the declared aggregation: per judge, the median of its
@@ -759,6 +770,12 @@ list). Every rule failure produces an anomaly with a code and a severity:
     before every condition passed is valid but flagged `premature_fund` (flag).
 23. **V-23 Claim (new, CR-002).** `CLAIM` is signed by the performer from Funded, and
     `sha256(key) = H`. `bad_key` (reject).
+24. **V-24 No hidden criteria (new, CR-003).** Terms on a `REQUEST` or `COUNTER` whose criteria
+    the performer can't read are rejected with the act carrying them: a `judged` condition that
+    declares `commit_reveal` (any version) or, from 0.5, lacks `rubric_ref`; a check named by
+    `check_hash` without `check_ref` (0.5). `hidden_criteria` (reject; on a `REQUEST`, no
+    commitment). Whether a reference actually resolves is I/O, left to clients and bindings, like
+    V-12.
 
 V-18 also covers the contingent constraint that every condition is `mechanical`:
 `contingent_nondeterministic` (reject; on a `REQUEST`, no commitment).
@@ -779,7 +796,7 @@ order (INV-2).
 | J-3 | Attestation signed by the performer | Not counted; `self_judged` on the performer's attestation |
 | J-3b | Terms list the performer as a runner | `self_judged` on the act carrying those terms |
 | J-4 | One judge's `model_version` differs from the terms | Not counted; `judge_mismatch` |
-| J-5 | `commit_reveal`; revealed rubric hash differs | Not counted; `rubric_mismatch` |
+| J-5 | Terms declare `commit_reveal` (amended by CR-003) | `REQUEST` rejected; `hidden_criteria`; no commitment |
 | J-6 | `injection_detected` true | Condition failed; `injection_detected` on the performer's `REPORT` |
 | J-7 | Aggregation `all`; one judge below θ | Condition failed; `below_threshold` |
 | J-8 | `repeats` 3; attestation carries 2 runs | Not counted; `judge_mismatch` |
@@ -791,6 +808,7 @@ order (INV-2).
 | J-15 | Judges pass; the requester rejects naming `c2` | `REJECT` applies; `overruled_judgement` on it (D-28) |
 | J-16 | Aggregation `mean`; one judge below θ, the mean meets it; `REJECT` names `c1` and `c2` | `c2` pass; one `overruled_judgement` on the `REJECT` |
 | J-17 | Judges fail (`below_threshold`); the requester rejects naming `c2` | `REJECT` applies; no `overruled_judgement` |
+| J-18 | The attestation's rubric hash differs from the terms' (the old J-5 check) | Not counted; `rubric_mismatch` |
 
 **Settlement-trigger vectors (CR-002 Phase A).** Each also runs under every arrival-order
 permutation. S-2 and S-3 were about delivery modes, which commitments-are-atomic removed (§1); S-2
@@ -823,6 +841,16 @@ is reused for the remaining invalid combination.
 | S-16 | `FUND` bound to a different hashlock | Not applied; `fund_mismatch` |
 | S-17 | Funded; no `CLAIM` before the `FUND` locktime | Lapsed; performer fault |
 | S-18 | Offered; requester `SATISFY`, then `REJECT` of passing work | Neither applied; `illegal_transition` |
+
+**Conditions-of-satisfaction vectors (CR-003 Phase A).** Each also runs under every arrival-order
+permutation.
+
+| Id | Setup | Expected |
+| --- | --- | --- |
+| C-1 | 0.5 terms declare `commit_reveal` | `REQUEST` rejected; `hidden_criteria` |
+| C-2 | `judged` condition without `rubric_ref` | `REQUEST` rejected; `hidden_criteria` |
+| C-2b | A check named by `check_hash` without `check_ref` | `REQUEST` rejected; `hidden_criteria` |
+| C-2c | Inline `rubric_text` that doesn't hash to `rubric_hash` | `REQUEST` rejected; `malformed` (inconsistent, not hidden) |
 
 ## 11. Bindings, governance and reputation
 
@@ -901,7 +929,7 @@ row needs a scenario test in the conformance suite.
 | Forged token | Bogus proof that shows "unspent" | DLEQ (NUT-12) verification before promising |
 | Arbiter collusion | Arbiter + performer use the escrowed `s` | Arbiters are scored keys; arbiter choice is in the terms; high-value work splits into milestones |
 | Judge gaming | Optimizing for a judge model | Interpretive reports are never sufficient (INV-8, V-11); a `judged` condition is explicitly an opinion and labelled so (§7), with the safeguards below |
-| Judge hill-climbing | Performer runs the known judge and rubric locally and iterates until it passes | `commit_reveal` rubrics; judge ensembles across model families; an audit condition of a stronger class in the terms (§7) |
+| Judge hill-climbing | Performer runs the known judge and rubric locally and iterates until it passes | Rubrics are public (INV-14), so not hidden criteria: held-out instances (CR-003 §2.3, Phase B); judge ensembles across model families; an audit condition of a stronger class in the terms (§7); a disqualifier for rubric-term stuffing (§7) |
 | Judge prompt injection | Deliverable contains text addressed to the judge | The harness isolates and sanitizes the artifact; detection fails the condition and is recorded on the performer (V-17.5, vector J-6) |
 | Self-judging | Performer runs the judge or signs as runner | The runner must not be the performer (`self_judged`, V-17.1, vectors J-3, J-3b) |
 | Judge drift or collusion | A judge passes poor work systematically | Audit conditions alongside the judges (§7); outcomes on the record, so runners and judge fingerprints can be scored |
@@ -984,8 +1012,8 @@ From CR-001 (the `judged` condition class; its OD-1…OD-6):
   `check` and `grounded` are comparable at all or should be reported side by side (§7).
 - [x] **D-15 Verifiable audit sampling (CR-001 OD-2).** Closed, not needed: audits are conditions
   of satisfaction, applied to every commitment that names them (§7), so nothing is sampled.
-- [ ] **D-16 Rubric reveal timing (CR-001 OD-3).** Reveal inside the attestation (current text) or
-  in a separate event before judging.
+- [x] **D-16 Rubric reveal timing (CR-001 OD-3).** Closed by CR-003: rubrics are public before
+  promising (INV-14), so there is nothing to reveal.
 - [ ] **D-17 Model deprecation (CR-001 OD-4).** What happens when a pinned judge model is withdrawn
   mid-commitment: renegotiation via `COUNTER`, a named fallback judge in the terms, or lapse.
 - [ ] **D-18 Injection detection standard (CR-001 OD-5).** Harness-defined and pinned by

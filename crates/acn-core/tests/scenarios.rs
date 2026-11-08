@@ -535,6 +535,7 @@ const ALL: &[Scenario] = &[
     ("J-15", common::judged::j15),
     ("J-16", common::judged::j16),
     ("J-17", common::judged::j17),
+    ("J-18", common::judged::j18),
     // CR-002 Phase A: verifier settlement trigger.
     ("S-2", common::settlement::s2),
     ("S-4", common::settlement::s4),
@@ -555,7 +556,80 @@ const ALL: &[Scenario] = &[
     ("S-16", common::settlement::s16),
     ("S-17", common::settlement::s17),
     ("S-18", common::settlement::s18),
+    // CR-003 Phase A: conditions-of-satisfaction authorship.
+    ("C-1", common::cos::c1),
+    ("C-2", common::cos::c2),
+    ("C-2b", common::cos::c2b),
+    ("C-2c", common::cos::c2c),
 ];
+
+// ---------- CR-003 vectors (spec §10 conformance table) ----------
+
+fn check_cos(name: &str, w: &W, out: &acn_core::Output) {
+    let e = &w.events;
+    let req = &e[0];
+    let ctx = format!("{name}: {:?}", out.anomalies);
+    let has = |i: usize, code: Code| out.has(&e[i].id, code);
+    match name {
+        // Hidden criteria: the terms version is rejected, so no commitment forms.
+        "C-1" | "C-2" | "C-2b" => {
+            assert!(has(0, Code::HiddenCriteria), "{ctx}");
+            assert!(!out.commitments.contains_key(&req.id), "{ctx}");
+        }
+        "C-2c" => {
+            assert!(has(0, Code::Malformed), "{ctx}");
+            assert!(!has(0, Code::HiddenCriteria), "{ctx}");
+            assert!(!out.commitments.contains_key(&req.id), "{ctx}");
+        }
+        other => panic!("no expectation for {other}"),
+    }
+}
+
+const COS: &[Scenario] = &[
+    ("C-1", common::cos::c1),
+    ("C-2", common::cos::c2),
+    ("C-2b", common::cos::c2b),
+    ("C-2c", common::cos::c2c),
+];
+
+/// CR-003 §5.2: every Phase A vector, under every arrival-order permutation.
+#[test]
+fn cr003_cos_vectors_under_every_arrival_order() {
+    for (name, build) in COS {
+        let w = build();
+        for order in orders(w.events.len()) {
+            let shuffled: Vec<_> = order.iter().map(|&i| w.events[i].clone()).collect();
+            check_cos(name, &w, &acn_core::fold(&shuffled, &w.docs));
+        }
+    }
+}
+
+/// C-9 (part): terms before 0.5 keep their meaning; only `commit_reveal` stops parsing.
+#[test]
+fn cr003_older_terms_keep_their_meaning() {
+    let old = |f: fn(&mut serde_json::Value)| {
+        common::judged::judged_terms(|t| {
+            t["v"] = json!("acn-terms/0.4");
+            let c = t["conditions"][1].as_object_mut().unwrap();
+            c.remove("rubric_ref");
+            c.insert("rubric_disclosure".into(), json!("public"));
+            f(t);
+        })
+    };
+    assert!(acn_core::Terms::parse(&old(|_| {})).is_ok());
+    let reveal = acn_core::Terms::check(&old(|t| {
+        t["conditions"][1]["rubric_disclosure"] = json!("commit_reveal")
+    }));
+    assert_eq!(reveal.unwrap_err().0, Code::HiddenCriteria);
+    // The 0.5 fields don't exist before 0.5.
+    assert!(
+        acn_core::Terms::parse(&old(|t| t["conditions"][1]["rubric_ref"] = json!("x"))).is_err()
+    );
+    // In 0.5, rubric_disclosure is gone (rubrics are public).
+    let v05 =
+        common::judged::judged_terms(|t| t["conditions"][1]["rubric_disclosure"] = json!("public"));
+    assert_eq!(acn_core::Terms::check(&v05).unwrap_err().0, Code::Malformed);
+}
 
 // ---------- CR-001 vectors (spec §10 conformance table) ----------
 
@@ -564,6 +638,16 @@ fn check_judged(name: &str, w: &W, out: &acn_core::Output) {
     use acn_core::Assurance;
     let e = &w.events;
     let (req, rep) = (&e[0], &e[2]);
+    if name == "J-5" {
+        // CR-003 §2.1: commit_reveal is a hidden criterion; the REQUEST never makes a commitment.
+        assert!(
+            out.has(&req.id, Code::HiddenCriteria),
+            "{name}: {:?}",
+            out.anomalies
+        );
+        assert!(!out.commitments.contains_key(&req.id));
+        return;
+    }
     if name == "J-14" {
         // Unparseable terms: the REQUEST is retained but never becomes a commitment.
         assert!(
@@ -613,7 +697,7 @@ fn check_judged(name: &str, w: &W, out: &acn_core::Output) {
             assert_eq!(codes(3), [Code::JudgeMismatch], "{ctx}");
             assert_eq!(c2, Some(&ConditionStatus::Unverified), "{ctx}");
         }
-        "J-5" => {
+        "J-18" => {
             assert_eq!(codes(3), [Code::RubricMismatch], "{ctx}");
             assert_eq!(c2, Some(&ConditionStatus::Unverified), "{ctx}");
         }
@@ -680,6 +764,7 @@ const JUDGED: &[Scenario] = &[
     ("J-15", common::judged::j15),
     ("J-16", common::judged::j16),
     ("J-17", common::judged::j17),
+    ("J-18", common::judged::j18),
 ];
 
 /// CR-001 §3.2: every vector's expected outcome, under every arrival-order permutation.

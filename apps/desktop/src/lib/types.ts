@@ -141,7 +141,11 @@ export interface JudgedView {
   scale_max: number;
   aggregation: "all" | "mean" | "median";
   repeats: number;
-  rubric_disclosure: "public" | "commit_reveal";
+  /** Terms before acn-terms/0.5 only. */
+  rubric_disclosure: "public" | "commit_reveal" | null;
+  /** Where the performer reads the rubric (INV-14). */
+  rubric_ref: string | null;
+  rubric_text: string | null;
   runners: string[];
 }
 
