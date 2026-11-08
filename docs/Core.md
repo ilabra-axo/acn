@@ -607,6 +607,24 @@ after the review window.
 state and anomalies. A property test MUST show identical output for every permutation of arrival
 order (INV-2).
 
+**Judged-condition vectors (CR-001).** Each also runs under every arrival-order permutation.
+
+| Id | Setup | Expected |
+| --- | --- | --- |
+| J-1 | Both judges pass; runner is the requester | Condition met; auto-`SATISFY` valid; state Satisfied |
+| J-2 | `K_INTERP_REPORT` offered for a `judged` condition | Not counted; `wrong_evidence_class` |
+| J-3 | Attestation signed by the performer | Not counted; `self_judged` on the performer's attestation |
+| J-3b | Terms list the performer as a runner | `self_judged` on the act carrying those terms |
+| J-4 | One judge's `model_version` differs from the terms | Not counted; `judge_mismatch` |
+| J-5 | `commit_reveal`; revealed rubric hash differs | Not counted; `rubric_mismatch` |
+| J-6 | `injection_detected` true | Condition failed; `injection_detected` on the performer's `REPORT` |
+| J-7 | Aggregation `all`; one judge below θ | Condition failed; `below_threshold` |
+| J-8 | `repeats` 3; attestation carries 2 runs | Not counted; `judge_mismatch` |
+| J-9 | Holdback; not sampled; requester withholds past the window | *Held with §8.5 holdback (CR-001 §2.4, pending confirmation)* |
+| J-10 | Holdback; sampled; audit fails | *Held with §8.5 holdback (CR-001 §2.4, pending confirmation)* |
+| J-11 | One `mechanical` and one `judged` condition | Overall assurance `opinion` |
+| J-12 | Declared aggregate/result disagree; an unlisted runner | `malformed`; `unlisted_verifier`; not counted |
+
 ## 11. Bindings, governance and reputation
 
 ACN Core defines what is signed and how it is judged. How an agent decides what to sign is its

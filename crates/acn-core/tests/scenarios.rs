@@ -529,11 +529,124 @@ const ALL: &[Scenario] = &[
     ("J-7", common::judged::j7),
     ("J-8", common::judged::j8),
     ("J-11", common::judged::j11),
-    (
-        "J-declared-unlisted",
-        common::judged::j_declared_and_unlisted,
-    ),
+    ("J-12", common::judged::j_declared_and_unlisted),
 ];
+
+// ---------- CR-001 vectors (spec §10 conformance table) ----------
+
+/// Expected outcome of one CR-001 vector, checked against a fold of `w`'s events in any order.
+fn check_judged(name: &str, w: &W, out: &acn_core::Output) {
+    use acn_core::Assurance;
+    let e = &w.events;
+    let (req, rep) = (&e[0], &e[2]);
+    let c = &out.commitments[&req.id];
+    let c2 = c.conditions.get("c2");
+    let has = |i: usize, code: Code| out.has(&e[i].id, code);
+    let codes = |i: usize| {
+        out.anomalies_for(&e[i].id)
+            .map(|a| a.code)
+            .collect::<Vec<_>>()
+    };
+    let ctx = format!("{name}: {:?}", out.anomalies);
+    assert_eq!(c.assurance, Some(Assurance::Opinion), "{ctx}");
+    match name {
+        "J-1" => {
+            assert_eq!(c2, Some(&ConditionStatus::Pass), "{ctx}");
+            assert_eq!(
+                c.conditions.get("c1"),
+                Some(&ConditionStatus::Pass),
+                "{ctx}"
+            );
+            assert_eq!(c.state.as_ref().unwrap().phase, Phase::Satisfied, "{ctx}");
+            assert!(
+                out.anomalies.iter().all(|a| a.code == Code::Unbound),
+                "{ctx}"
+            );
+        }
+        "J-2" => {
+            assert!(has(3, Code::WrongEvidenceClass), "{ctx}");
+            assert_eq!(c2, Some(&ConditionStatus::Unverified), "{ctx}");
+        }
+        "J-3" => {
+            assert_eq!(e[3].pubkey, pk(&PERF));
+            assert_eq!(codes(3), [Code::SelfJudged], "{ctx}");
+            assert_eq!(c2, Some(&ConditionStatus::Unverified), "{ctx}");
+        }
+        "J-3b" => assert!(has(0, Code::SelfJudged), "{ctx}"),
+        "J-4" | "J-8" => {
+            assert_eq!(codes(3), [Code::JudgeMismatch], "{ctx}");
+            assert_eq!(c2, Some(&ConditionStatus::Unverified), "{ctx}");
+        }
+        "J-5" => {
+            assert_eq!(codes(3), [Code::RubricMismatch], "{ctx}");
+            assert_eq!(c2, Some(&ConditionStatus::Unverified), "{ctx}");
+        }
+        "J-6" => {
+            assert_eq!(c2, Some(&ConditionStatus::Fail), "{ctx}");
+            assert!(out.has(&rep.id, Code::InjectionDetected), "{ctx}");
+            assert_eq!(rep.pubkey, pk(&PERF), "recorded on the performer's act");
+        }
+        "J-7" => {
+            assert_eq!(c2, Some(&ConditionStatus::Fail), "{ctx}");
+            assert_eq!(codes(3), [Code::BelowThreshold], "{ctx}");
+        }
+        "J-11" => {
+            let t = c.terms.as_ref().unwrap();
+            let classes: Vec<_> = t.conditions.iter().map(|c| c.class.assurance()).collect();
+            assert_eq!(classes, [Assurance::Check, Assurance::Opinion]);
+            assert!(
+                out.anomalies.iter().all(|a| a.code == Code::Unbound),
+                "{ctx}"
+            );
+        }
+        "J-12" => {
+            assert!(has(3, Code::Malformed), "{ctx}");
+            assert!(has(4, Code::UnlistedVerifier), "{ctx}");
+            assert_eq!(c2, Some(&ConditionStatus::Unverified), "{ctx}");
+        }
+        other => panic!("no expectation for {other}"),
+    }
+}
+
+const JUDGED: &[Scenario] = &[
+    ("J-1", common::judged::j1),
+    ("J-2", common::judged::j2),
+    ("J-3", common::judged::j3),
+    ("J-3b", common::judged::j3b),
+    ("J-4", common::judged::j4),
+    ("J-5", common::judged::j5),
+    ("J-6", common::judged::j6),
+    ("J-7", common::judged::j7),
+    ("J-8", common::judged::j8),
+    ("J-11", common::judged::j11),
+    ("J-12", common::judged::j_declared_and_unlisted),
+];
+
+/// CR-001 §3.2: every vector's expected outcome, under every arrival-order permutation.
+#[test]
+fn cr001_judged_vectors_under_every_arrival_order() {
+    for (name, build) in JUDGED {
+        let w = build();
+        let orders = orders(w.events.len());
+        assert!(orders.len() > 1 || w.events.len() == 1);
+        for order in orders {
+            let shuffled: Vec<_> = order.iter().map(|&i| w.events[i].clone()).collect();
+            check_judged(name, &w, &acn_core::fold(&shuffled, &w.docs));
+        }
+    }
+}
+
+/// The validator rejects a judged condition satisfied by an interpretive report, by a
+/// performer-run judge, or by a mismatched judge fingerprint (CR-001 "done when").
+#[test]
+fn cr001_judged_condition_cannot_be_satisfied_by_the_wrong_evidence() {
+    for build in [common::judged::j2, common::judged::j3, common::judged::j4] {
+        let w = build();
+        let out = w.fold();
+        let c = &out.commitments[&w.events[0].id];
+        assert_ne!(c.conditions.get("c2"), Some(&ConditionStatus::Pass));
+    }
+}
 
 // ---------- gates ----------
 
