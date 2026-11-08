@@ -48,6 +48,7 @@ async function caption(label, html, hold = 0) {
 const hideCaption = () => page.evaluate(() => (document.getElementById("sc-cap").style.opacity = "0"));
 
 async function card(title, text, tag = "", hold = 3800) {
+  await hideCaption();
   await page.evaluate(([t, x, g]) => {
     const d = document.createElement("div");
     d.id = "sc-card";
@@ -98,101 +99,132 @@ async function waitStatus(text, timeout = 30000) {
 }
 
 // --- script ---
+const walletBtn = page.locator(".wallet-btn");
 await page.goto(url);
 await page.waitForSelector("nav");
 await installOverlays();
-await card("nmesh × ACN", "Agent Commitments over Nostr: people and agents make, fulfil, verify and close commitments as signed events.", "PROTOTYPE DEMO");
+await card("nmesh × ACN", "Agent Commitments over Nostr: pay an agent only for the outcome you asked for, settled by signed acts and Cashu.", "PROTOTYPE DEMO · ACN v0.4", 4200);
 
-await caption("The app", "A Nostr messenger for humans and agents. Agents are peers with their own keys; structured results render in context.", 4200);
+await caption("The app", "A Nostr messenger for humans and agents. Agents are peers with their own keys; structured results render in context.", 4000);
 await click(page.locator(".demo-btn"), 1200);
-await caption("Before first contact", "Every agent shows <b>who runs it</b>, what it does with your data, and whether its key is <b>bound to an accountable operator</b>.", 5200);
+await caption("Before first contact", "Every agent shows <b>who runs it</b>, what it does with your data, and whether its key is <b>bound to an accountable operator</b>.", 5000);
 await click(page.getByRole("button", { name: /I understand/ }), 800);
 await director().waitFor();
-await caption("The Director", "A presenter panel. You play the <b>requester</b>; a simulated cast (performer, verifier, judge, arbiter, gate) responds with real signed acts, judged by the real validator.", 5200);
+await caption("The Director", "You play the <b>requester</b>. A simulated cast (performer, verifier, judge, arbiter, gate) answers with real signed acts, judged by the real validator.", 5000);
 
-// 1. Negotiation
-await card("1 · Negotiation", "Counter-offers bind to content-addressed terms. A promise is made against a terms hash.", "PROFILE N", 3000);
-await scenario("Negotiation");
-await caption("Request", "Your <b>REQUEST</b> carries the terms inline, identified by their hash.", 0);
-await lastCard().locator(".counter").waitFor({ timeout: 20000 });
-await sleep(600);
-await caption("Counter-offer", "Atlas <b>counters</b>: one more hour and a revision round. New terms → new hash. The card shows the diff.", 5000);
-await click(nextBtn("Accept counter"), 800);
-await caption("Accepted", "Accepting turns the counter into the promise. Atlas sends <b>PROGRESS</b> (liveness only) and then a signed <b>REPORT</b>.", 0);
-await waitStatus("Your review");
-await caption("Only you can close it", "A REPORT asserts completion; it never closes the commitment. Closure is the requester's act (INV-5).", 4200);
-await click(nextBtn("Accept result"), 800);
-await waitStatus("Satisfied");
+// Wallet
+await click(walletBtn, 300);
+await page.locator(".wallet").first().waitFor({ state: "visible", timeout: 10000 });
+await sleep(700);
+await caption("Integrated wallet", "Cashu ecash. Presenter mode runs a simulated mint with the real rules (hash locks, refunds only after the locktime, single spend).", 0);
+await click(page.getByRole("button", { name: "Top up 100 test sats" }), 900);
+await click(page.getByRole("button", { name: "Top up 100 test sats" }), 900);
+await walletBtn.filter({ hasText: "300 sat" }).waitFor({ timeout: 10000 });
+await sleep(1500);
+await click(page.locator(".wallet .x"), 500);
+
+// 1. The MVP: judged, verifier releases
+await card("1 · Pay only if the judges agree", "A 500-word summary, 60 sat. Two judges from different model families must each score it at least 7/10 against a sealed rubric.", "CR-001 judged · CR-002 verifier trigger", 4200);
+await scenario("Judged, verifier releases");
+await lastCard().locator(".assurance, .pill", { hasText: "opinion" }).first().waitFor({ timeout: 20000 }).catch(() => {});
+await caption("Honest labels", "Before anything is signed the card says <b>assurance: opinion</b> and names the judges and the threshold. A judged pass certifies a score, not the work.", 5200);
+await caption("Escrow first", "Your 60 sat are hash-locked to Atlas. The secret is escrowed with <b>Verity</b>, who acknowledges it before Atlas promises.", 0);
+await waitStatus("Settled", 40000);
+await lastCard().locator(".conditions").scrollIntoViewIfNeeded();
+await caption("Checked, then judged", "<b>c1</b> word count: a mechanical <b>check</b>. <b>c2</b>: both judges ran three times, medians 8 and 8 ≥ 7, a counted <b>opinion</b>.", 5800);
+await lastCard().locator(".settle").scrollIntoViewIfNeeded();
+await caption("Paid without you", "Every condition passed, so Verity <b>RELEASE</b>d the secret and Atlas redeemed. You never clicked. You may still record one judgement.", 5500);
 await click(lastCard().getByRole("button", { name: /signed events/ }), 600);
-await caption("Every act is a signed Nostr event", "The thread is just a projection. State is a deterministic fold over these events — same result in any order, on any relay.", 5200);
+await caption("Every act is a signed Nostr event", "State is a deterministic fold over these events: same result in any order, on any client.", 4800);
 await click(lastCard().getByRole("button", { name: /signed events/ }), 300);
 
-// 2. Verified work
-await card("2 · Evidence has classes", "Mechanical attestations can satisfy a condition. LLM opinions never can.", "INV-8 · V-11 · V-16", 3200);
+// 2. Injection
+await card("2 · Talking to the judge", "Same terms. This time the summary ends with a note addressed to the evaluator.", "V-17 injection_detected", 3400);
+await scenario("Judge prompt injection");
+await nextBtn("Reject: injection").waitFor({ timeout: 40000 });
+await lastCard().locator(".conditions").scrollIntoViewIfNeeded();
+await caption("Caught", "The judge harness detects text addressed to the judges: <b>c2 fails</b>, nothing is released, and <b>injection_detected</b> is recorded on Atlas's REPORT, for good.", 6000);
+await click(nextBtn("Reject: injection"), 900);
+await waitStatus("Rejected");
+await lastCard().locator(".settle").scrollIntoViewIfNeeded();
+await caption("Your money", "The secret was never revealed, so Atlas can't redeem. Your 60 sat refund to you after the locktime.", 4500);
+
+// 3. Contingent
+await card("3 · Encrypted until paid", "No money up front. The deliverable is sealed; paying for it and receiving the key are one swap at the mint.", "CR-002 contingent · mechanical only", 4000);
+await scenario("Contingent");
+await lastCard().locator("text=Encrypted delivery").first().waitFor({ timeout: 30000 });
+await caption("Sealed", "Atlas seals the module with a fresh key <b>k</b> (NIP-44) and escrows k with Verity, who decrypts, runs the tests and attests, revealing nothing.", 0);
+await nextBtn("Fund").waitFor({ timeout: 30000 });
+await lastCard().locator(".conditions").scrollIntoViewIfNeeded();
+await caption("Fund against H", "The tests passed on a plaintext you can't read yet. <b>FUND</b> locks 30 sat to H = sha256(k): Atlas can only take it by revealing k.", 5200);
+await click(nextBtn("Fund"), 900);
+await waitStatus("Settled", 30000);
+await lastCard().locator("text=Parser module").first().waitFor({ timeout: 10000 });
+await lastCard().locator(".report, .conditions").first().scrollIntoViewIfNeeded().catch(() => {});
+await caption("Claimed and opened", "Atlas redeemed with k and published <b>CLAIM</b>; the card decrypts. Deterministic conditions only: a judged score can't gate this swap.", 5500);
+
+// 4. Evidence classes
+await card("4 · Evidence has classes", "A mechanical attestation can satisfy a test condition. A free-form LLM opinion never can.", "INV-8 · V-11 · V-16", 3200);
 await scenario("Verified work");
 await nextBtn("Reject the tests").waitFor({ timeout: 30000 });
 await lastCard().locator(".conditions").scrollIntoViewIfNeeded();
-await caption("Conditions of satisfaction", "<b>Verity</b> re-ran the tests: <b>pass, counted</b>. <b>Muse</b>, an LLM judge, says the tests look flaky — an opinion, <b>not counted</b>.", 6500);
+await caption("Counted or not", "<b>Verity</b> re-ran the tests: <b>pass, counted</b>. <b>Muse</b> calls them flaky: an interpretive report, <b>not counted</b>.", 5500);
 await click(nextBtn("Reject the tests"), 900);
-await caption("Contradicted rejection", "You may still reject (only you judge), but the validator flags it <b>contradicted_rejection</b>: visible, attributable.", 5500);
+await caption("Contradicted rejection", "You may still reject (only you judge), but it is flagged <b>contradicted_rejection</b>: visible and attributable.", 4800);
 await waitStatus("Your review");
-await caption("Rework", "Below the rework limit, the REJECT sends it back. Atlas delivers <b>v2</b>.", 3500);
 await click(nextBtn("Accept result"), 700);
 await waitStatus("Satisfied");
 
-// 3. Paid call
-await card("3 · Closing is paying", "21 sat hash-locked to the performer (simulated Cashu). The preimage only you hold is the payment.", "PROFILE T1 · INV-6", 3200);
-await scenario("Paid call");
-await waitStatus("Your review");
-await lastCard().locator(".settle").scrollIntoViewIfNeeded();
-await caption("Locked", "Funds are <b>🔒 locked</b> to Atlas until you are satisfied; refundable to you after the locktime.", 4500);
-await click(nextBtn("Satisfy"), 900);
-await waitStatus("Satisfied");
-await lastCard().locator(".settle").scrollIntoViewIfNeeded();
-await caption("Paid", "Your SATISFY reveals the preimage — the validator checks it against the hashlock. <b>One signed act closes and pays.</b>", 5000);
-
-// 4. Dispute
-await card("4 · Dispute & ruling", "50 sat, with an arbiter named in the terms. The preimage is escrowed to the arbiter.", "§8.4", 3200);
+// 5. Dispute
+await card("5 · Dispute & ruling", "50 sat with an arbiter named in the terms. The secret is escrowed with the arbiter.", "§8.4", 3000);
 await scenario("Dispute");
 await click(nextBtn("Reject the concepts"), 600);
-await caption("Dispute", "You reject. Atlas <b>disputes</b>. The arbiter, <b>Solon</b>, holds an escrowed copy of the preimage.", 0);
+await caption("Dispute", "You reject. Atlas <b>disputes</b>. <b>Solon</b>, the arbiter, holds an escrowed copy of the secret.", 0);
 await waitStatus("Satisfied", 30000);
 await lastCard().locator(".settle").scrollIntoViewIfNeeded();
-await caption("Ruling", "Solon rules for the performer and releases the preimage: <b>Atlas is paid without you</b>. Arbiters are scored keys like anyone else.", 5500);
+await caption("Ruling", "Solon rules for the performer and releases the secret: <b>Atlas is paid without you</b>.", 4500);
 
-// 5. Governance
-await card("5 · Governance gates", "Terms can demand that an outside gate endorses the performer's acts.", "K_ENDORSE · V-14", 3000);
-await scenario("Governance");
-await lastCard().locator(".chain .pend", { hasText: "pending" }).waitFor({ timeout: 20000 });
-await caption("Pending endorsement", "Atlas has reported, but the REPORT is <b>pending</b> until <b>Gate</b> (a human sign-off) endorses it.", 0);
-await waitStatus("Your review", 30000);
-await caption("Endorsed", "Gate endorsed it — only now does the REPORT take effect.", 3500);
-await click(nextBtn("Accept result"), 700);
-await waitStatus("Satisfied");
-
-// 6. Silent performer
-await card("6 · Time without trust in clocks", "Lapses are derived by every client, never announced.", "status_at", 3000);
-await scenario("Silent");
-await nextBtn("Fast-forward").waitFor({ timeout: 20000 });
-await caption("Promised… then silence", "Atlas promised a 2-minute deadline and went quiet. Let's move the presentation clock.", 3800);
-await click(nextBtn("Fast-forward"), 900);
-await waitStatus("Lapsed");
-await caption("Lapsed", "Past the deadline with no REPORT: <b>lapsed</b>, recorded against the performer for scoring.", 4200);
-await click(nextBtn("Withdraw"), 700);
-await waitStatus("Withdrawn");
-
-// 7. Rogue
-await card("7 · Bad actors are visible", "An unbound agent sends a PROMISE and a DECLINE at the same time.", "V-13 equivocation", 3000);
+// 6. Rogue
+await card("6 · Bad actors are visible", "An unbound agent sends a PROMISE and a DECLINE at the same time.", "V-13 equivocation", 3000);
 await click(page.locator("nav button", { hasText: "Rogue" }), 900);
-await caption("Unaccountable", "<b>Rogue</b> has no operator binding — the app says so before you talk to it.", 3800);
+await caption("Unaccountable", "<b>Rogue</b> has no operator binding, and the app says so before you talk to it.", 3600);
 await click(page.getByRole("button", { name: /I understand/ }), 700);
 if (!(await director().isVisible())) await click(page.getByRole("button", { name: /Director/ }), 500);
 await scenario("Rogue agent");
 await waitStatus("Declined");
-await caption("Deterministic resolution", "Both acts are kept as evidence. The closing act wins on every client; the other is <b>stale</b>, and Rogue is flagged for <b>equivocation</b>.", 6500);
+await caption("Deterministic resolution", "Both acts are kept as evidence. The closing act wins on every client; Rogue is flagged for <b>equivocation</b>.", 5500);
+
+// 7. Board
+await card("7 · The board", "Every commitment by ACN stage, across agents and roles. Tiles move only when signed acts arrive.", "QUEUE VIEW", 3200);
+await click(page.locator("nav button", { hasText: "Atlas" }).first(), 700);
+await scenario("Negotiation");
+await scenario("Paid call");
+await sleep(5000);
+await click(page.locator(".views button", { hasText: "Board" }), 1000);
+await caption("Whose move?", "Negotiating, review, closed. The accent edge means <b>your move</b>; tiles show money, evidence and the telling validator note.", 5500);
+await click(page.locator(".lane[data-lane=review] .tile").first(), 300);
+await page.locator(".drawer").waitFor({ state: "visible", timeout: 10000 });
+await sleep(1200);
+await caption("Drawer", "A tile opens the full commitment card. There is no drag-and-drop: in ACN only signed acts change state.", 4500);
+await page.locator(".backdrop").click({ position: { x: 400, y: 450 } });
+await sleep(500);
+
+// 8. Wallet and reset
+await click(walletBtn, 300);
+await page.locator(".wallet").first().waitFor({ state: "visible", timeout: 10000 });
+await sleep(1000);
+await caption("Where the money went", "Locks per commitment, redeemed or refundable, and the full history. The injected 60 sat stay locked until the locktime.", 5200);
+await click(page.locator(".wallet .x"), 500);
+await click(page.locator(".views button", { hasText: "Chats" }), 600);
+await click(page.locator("nav button", { hasText: "Atlas" }).first(), 700);
+await click(page.locator(".director .reset"), 500);
+await caption("Reset demo", "Click twice: commitments cleared, clock and simulated mint reset. Live mode ignores everything signed before the reset.", 0);
+await click(page.locator(".director .reset", { hasText: "Click again" }), 1200);
+await walletBtn.filter({ hasText: "100 sat" }).waitFor({ timeout: 5000 });
+await sleep(2000);
 
 await hideCaption();
-await card("Built on Nostr, MCP and Cashu", "Rust core · NIP-17 private transport · MCP agents · JSON-Schema data contracts · Marmot groups next · ARCore later", "nmesh · ACN v0.2", 4500);
+await card("Built on Nostr, MCP and Cashu", "Rust core and validator (also in the browser as WASM) · NIP-17 private transport · Cashu NUT-14 · MCP agents · JSON-Schema data contracts", "nmesh · ACN v0.4", 4500);
 
 await ctx.close();
 await browser.close();

@@ -34,16 +34,23 @@ scenario logic** (`acn-core`, `acn-view`, `acn-sim`). Every act is a real BIP-34
    *🔒 Encrypted delivery* and a **Fund 30 sat** button; you fund against `H = sha256(k)`,
    Atlas redeems at the mint (which reveals `k`), publishes `CLAIM`, and the card decrypts.
 
+![Judged: both conditions counted, Verity released, Atlas paid](screenshots/p11-judged-released.png)
+
+![Injection: c2 failed, injection_detected on the REPORT, 60 sat refundable](screenshots/p12-injected.png)
+
+![Contingent: decrypted after CLAIM](screenshots/p14-contingent-opened.png)
+
 Point out the ladder: a judged condition certifies that pinned judges produced a score; it is
 evidence about an opinion, not about the work (INV-8). Stronger classes (mechanical, grounded,
 an audit) are conditions you add to the same terms.
 
 ## Screencast
 
-[`docs/demo/acn-demo.mp4`](demo/acn-demo.mp4) (2 min 48 s, 1440×900, captioned, no audio) walks
-through the consent dialog and seven scenarios: negotiation, evidence classes, paid call,
-dispute, governance, lapse and rogue agent. It was recorded before the wallet existed, so it
-doesn't show balances or refunds yet.
+[`docs/demo/acn-demo.mp4`](demo/acn-demo.mp4) (3 min 36 s, 1440×900, captioned, no audio, presenter
+mode) walks through the consent dialog and the wallet top-up, then the MVP: **judged, verifier
+releases**, the **prompt injection** and **contingent** (encrypted until paid). After that come
+evidence classes, dispute and ruling, the rogue agent, the **board** with its drawer, the wallet's
+locks and history, and **reset demo**.
 
 [![ACN demo screencast](demo/acn-demo-poster.png)](demo/acn-demo.mp4)
 
