@@ -79,6 +79,38 @@ pub struct AppConfig {
     pub target: String,
     /// Cashu mint of the built-in wallet. `None`: no wallet; priced requests fail.
     pub mint: Option<String>,
+    /// Which settlement triggers this requester accepts (local policy, not protocol).
+    pub settlement_policy: SettlementPolicy,
+}
+
+/// Requester-side settlement policy (Binding API policy filters, docs/binding-api.md). Local
+/// configuration: the protocol only checks that the terms are a valid combination.
+#[derive(Debug, Clone, Default)]
+pub struct SettlementPolicy {
+    /// Refuse terms that hand the release to a settlement verifier.
+    pub refuse_verifier: bool,
+    /// When non-empty, accept the verifier trigger only with one of these settlement verifiers.
+    pub trusted_verifiers: Vec<String>,
+}
+
+impl SettlementPolicy {
+    fn check(&self, terms: &Value) -> Result<(), AppError> {
+        if terms["settlement_trigger"].as_str() != Some("verifier") {
+            return Ok(());
+        }
+        if self.refuse_verifier {
+            return Err(AppError::Invalid(
+                "your settlement policy refuses the verifier trigger".into(),
+            ));
+        }
+        let v = terms["settlement_verifier"].as_str().unwrap_or_default();
+        if !self.trusted_verifiers.is_empty() && !self.trusted_verifiers.iter().any(|t| t == v) {
+            return Err(AppError::Invalid(format!(
+                "settlement verifier {v} is not in your trusted set"
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl AppConfig {
@@ -91,6 +123,7 @@ impl AppConfig {
             history: Duration::from_secs(30 * 24 * 60 * 60),
             target: "web".into(),
             mint: None,
+            settlement_policy: SettlementPolicy::default(),
         }
     }
 }
@@ -165,6 +198,7 @@ struct Inner {
     events: mpsc::Sender<AppEvent>,
     clock_offset: AtomicI64,
     wallet: Option<CashuWallet>,
+    policy: SettlementPolicy,
 }
 
 #[derive(Clone)]
@@ -242,6 +276,7 @@ impl App {
                 events: tx,
                 clock_offset: AtomicI64::new(0),
                 wallet,
+                policy: config.settlement_policy.clone(),
             }),
         };
 
@@ -566,6 +601,8 @@ impl App {
                 ),
             ),
         };
+        // Requester-side settlement policy (Binding API policy filters, CR-002).
+        self.inner.policy.check(&terms)?;
         // Lock the price to the performer (Core.md §8.2 steps 1-2).
         let token = match (&secret, terms.get("payment").filter(|p| p.is_object())) {
             (Some(_), Some(pay)) if terms["price"]["amount"].as_u64().unwrap_or(0) > 0 => {
@@ -1175,4 +1212,36 @@ fn parse_pk(s: &str) -> Result<PublicKey, AppError> {
     let s = s.trim();
     let s = s.strip_prefix("nostr:").unwrap_or(s);
     PublicKey::parse(s).map_err(|e| AppError::BadKey(e.to_string()))
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn settlement_policy_filters_the_verifier_trigger() {
+        let v = json!({"settlement_trigger": "verifier", "settlement_verifier": "aa"});
+        let plain = json!({});
+        assert!(SettlementPolicy::default().check(&v).is_ok());
+        let refuse = SettlementPolicy {
+            refuse_verifier: true,
+            ..Default::default()
+        };
+        assert!(refuse.check(&v).is_err());
+        assert!(
+            refuse.check(&plain).is_ok(),
+            "the default trigger is never filtered"
+        );
+        let trusted = SettlementPolicy {
+            trusted_verifiers: vec!["bb".into()],
+            ..Default::default()
+        };
+        assert!(trusted.check(&v).is_err());
+        let trusted = SettlementPolicy {
+            trusted_verifiers: vec!["aa".into()],
+            ..Default::default()
+        };
+        assert!(trusted.check(&v).is_ok());
+    }
 }

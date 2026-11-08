@@ -9,6 +9,25 @@ ACN. It signs acts with its party's key, through the act schemas (§12), and run
 validator as everyone else. The reference binding today is `acn-mcp-shim` (T0, free calls) in
 `crates/nmesh-agent-bridge`. A binding may act for a requester as well as for a performer.
 
+## Settlement policy filters (CR-002)
+
+Which settlement triggers a party accepts is **local policy**, configured per binding; the
+protocol only checks that terms are a valid combination (Core.md §7, V-18). A binding filters
+incoming or outgoing terms on `settlement_trigger` and `settlement_verifier`, and on the mint's
+declared rail capabilities (Core.md §8.6), before it signs anything. Example policies:
+
+- **Zero-trust performer:** accept only `contingent` (once available).
+- **Cautious requester:** refuse `verifier` (and later `contingent`) unless the
+  `settlement_verifier` is in its trusted set.
+- **Default commercial:** accept `requester` below a value threshold; require `verifier` above it.
+
+In the reference bindings:
+
+| Binding | Side | Policy | Where |
+| --- | --- | --- | --- |
+| `nmesh-app` | requester | `SettlementPolicy { refuse_verifier, trusted_verifiers }`; checked before any money is locked; default accepts every valid combination | `crates/nmesh-app/src/lib.rs` |
+| `acn-mcp-shim` | performer | requester trigger only; anything else is declined `trigger_unsupported` | `crates/nmesh-agent-bridge/src/shim.rs` |
+
 ## Worked example: outcome-priced technical summary (CR-001)
 
 A requester commissions a 500-word technical summary of a document and pays only if two
