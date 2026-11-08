@@ -149,14 +149,82 @@ export interface JudgedView {
   runners: string[];
 }
 
+export type ConditionClass = "mechanical" | "grounding" | "judged" | "interpretive" | "human" | "open";
+
 export interface ConditionView {
   id: string;
-  class: "mechanical" | "grounding" | "judged" | "interpretive" | "human";
-  assurance: Assurance;
+  class: ConditionClass;
+  /** null for an `open` condition (CR-003). */
+  assurance: Assurance | null;
   description: string;
   status: ConditionStatus | null;
   evidence: Evidence[];
   judged: JudgedView | null;
+}
+
+// ---- CR-003: drafting, disqualifiers, the terms card ----
+
+export type DisqualifierStatus = "hit" | "clear" | "unchecked";
+
+export interface DisqualifierView {
+  id: string;
+  class: ConditionClass;
+  assurance: Assurance | null;
+  description: string;
+  status: DisqualifierStatus | null;
+  evidence: Evidence[];
+}
+
+export interface TermsVersionView {
+  version: number;
+  hash: string;
+  act: string;
+  drafted_by: string;
+  drafted_by_role: Role;
+  drafted_by_me: boolean;
+  prev: string | null;
+  in_force: boolean;
+  pending: boolean;
+}
+
+export interface TermsCard {
+  version: number;
+  hash: string;
+  drafted_by: string;
+  drafted_by_role: Role;
+  drafted_by_me: boolean;
+  assurance: Assurance | null;
+  done_means: {
+    id: string;
+    class: ConditionClass;
+    assurance: Assurance | null;
+    description: string;
+    suggested_class: ConditionClass | null;
+    check_ref: string | null;
+    rubric_ref: string | null;
+    rubric_text: string | null;
+  }[];
+  checked_by: { item: string; keys: string[]; requester: boolean; judges: string[]; rule: string | null }[];
+  pay_if: {
+    price_sat: number;
+    trigger: "requester" | "verifier" | "contingent";
+    settlement_verifier: string | null;
+    arbiter: string | null;
+    deadline: number;
+    review_window: number;
+    rework_limit: number;
+    fund_window: number | null;
+  };
+  disqualified_if: { id: string; class: ConditionClass; assurance: Assurance | null; description: string; window: string }[];
+  /** Why this version can't be promised or accepted yet. */
+  unclosed: string | null;
+}
+
+export interface DiffLine {
+  kind: "condition" | "disqualifier" | "field" | "time";
+  what: string;
+  before: string | null;
+  after: string | null;
 }
 
 export interface CounterView {
@@ -225,6 +293,11 @@ export interface Commitment {
   timeline: Entry[];
   report: ReportView | null;
   conditions: ConditionView[];
+  disqualifiers: DisqualifierView[];
+  versions: TermsVersionView[];
+  terms_card: TermsCard | null;
+  pending_card: TermsCard | null;
+  terms_diff: DiffLine[];
   counter: CounterView | null;
   settlement: SettlementView | null;
   anomalies: AnomalyView[];

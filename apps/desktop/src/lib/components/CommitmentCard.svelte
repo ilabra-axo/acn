@@ -2,6 +2,7 @@
   import type { Commitment, Entry, RendererHost } from "../types";
   import { store } from "../store.svelte";
   import Structured from "../renderers/Structured.svelte";
+  import TermsCard from "./TermsCard.svelte";
 
   let { commitment: c, host }: { commitment: Commitment; host: RendererHost } = $props();
 
@@ -69,7 +70,16 @@
   const flags = $derived(
     c.anomalies.filter((a) => a.severity === "flag" && !rejectedActs.some((e) => e.id === a.event)),
   );
-  const rejectable = $derived(c.conditions.length ? c.conditions : [{ id: "result", class: "human" as const, assurance: "human" as const, description: "The result", status: null, evidence: [], judged: null }]);
+  const rejectable = $derived([
+    ...(c.conditions.length ? c.conditions : [{ id: "result", class: "human" as const, assurance: "human" as const, description: "The result", status: null, evidence: [], judged: null }]),
+    // A hit disqualifier can be named in a REJECT (CR-003): breach, no rework.
+    ...c.disqualifiers.filter((d) => d.status === "hit").map((d) => ({ ...d, judged: null, status: null })),
+  ]);
+  // CR-003 §2.7: the terms card before PROMISE / ACCEPT (while negotiating) and SATISFY (in review).
+  const showTerms = $derived(
+    !!c.terms_card && !c.terminal && (c.phase === "requested" || c.phase === "countered" || c.phase === "reported" || c.phase === "offered" || !!c.pending_card),
+  );
+  const termsTitle = $derived(c.phase === "reported" || c.phase === "offered" ? "Before you satisfy: the terms" : "Terms in force");
 
   // Assurance (spec §7, §12): shown before PROMISE/ACCEPT and SATISFY, with judges named.
   const ASSURANCE: Record<string, string> = {
@@ -164,7 +174,13 @@
     {/if}
   </ol>
 
-  {#if c.counter}
+  {#if c.counter && c.pending_card}
+    <div class="panel counter">
+      <div class="ph">↔ Counter-offer from {c.counter.mine ? "you" : ROLE[c.counter.by]}</div>
+      <p class="reason">"{c.counter.reason}"</p>
+      <TermsCard card={c.pending_card} diff={c.terms_diff} title="Proposed terms" performer={performerName} />
+    </div>
+  {:else if c.counter}
     <div class="panel counter">
       <div class="ph">↔ Counter-offer from {c.counter.mine ? "you" : ROLE[c.counter.by]}</div>
       <p class="reason">"{c.counter.reason}"</p>
@@ -183,6 +199,10 @@
       </table>
       <div class="hash mono" title="Accepting binds you both to this hash (INV-4)">terms {c.counter.terms_hash.slice(0, 16)}…</div>
     </div>
+  {/if}
+
+  {#if showTerms && c.terms_card && !c.pending_card}
+    <TermsCard card={c.terms_card} diff={c.versions.length > 1 ? c.terms_diff : []} title={termsTitle} performer={performerName} />
   {/if}
 
   {#if c.result}
@@ -212,7 +232,7 @@
           </span>
           <span class="cid mono">{cond.id}</span>
           <span class="class">{cond.class}</span>
-          <span class="assurance" data-a={cond.assurance} title={ASSURANCE[cond.assurance]}>{cond.assurance}</span>
+          {#if cond.assurance}<span class="assurance" data-a={cond.assurance} title={ASSURANCE[cond.assurance]}>{cond.assurance}</span>{/if}
           <span class="desc muted">{cond.description}</span>
         </div>
         {#each cond.evidence as ev}
@@ -224,6 +244,34 @@
           </div>
         {/each}
       {/each}
+    </div>
+  {/if}
+
+  {#if c.disqualifiers.length && c.report}
+    <div class="panel conditions">
+      <div class="ph">Disqualifiers</div>
+      {#each c.disqualifiers as d}
+        <div class="cond">
+          <span class="badge" data-s={d.status === "hit" ? "fail" : d.status === "clear" ? "pass" : undefined}>
+            {d.status === "hit" ? "✗ hit" : d.status === "clear" ? "✓ clear" : "unchecked"}
+          </span>
+          <span class="cid mono">{d.id}</span>
+          <span class="class">{d.class}</span>
+          {#if d.assurance}<span class="assurance" data-a={d.assurance} title={ASSURANCE[d.assurance]}>{d.assurance}</span>{/if}
+          <span class="desc muted">{d.description}</span>
+        </div>
+        {#each d.evidence as ev}
+          <div class="ev" class:not-counted={!ev.counted}>
+            <span class="who">{ROLE[ev.role]}</span>
+            <span class="mono">{ev.act.toLowerCase()}</span>
+            <span>“{ev.verdict}”</span>
+            {#if ev.counted}<span class="counted">counted</span>{:else}<span class="nc" title={ev.why ?? ""}>not counted · {ev.why}</span>{/if}
+          </div>
+        {/each}
+      {/each}
+      {#if c.disqualifiers.some((d) => d.status === "hit")}
+        <div class="dq-hit">A disqualifier was hit: this is a breach of the stated terms, not a low score. Satisfying is blocked; rejecting it fails the commitment with no rework.</div>
+      {/if}
     </div>
   {/if}
 
@@ -409,6 +457,7 @@
   .settle[data-s="locked"] { border-color: var(--agent-border); }
   .pill.test { background: #dcfce7; color: #166534; }
   .depends { flex-basis: 100%; font-size: 11.5px; color: var(--muted); }
+  .dq-hit { font-size: 12px; color: var(--danger); }
   .depends.trust { color: var(--warn); }
   .token { font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: var(--sunken); }
   .token[data-t="redeemed"] { color: var(--ok); }

@@ -20,7 +20,7 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
 #[tokio::test]
 async fn every_scenario_plays_live() -> anyhow::Result<()> {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
-    // Thirteen scenarios in well under a minute: lift the default 60 notes/minute per connection.
+    // Fifteen scenarios in well under a minute: lift the default 60 notes/minute per connection.
     let relay = LocalRelay::new(RelayBuilder::default().rate_limit(RateLimit {
         max_reqs: 500,
         notes_per_minute: 6_000,
@@ -119,7 +119,7 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
             "silent" => Phase::Withdrawn,
             "rogue" => Phase::Declined,
             "judged" | "contingent" => Phase::Settled,
-            "injected" => Phase::Rejected,
+            "injected" | "disqualified" => Phase::Rejected,
             _ => Phase::Satisfied,
         };
         assert_eq!(view.phase, Some(expected), "{}", s.id);
@@ -191,6 +191,7 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
             ),
             "dispute" => assert_eq!(view.chain.last().map(|e| e.act), Some("RULING")),
             "injected" => assert!(codes.contains(&"injection_detected"), "{codes:?}"),
+            "disqualified" => assert!(codes.contains(&"disqualified"), "{codes:?}"),
             "contingent" => {
                 // Sealed until CLAIM revealed k; now the card shows the decrypted result.
                 let r = view.report.as_ref().expect("report");

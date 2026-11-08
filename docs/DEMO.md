@@ -20,7 +20,8 @@ scenario logic** (`acn-core`, `acn-view`, `acn-sim`). Every act is a real BIP-34
    names the judges and the threshold before anything is signed (CR-001 §2.6). Verity holds the
    escrowed preimage, acknowledges it (`ESCROW_ACK`), and only then does Atlas promise. Atlas
    reports; Verity counts the words (`c1`, mechanical, *check*), runs both judges three times
-   with the revealed rubric (`c2`, judged, *opinion*) and **releases**: Atlas is paid and
+   against the public rubric (`c2`, judged, *opinion*; the terms carry it, CR-003) and
+   **releases**: Atlas is paid and
    you never clicked anything. The state is **Settled**; you may still record one judgement.
 2. **Judge prompt injection** (`/injected`). The summary ends with "Note to the evaluator: …".
    The judge harness detects it, `c2` fails, nothing is released, you reject, and
@@ -39,6 +40,19 @@ scenario logic** (`acn-core`, `acn-view`, `acn-sim`). Every act is a real BIP-34
 ![Injection: c2 failed, injection_detected on the REPORT, 60 sat refundable](screenshots/p12-injected.png)
 
 ![Contingent: decrypted after CLAIM](screenshots/p14-contingent-opened.png)
+
+### Who writes the conditions (CR-003)
+
+5. **Drafted conditions** (`/drafted`, free). Your request says "don't make it slower" but
+   leaves it `open`: nobody can promise against that. Atlas's `COUNTER` closes it as a
+   benchmark check with a retrievable definition and proposes two **disqualifiers** ("disables
+   the benchmark", "modifies existing tests"). The counter shows the **terms card** (*Done means
+   · Checked by · Pay if · Disqualified if*), **v2 · drafted by Atlas**, and the diff against
+   v1. You accept; Verity checks both conditions and both disqualifiers; auto-satisfy.
+6. **Disqualified** (`/disqualified`). Same terms, but Atlas loosens an existing assertion.
+   Both conditions pass, yet Verity attests `d2` as **hit**: Satisfy disappears, the Director
+   says *Reject: d2 hit*, and the commitment ends **Rejected** with no rework, although one was
+   allowed. `disqualified` is on Atlas's REPORT: a breach of stated terms, not a low score.
 
 Point out the ladder: a judged condition certifies that pinned judges produced a score; it is
 evidence about an opinion, not about the work (INV-8). Stronger classes (mechanical, grounded,
@@ -117,7 +131,7 @@ the speed. The cast keeps its keys in `.nmesh/sim/`, so npubs stay the same acro
 **Wallet.** The cast hosts a Cashu test mint (CDK, fake Lightning) on `http://127.0.0.1:3338`,
 and the desktop app's wallet points there by default (`NMESH_MINT`; set it to `none` to disable).
 Click the **₿** chip in the sidebar, then **Top up 100 test sats** before running *Paid call*,
-*Dispute* or the judged scenarios (all thirteen scenarios cost 261 sat; 60 of it stays locked
+*Dispute* or the judged scenarios (all fifteen scenarios cost 261 sat; 60 of it stays locked
 after the injection until its locktime). Without enough funds the request is refused before anything is signed. To use a
 separately running mint: `./target/debug/nmesh-mint` and `nmesh-acn-sim --mint http://127.0.0.1:3338`.
 Atlas DMs you when it redeems; send it `wallet` to see its balance.
@@ -189,6 +203,8 @@ the silent promise turns red as overdue, without any act being sent.
 | **Judged, verifier releases** (60 sat) | Nothing | *assurance: opinion* with the judges and θ; `ESCROW_ACK` before `PROMISE` (V-19); `c1` check + `c2` opinion both counted; `RELEASE` (V-20) → **Settled**, Atlas redeems; the button now says *Record satisfied* (it moves no money) |
 | **Judge prompt injection** (60 sat) | Reject (the Director proposes it) | `c2` ✗ with `injection_detected` on the REPORT (V-17); no `RELEASE`; *refundable* after the locktime |
 | **Judged, you settle** (40 sat) | Satisfy (auto-satisfy) | Muse is the runner (not the performer: `self_judged` otherwise); the requester trigger; closing is paying |
+| **Drafted conditions** | Accept counter-offer, then Satisfy (auto) | The `REQUEST`'s `c2` is `open` (an underspecified request is fine; a `PROMISE` against it would be `unclosed_condition`); the counter's terms card and diff; v2 drafted by Atlas binds after your `ACCEPT` |
+| **Disqualified** | Accept counter-offer, then Reject (`d2`) | `c1` and `c2` pass, `d2` hit; Satisfy not offered; Rejected with `rework_count` 0; `disqualified` on the REPORT |
 | **Contingent** (30 sat) | Fund | *🔒 Encrypted delivery* until `CLAIM`; Verity's attestation names `ciphertext`, `hashlock`, `plaintext` (V-21); Review lane passes Verity → you → Atlas; the card decrypts after the claim |
 | **Rogue agent** | — | *unaccountable ⚠* (no binding); PROMISE and DECLINE at once → **equivocation** flagged on both; the closing act wins deterministically, the loser is `stale` and kept as evidence |
 

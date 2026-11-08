@@ -198,6 +198,25 @@ fn scenario_outcomes() {
     let p = run("silent");
     assert_eq!(p.phase, Some(Phase::Withdrawn));
 
+    // CR-003: Atlas's counter closes the open condition; the version in force is Atlas's.
+    let p = run("drafted");
+    assert_eq!(p.phase, Some(Phase::Satisfied), "{:?}", acts(&p));
+    assert_eq!(acts(&p)[..3], ["REQUEST", "COUNTER", "ACCEPT"]);
+    assert!(p
+        .disqualifiers
+        .iter()
+        .all(|d| d.status == Some(acn_core::DisqualifierStatus::Clear)));
+    let card = p.terms_card.as_ref().expect("terms card");
+    assert_eq!(
+        (card.version, card.drafted_by_role),
+        (2, acn_view::Role::Performer)
+    );
+    assert_eq!(p.versions.len(), 2);
+    let p = run("disqualified");
+    assert_eq!(p.phase, Some(Phase::Rejected), "{:?}", acts(&p));
+    assert!(codes(&p).contains(&"disqualified"));
+    assert_eq!(p.rework_count, 0, "breach: no rework");
+
     let p = run("rogue");
     assert_eq!(p.phase, Some(Phase::Declined));
     assert!(codes(&p).contains(&"equivocation"));
