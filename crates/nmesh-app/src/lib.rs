@@ -89,19 +89,35 @@ pub struct AppConfig {
 pub struct SettlementPolicy {
     /// Refuse terms that hand the release to a settlement verifier.
     pub refuse_verifier: bool,
-    /// When non-empty, accept the verifier trigger only with one of these settlement verifiers.
+    /// Refuse contingent settlement (pay against an attested, encrypted delivery).
+    pub refuse_contingent: bool,
+    /// When non-empty, accept the verifier and contingent triggers only with one of these
+    /// settlement verifiers.
     pub trusted_verifiers: Vec<String>,
+}
+
+/// Does a `K_SVC` declare `cap` for `mint` (Core.md §8.6)? Entries are `{url, capabilities}`.
+pub fn mint_has_capability(svc: &Value, mint: &str, cap: &str) -> bool {
+    svc["mints"].as_array().into_iter().flatten().any(|m| {
+        m["url"].as_str().map(|u| u.trim_end_matches('/')) == Some(mint.trim_end_matches('/'))
+            && m["capabilities"]
+                .as_array()
+                .is_some_and(|c| c.iter().any(|x| x == cap))
+    })
 }
 
 impl SettlementPolicy {
     fn check(&self, terms: &Value) -> Result<(), AppError> {
-        if terms["settlement_trigger"].as_str() != Some("verifier") {
+        let trigger = terms["settlement_trigger"].as_str().unwrap_or("requester");
+        if trigger == "requester" {
             return Ok(());
         }
-        if self.refuse_verifier {
-            return Err(AppError::Invalid(
-                "your settlement policy refuses the verifier trigger".into(),
-            ));
+        if (trigger == "verifier" && self.refuse_verifier)
+            || (trigger == "contingent" && self.refuse_contingent)
+        {
+            return Err(AppError::Invalid(format!(
+                "your settlement policy refuses the {trigger} trigger"
+            )));
         }
         let v = terms["settlement_verifier"].as_str().unwrap_or_default();
         if !self.trusted_verifiers.is_empty() && !self.trusted_verifiers.iter().any(|t| t == v) {
@@ -603,6 +619,19 @@ impl App {
         };
         // Requester-side settlement policy (Binding API policy filters, CR-002).
         self.inner.policy.check(&terms)?;
+        // Rail capability (Core.md §8.6): contingent needs a mint that reveals the preimage to
+        // the payer, as declared in the agent's K_SVC.
+        if terms["settlement_trigger"] == "contingent" {
+            let mint = terms["payment"]["mint"].as_str().unwrap_or_default();
+            let capable = svc
+                .as_ref()
+                .is_some_and(|s| mint_has_capability(s, mint, "reveals_preimage_to_payer"));
+            if !capable {
+                return Err(AppError::Invalid(format!(
+                    "rail_incapable: mint {mint} is not declared to reveal preimages to payers"
+                )));
+            }
+        }
         // Lock the price to the performer (Core.md §8.2 steps 1-2).
         let token = match (&secret, terms.get("payment").filter(|p| p.is_object())) {
             (Some(_), Some(pay)) if terms["price"]["amount"].as_u64().unwrap_or(0) > 0 => {
@@ -852,6 +881,54 @@ impl App {
         }
         self.inner.clock_offset.store(0, Ordering::Relaxed);
         self.persist().await;
+    }
+
+    /// Contingent settlement (Core.md §8.2): pay for an attested, encrypted delivery. Locks the
+    /// price to the REPORT's hashlock and signs `FUND`; the performer's redemption then reveals
+    /// the key (by `CLAIM`, and through the mint).
+    pub async fn fund(&self, pubkey: &str, commitment: &str) -> Result<CommitmentView, AppError> {
+        let pk = parse_pk(pubkey)?;
+        let conv = pk.to_hex();
+        let events = self.fold_input(&conv).await;
+        let out = acn_core::fold(&events, &BTreeMap::new());
+        let c = out
+            .commitments
+            .get(commitment)
+            .ok_or_else(|| AppError::Invalid("unknown commitment".into()))?;
+        let (Some(st), Some(terms)) = (&c.state, &c.terms) else {
+            return Err(AppError::Invalid("terms unavailable".into()));
+        };
+        let (acn_core::Phase::Offered, Some(h)) = (st.phase, st.offer_hashlock.as_deref()) else {
+            return Err(AppError::Invalid(
+                "nothing to fund: no encrypted delivery is offered".into(),
+            ));
+        };
+        let mint = terms
+            .payment
+            .as_ref()
+            .map(|p| p.mint.clone())
+            .unwrap_or_default();
+        let w = self.wallet_for(&mint)?;
+        let amount = terms.price.amount;
+        // The performer must claim before this; then the requester can refund. Real time: the
+        // mint enforces it, the presentation clock doesn't apply.
+        let locktime = Timestamp::now().as_secs() + terms.review_window + 24 * 3600;
+        let tok = w
+            .lock_htlc(amount, h, &c.performer, locktime, Some(commitment))
+            .await
+            .map_err(|e| AppError::Invalid(format!("wallet: {e}")))?;
+        let ct = self.inner.session.nip44_encrypt(&pk, &tok)?;
+        let parties = [c.requester.as_str(), c.performer.as_str()];
+        let draft = Draft::act(K_FUND, &c.id, &st.head, &parties).content(serde_json::json!({
+            "hashlock": h, "amount": amount, "mint": mint, "locktime": locktime, "token": ct
+        }));
+        let act = self.inner.session.sign_act(&draft, Some(st.head_at))?;
+        self.inner.session.send_act(pk, &act).await?;
+        self.on_act(&conv, act).await;
+        self.emit_wallet().await;
+        self.commitment(&conv, commitment)
+            .await
+            .ok_or_else(|| AppError::Invalid("unknown commitment".into()))
     }
 
     /// The scripted next step for the requester (presenter guidance), if any.
@@ -1243,5 +1320,41 @@ mod policy_tests {
             ..Default::default()
         };
         assert!(trusted.check(&v).is_ok());
+
+        let k = json!({"settlement_trigger": "contingent", "settlement_verifier": "aa"});
+        assert!(SettlementPolicy::default().check(&k).is_ok());
+        let refuse = SettlementPolicy {
+            refuse_contingent: true,
+            ..Default::default()
+        };
+        assert!(refuse.check(&k).is_err() && refuse.check(&v).is_ok());
+        assert!(
+            trusted.check(&k).is_ok(),
+            "the trusted set covers contingent too"
+        );
+    }
+
+    /// CR-002 S-10, as a binding check: contingent needs `reveals_preimage_to_payer`.
+    #[test]
+    fn rail_capability_is_read_from_the_service_advertisement() {
+        let svc = json!({"mints": [
+            {"url": "http://127.0.0.1:3338", "capabilities": ["hashlock", "reveals_preimage_to_payer"]},
+            {"url": "https://other", "capabilities": ["hashlock"]}
+        ]});
+        assert!(mint_has_capability(
+            &svc,
+            "http://127.0.0.1:3338/",
+            "reveals_preimage_to_payer"
+        ));
+        assert!(!mint_has_capability(
+            &svc,
+            "https://other",
+            "reveals_preimage_to_payer"
+        ));
+        assert!(!mint_has_capability(
+            &json!({"mints": ["https://legacy"]}),
+            "https://legacy",
+            "hashlock"
+        ));
     }
 }

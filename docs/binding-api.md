@@ -16,8 +16,8 @@ protocol only checks that terms are a valid combination (Core.md §7, V-18). A b
 incoming or outgoing terms on `settlement_trigger` and `settlement_verifier`, and on the mint's
 declared rail capabilities (Core.md §8.6), before it signs anything. Example policies:
 
-- **Zero-trust performer:** accept only `contingent` (once available).
-- **Cautious requester:** refuse `verifier` (and later `contingent`) unless the
+- **Zero-trust performer:** accept only `contingent`.
+- **Cautious requester:** refuse `verifier` and `contingent` unless the
   `settlement_verifier` is in its trusted set.
 - **Default commercial:** accept `requester` below a value threshold; require `verifier` above it.
 
@@ -25,7 +25,7 @@ In the reference bindings:
 
 | Binding | Side | Policy | Where |
 | --- | --- | --- | --- |
-| `nmesh-app` | requester | `SettlementPolicy { refuse_verifier, trusted_verifiers }`; checked before any money is locked; default accepts every valid combination | `crates/nmesh-app/src/lib.rs` |
+| `nmesh-app` | requester | `SettlementPolicy { refuse_verifier, refuse_contingent, trusted_verifiers }` (the trusted set covers both triggers); checked before any money is locked; default accepts every valid combination. Contingent also needs the agent's `K_SVC` to declare `reveals_preimage_to_payer` for the terms' mint, else `rail_incapable` (vector S-10) | `crates/nmesh-app/src/lib.rs` (`SettlementPolicy`, `mint_has_capability`) |
 | `acn-mcp-shim` | performer | requester trigger only; anything else is declined `trigger_unsupported` | `crates/nmesh-agent-bridge/src/shim.rs` |
 
 ## Worked example: outcome-priced technical summary (CR-001)

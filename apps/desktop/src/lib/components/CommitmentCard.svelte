@@ -19,7 +19,7 @@
   const PHASE: Record<string, string> = {
     requested: "Requested", countered: "Counter-offer", promised: "Promised", reported: "Reported",
     reworking: "Reworking", satisfied: "Satisfied", rejected: "Rejected", disputed: "Disputed",
-    declined: "Declined", withdrawn: "Withdrawn", revoked: "Revoked", settled: "Settled",
+    declined: "Declined", withdrawn: "Withdrawn", revoked: "Revoked", settled: "Settled", offered: "Offered (encrypted)", funded: "Funded",
   };
   const ROLE: Record<string, string> = {
     requester: "you", performer: "performer", arbiter: "arbiter", verifier: "verifier", governance: "gate", other: "other",
@@ -84,7 +84,7 @@
     return e.role === "requester" ? "you" : e.role === "performer" ? "perf" : "third";
   }
 
-  async function act(kind: "satisfy" | "reject" | "withdraw" | "accept_counter" | "dispute") {
+  async function act(kind: "satisfy" | "reject" | "withdraw" | "accept_counter" | "dispute" | "fund") {
     busy = true;
     await store.commitmentAct(kind, c.id, note, condition, c.conversation);
     busy = false;
@@ -211,7 +211,7 @@
     <div class="settle" data-s={c.settlement.status}>
       <span class="coin">₿</span>
       <span class="amt">{c.settlement.amount_sat} sat</span>
-      <span class="st">{c.settlement.status === "locked" ? "🔒 locked" : c.settlement.status === "paid" ? "✓ paid" : "↩ refundable"}</span>
+      <span class="st">{c.settlement.status === "locked" ? "🔒 locked" : c.settlement.status === "paid" ? "✓ paid" : c.settlement.status === "unfunded" ? "⧗ unfunded" : "↩ refundable"}</span>
       <span class="muted d">{c.settlement.detail}</span>
       {#if c.settlement.simulated}<span class="pill sim" title={c.settlement.mint}>simulated mint</span>
       {:else}<span class="pill test" title={c.settlement.mint}>test sats</span>{/if}
@@ -265,6 +265,7 @@
       {#if c.assurance && (c.allowed.accept_counter || c.allowed.satisfy)}
         <span class="assurance" data-a={c.assurance} title={ASSURANCE[c.assurance]}>assurance: {c.assurance}</span>
       {/if}
+      {#if c.allowed.fund}<button class="btn primary" onclick={() => act("fund")} disabled={busy} title="Lock the price to the reported hashlock; the performer's claim reveals the key">Fund {c.price_sat} sat</button>{/if}
       {#if c.allowed.accept_counter}<button class="btn primary" onclick={() => act("accept_counter")} disabled={busy}>Accept counter-offer</button>{/if}
       {#if c.allowed.satisfy}
         <button class="btn primary" onclick={() => act("satisfy")} disabled={busy}>{c.settlement ? "Satisfy & pay" : "Accept result"}</button>

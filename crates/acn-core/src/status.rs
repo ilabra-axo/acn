@@ -43,6 +43,11 @@ pub fn status_at(c: &Commitment, now: u64) -> Status {
         .conditions
         .values()
         .any(|s| *s == crate::fold::ConditionStatus::Fail);
+    // Contingent: the funding deadline, once every condition passed.
+    let passed = c
+        .passed_at
+        .zip(terms.fund_window)
+        .map(|(p, w)| p.saturating_add(w));
     let rejected_final = st.ruled
         || terms.arbiter.is_none()
         || st
@@ -80,6 +85,18 @@ pub fn status_at(c: &Commitment, now: u64) -> Status {
             Some(Party::Requester),
             st.report_at.map(|r| r.saturating_add(terms.review_window)),
         ),
+        // Contingent: the verifier attests; once everything passes, the requester funds within
+        // fund_window; once funded, the performer claims before the funding lock expires.
+        Phase::Offered if passed.is_some() => (Some(Party::Requester), passed),
+        Phase::Offered if failing => (
+            Some(Party::Requester),
+            st.report_at.map(|r| r.saturating_add(terms.review_window)),
+        ),
+        Phase::Offered => (
+            Some(Party::Verifier),
+            st.report_at.map(|r| r.saturating_add(terms.review_window)),
+        ),
+        Phase::Funded => (Some(Party::Performer), st.fund_locktime),
         Phase::Disputed => (Some(Party::Arbiter), None),
         Phase::Rejected if !terminal => (
             Some(Party::Performer),
@@ -103,6 +120,20 @@ pub fn status_at(c: &Commitment, now: u64) -> Status {
                 Party::Requester
             })
         }
+        // Unfunded passing offer: requester fault (it never got the key, so it gains nothing).
+        Phase::Offered if passed.is_some_and(|d| now > d) => Some(Party::Requester),
+        // No attestation in time: verifier fault.
+        Phase::Offered
+            if passed.is_none()
+                && !failing
+                && st
+                    .report_at
+                    .is_some_and(|r| now > r.saturating_add(terms.review_window)) =>
+        {
+            Some(Party::Verifier)
+        }
+        // Funded but never claimed: performer fault; the payment refunds at its locktime.
+        Phase::Funded if st.fund_locktime.is_some_and(|l| now > l) => Some(Party::Performer),
         _ => None,
     };
     Status {

@@ -166,6 +166,15 @@ async fn acn_withdraw(
 }
 
 #[tauri::command]
+async fn acn_fund(
+    app: State<'_, App>,
+    pubkey: String,
+    commitment: String,
+) -> Result<CommitmentView, AppError> {
+    app.fund(&pubkey, &commitment).await
+}
+
+#[tauri::command]
 async fn board(app: State<'_, App>, closed_limit: usize) -> Result<BoardView, AppError> {
     Ok(app.board(closed_limit).await)
 }
@@ -261,7 +270,8 @@ pub fn run() {
             wallet_top_up,
             wallet_refund,
             reset_demo,
-            board
+            board,
+            acn_fund
         ])
         .run(tauri::generate_context!())
         .expect("error while running nmesh");

@@ -294,8 +294,8 @@ fn envelope_errors() -> W {
     let mut d = d_report(&r, &r);
     d.tags[0] = vec!["v".into(), "acn/9.9".into()];
     w.add(d, &PERF, 1101);
-    // unknown_kind inside the block.
-    w.add(Draft::act(7715, &r.id, &r.id, &[]), &PERF, 1102);
+    // unknown_kind inside the block (7719 is unallocated).
+    w.add(Draft::act(7719, &r.id, &r.id, &[]), &PERF, 1102);
     // malformed: REJECT without gaps.
     w.add(
         act(K_REJECT, &r, &r).content(json!({"gaps": []})),
@@ -542,6 +542,16 @@ const ALL: &[Scenario] = &[
     ("S-8", common::settlement::s8),
     ("S-8b", common::settlement::s8b),
     ("S-8c", common::settlement::s8c),
+    // CR-002 Phase C: contingent settlement.
+    ("S-9", common::settlement::s9),
+    ("S-11", common::settlement::s11),
+    ("S-12", common::settlement::s12),
+    ("S-13", common::settlement::s13),
+    ("S-14", common::settlement::s14),
+    ("S-15", common::settlement::s15),
+    ("S-16", common::settlement::s16),
+    ("S-17", common::settlement::s17),
+    ("S-18", common::settlement::s18),
 ];
 
 // ---------- CR-001 vectors (spec §10 conformance table) ----------
@@ -776,12 +786,120 @@ fn cr002_verifier_trigger_vectors_under_every_arrival_order() {
     }
 }
 
+// e (contingent): REQUEST, PROMISE, REPORT(offer), then per vector.
+fn check_contingent(name: &str, w: &W, out: &acn_core::Output) {
+    let e = &w.events;
+    let req = &e[0];
+    let ctx = format!("{name}: {:?}", out.anomalies);
+    let has = |i: usize, code: Code| out.has(&e[i].id, code);
+    if name == "S-9" {
+        assert!(out.has(&req.id, Code::ContingentNondeterministic), "{ctx}");
+        assert!(!out.commitments.contains_key(&req.id), "{ctx}");
+        return;
+    }
+    let c = &out.commitments[&req.id];
+    let st = c.state.as_ref().unwrap();
+    let tests = c.conditions.get("tests");
+    match name {
+        // + ATTEST(pass), FUND, CLAIM
+        "S-11" => {
+            assert_eq!(st.phase, Phase::Settled, "{ctx}");
+            assert_eq!(
+                c.chain_kinds,
+                [K_REQUEST, K_PROMISE, K_REPORT, K_FUND, K_CLAIM],
+                "{ctx}"
+            );
+            assert!(
+                out.anomalies.iter().all(|a| a.code == Code::Unbound),
+                "{ctx}"
+            );
+            assert!(status_at(c, 99_999).terminal);
+        }
+        "S-12" => {
+            assert!(has(3, Code::AttestationMismatch), "{ctx}");
+            assert_eq!(tests, Some(&ConditionStatus::Unverified), "not counted");
+            assert_eq!(st.phase, Phase::Offered);
+        }
+        // + ATTEST, FUND, CLAIM(bad)
+        "S-13" => {
+            assert!(has(5, Code::BadKey), "{ctx}");
+            assert_eq!(st.phase, Phase::Funded, "{ctx}");
+        }
+        "S-14" => {
+            assert_eq!(st.phase, Phase::Offered);
+            assert_eq!(c.passed_at, Some(1250));
+            let before = status_at(c, 1500);
+            assert_eq!(
+                (before.awaiting, before.lapsed),
+                (Some(Party::Requester), None)
+            );
+            let after = status_at(c, 1250 + 300 + 1);
+            assert_eq!(after.lapsed, Some(Party::Requester), "requester fault");
+        }
+        // + FUND (no attestation)
+        "S-15" => {
+            assert!(has(3, Code::PrematureFund), "{ctx}");
+            assert_eq!(st.phase, Phase::Funded, "valid, flagged");
+        }
+        // + ATTEST, FUND(wrong H)
+        "S-16" => {
+            assert!(has(4, Code::FundMismatch), "{ctx}");
+            assert_eq!(st.phase, Phase::Offered, "{ctx}");
+        }
+        "S-17" => {
+            assert_eq!(st.phase, Phase::Funded);
+            assert_eq!(status_at(c, 4000).awaiting, Some(Party::Performer));
+            assert_eq!(
+                status_at(c, 5001).lapsed,
+                Some(Party::Performer),
+                "performer fault"
+            );
+        }
+        // + ATTEST, SATISFY(illegal), REJECT(illegal)
+        "S-18" => {
+            assert!(
+                has(4, Code::IllegalTransition) && has(5, Code::IllegalTransition),
+                "{ctx}"
+            );
+            assert_eq!(st.phase, Phase::Offered);
+        }
+        other => panic!("no expectation for {other}"),
+    }
+}
+
+const CONTINGENT: &[Scenario] = &[
+    ("S-9", common::settlement::s9),
+    ("S-11", common::settlement::s11),
+    ("S-12", common::settlement::s12),
+    ("S-13", common::settlement::s13),
+    ("S-14", common::settlement::s14),
+    ("S-15", common::settlement::s15),
+    ("S-16", common::settlement::s16),
+    ("S-17", common::settlement::s17),
+    ("S-18", common::settlement::s18),
+];
+
+/// CR-002 §4.3 Phase C: every contingent vector's expected outcome, under every arrival order.
+#[test]
+fn cr002_contingent_vectors_under_every_arrival_order() {
+    for (name, build) in CONTINGENT {
+        let w = build();
+        for order in orders(w.events.len()) {
+            let shuffled: Vec<_> = order.iter().map(|&i| w.events[i].clone()).collect();
+            check_contingent(name, &w, &acn_core::fold(&shuffled, &w.docs));
+        }
+    }
+}
+
 /// The other invalid combinations, and the version gate for the new fields.
 #[test]
 fn cr002_settlement_combinations() {
     use common::settlement::verifier_terms;
     let parse = |t: serde_json::Value| acn_core::Terms::parse(&t).unwrap();
     assert!(parse(verifier_terms(1, |_| {})).settlement_combo().is_ok());
+    assert!(parse(common::settlement::contingent_terms(1, |_| {}))
+        .settlement_combo()
+        .is_ok());
     for (why, t) in [
         (
             "no verifier",
@@ -804,8 +922,16 @@ fn cr002_settlement_combinations() {
             verifier_terms(1, |t| t["conditions"] = json!([])),
         ),
         (
-            "contingent",
+            "contingent with a hashlock in the terms",
             verifier_terms(1, |t| t["settlement_trigger"] = json!("contingent")),
+        ),
+        (
+            "contingent without fund_window",
+            common::settlement::contingent_terms(1, |t| t["fund_window"] = json!(null)),
+        ),
+        (
+            "contingent with an unlisted verifier",
+            common::settlement::contingent_terms(1, |t| t["verifiers"] = json!([])),
         ),
         (
             "requester + verifier key",

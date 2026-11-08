@@ -84,7 +84,7 @@ export interface Contact {
 
 export type Phase =
   | "requested" | "countered" | "promised" | "reported" | "reworking"
-  | "satisfied" | "rejected" | "disputed" | "declined" | "withdrawn" | "revoked" | "settled";
+  | "satisfied" | "rejected" | "disputed" | "declined" | "withdrawn" | "revoked" | "settled" | "offered" | "funded";
 
 export type Party = "requester" | "performer" | "arbiter" | "verifier";
 export type Role = "requester" | "performer" | "arbiter" | "verifier" | "governance" | "other";
@@ -172,7 +172,7 @@ export interface SettlementView {
   amount_sat: number;
   mint: string;
   simulated: boolean;
-  status: "locked" | "paid" | "refundable";
+  status: "locked" | "paid" | "refundable" | "unfunded";
   detail: string;
   locktime: number | null;
 }
@@ -192,6 +192,8 @@ export interface Allowed {
   withdraw: boolean;
   accept_counter: boolean;
   dispute: boolean;
+  /** Contingent: pay against the reported hashlock (CR-002). */
+  fund: boolean;
 }
 
 export interface Commitment {

@@ -34,7 +34,7 @@
       return { cls: p === "satisfied" || p === "settled" ? "ok" : "end", text: ruled ? `Ruled · ${p}` : p[0].toUpperCase() + p.slice(1) };
     }
     if (c.needs_me) {
-      const what = c.lane === "review" ? "satisfy or reject" : c.lane === "negotiating" ? "accept or counter" : c.lane === "dispute" ? "respond" : "act";
+      const what = c.allowed.fund ? "fund to receive the key" : c.lane === "review" ? "satisfy or reject" : c.lane === "negotiating" ? "accept or counter" : c.lane === "dispute" ? "respond" : "act";
       return { cls: "me", text: `Your move · ${what}` };
     }
     if (c.pending_endorsement) return { cls: "wait", text: "Reported · waiting for a governance sign-off" };
@@ -71,6 +71,7 @@
       locked: { cls: "locked", text: `🔒 ${n} sat` },
       paid: { cls: "paid", text: `✓ ${n} sat` },
       refundable: { cls: "back", text: `↩ ${n} sat refundable` },
+      unfunded: { cls: "locked", text: `⧗ ${n} sat to fund` },
     }[c.settlement.status];
   });
 

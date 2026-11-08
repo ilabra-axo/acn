@@ -49,6 +49,12 @@ pub enum Code {
     InvalidSettlementCombo,
     MissingEscrowAck,
     BadRelease,
+    // Contingent settlement (CR-002 Phase C).
+    ContingentNondeterministic,
+    AttestationMismatch,
+    FundMismatch,
+    PrematureFund,
+    BadKey,
 }
 
 impl Code {
@@ -84,6 +90,11 @@ impl Code {
         Code::InvalidSettlementCombo,
         Code::MissingEscrowAck,
         Code::BadRelease,
+        Code::ContingentNondeterministic,
+        Code::AttestationMismatch,
+        Code::FundMismatch,
+        Code::PrematureFund,
+        Code::BadKey,
     ];
 
     pub fn severity(self) -> Severity {
@@ -100,7 +111,9 @@ impl Code {
             | JudgeMismatch
             | RubricMismatch
             | InjectionDetected
-            | BelowThreshold => Severity::Flag,
+            | BelowThreshold
+            | AttestationMismatch
+            | PrematureFund => Severity::Flag,
             _ => Severity::Reject,
         }
     }
@@ -139,6 +152,11 @@ impl Code {
             InvalidSettlementCombo => "invalid_settlement_combo",
             MissingEscrowAck => "missing_escrow_ack",
             BadRelease => "bad_release",
+            ContingentNondeterministic => "contingent_nondeterministic",
+            AttestationMismatch => "attestation_mismatch",
+            FundMismatch => "fund_mismatch",
+            PrematureFund => "premature_fund",
+            BadKey => "bad_key",
         }
     }
 }

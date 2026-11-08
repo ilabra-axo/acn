@@ -122,6 +122,8 @@ pub enum SettlementStatus {
     Paid,
     /// Closed without satisfaction: the requester reclaims after `locktime`.
     Refundable,
+    /// Contingent: an encrypted deliverable is offered; nothing is locked until FUND.
+    Unfunded,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -141,6 +143,8 @@ pub struct Allowed {
     pub withdraw: bool,
     pub accept_counter: bool,
     pub dispute: bool,
+    /// Contingent: pay against the REPORT's hashlock (CR-002).
+    pub fund: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -400,6 +404,8 @@ fn summary(e: &Event) -> String {
         K_ENDORSE => format!("Endorsed ({} gate)", tag(e, "endorser").unwrap_or("?")),
         K_ESCROW_ACK => "Escrowed secret checked against the hashlock".to_string(),
         K_RELEASE => "Released the preimage: every condition passed".to_string(),
+        K_FUND => format!("Funded {} sat against the reported hashlock", v["amount"]),
+        K_CLAIM => "Claimed the payment: the key to the deliverable is revealed".to_string(),
         _ => name(e.kind).to_string(),
     }
 }
@@ -595,10 +601,24 @@ fn one(
             return None;
         }
         let ruled = c.chain_kinds.last() == Some(&K_RULING);
+        let contingent = t.settlement_trigger == acn_core::terms::SettlementTrigger::Contingent;
         let (status, detail) = match phase {
+            Some(Phase::Settled) if contingent => (
+                SettlementStatus::Paid,
+                "The performer claimed the payment, which revealed the key to the deliverable"
+                    .to_string(),
+            ),
             Some(Phase::Settled) => (
                 SettlementStatus::Paid,
                 "The settlement verifier released the preimage; the performer redeems".to_string(),
+            ),
+            Some(Phase::Offered) => (
+                SettlementStatus::Unfunded,
+                "Encrypted delivery offered: fund it to receive the key".to_string(),
+            ),
+            Some(Phase::Funded) => (
+                SettlementStatus::Locked,
+                "Locked to the reported hashlock: claiming it reveals the key".to_string(),
             ),
             Some(Phase::Satisfied) if ruled => (
                 SettlementStatus::Paid,
@@ -624,15 +644,21 @@ fn one(
             simulated: pay.mint.starts_with("sim:"),
             status,
             detail,
-            locktime: pay.locktime,
+            locktime: pay.locktime.or(st.and_then(|s| s.fund_locktime)),
         })
     });
 
     let is_party = mine || c.performer == me;
     let disputable =
         phase == Some(Phase::Reported) || (phase == Some(Phase::Rejected) && !status.terminal);
-    let verifier_trigger =
-        terms.is_some_and(|t| t.settlement_trigger == acn_core::terms::SettlementTrigger::Verifier);
+    let trigger = terms.map(|t| t.settlement_trigger).unwrap_or_default();
+    let contingent = trigger == acn_core::terms::SettlementTrigger::Contingent;
+    let verifier_trigger = trigger == acn_core::terms::SettlementTrigger::Verifier || contingent;
+    let review_phase = if contingent {
+        Phase::Offered
+    } else {
+        Phase::Reported
+    };
     let judged = st.is_some_and(|s| s.judged);
     let failing = c.conditions.values().any(|s| *s == ConditionStatus::Fail);
     let after_release = phase == Some(Phase::Settled) && !judged;
@@ -647,7 +673,7 @@ fn one(
             },
         reject: mine
             && if verifier_trigger {
-                after_release || (phase == Some(Phase::Reported) && failing)
+                after_release || (phase == Some(review_phase) && failing)
             } else {
                 phase == Some(Phase::Reported)
             },
@@ -661,6 +687,7 @@ fn one(
             && c.profile == Profile::N
             && terms.is_some_and(|t| t.arbiter.is_some())
             && disputable,
+        fund: mine && contingent && phase == Some(Phase::Offered),
     };
 
     let anomalies = out
@@ -684,7 +711,7 @@ fn one(
         Some(Phase::Countered) => Lane::Negotiating,
         Some(Phase::Promised) if counter.is_some() => Lane::Negotiating,
         Some(Phase::Promised | Phase::Reworking) => Lane::InProgress,
-        Some(Phase::Reported) => Lane::Review,
+        Some(Phase::Reported | Phase::Offered | Phase::Funded) => Lane::Review,
         Some(Phase::Rejected | Phase::Disputed) => Lane::Dispute,
         _ => Lane::Requested,
     };
