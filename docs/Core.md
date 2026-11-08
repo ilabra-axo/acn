@@ -900,6 +900,26 @@ From CR-001 (the `judged` condition class; its OD-1…OD-6):
 - [ ] **D-19 Rationale disclosure (CR-001 OD-6).** Whether judge rationales are published by hash
   only or made available to the performer as diagnostics.
 
+From CR-002 (settlement triggers; its OD-1…OD-7):
+
+- [ ] **D-20 Zero-knowledge fulfillment proofs (CR-002 OD-1).** Proof system and zkVM choice, and
+  which predicate classes are practical to prove; this removes the verifier from `contingent`.
+- [ ] **D-21 Requester bond for contingent (CR-002 OD-2).** Whether requesters post a small bond,
+  forfeited on an unfunded passing offer, to compensate performer effort.
+- [ ] **D-22 Verifier with encrypted delivery (CR-002 OD-3).** Whether the `verifier` trigger
+  should also keep the deliverable encrypted until paid, with the verifier holding both secrets.
+- [x] **D-23 Staged contingent delivery (CR-002 OD-4).** Closed: commitments are atomic (§1); a
+  staged job is a sequence of commitments, each of which can be contingent.
+- [ ] **D-24 Verifier payment (CR-002 OD-5).** Whether the settlement verifier is paid through its
+  own ACN commitment with the requester or through a fee embedded in the terms.
+- [ ] **D-25 Lightning (CR-002 OD-6).** Which Lightning integration to use; none exists in the
+  repo, so Cashu is the only rail for now (§8.6).
+- [ ] **D-26 Cashu outcome (CR-002 OD-7).** The spike's recorded result
+  (`docs/acn/spikes/cashu-preimage-visibility.md`) and the resulting capability rule.
+- [ ] **D-27 Arbiter escrow acknowledgement.** §8.4 asks the arbiter to acknowledge the escrowed
+  secret, but validators don't enforce it, so commitments from before CR-002 keep their meaning.
+  Decide whether to enforce `K_ESCROW_ACK` for arbiters too (e.g. from a future terms version).
+
 ## 15. Implementation phases and acceptance criteria
 
 Each phase is gated by acceptance criteria that a coding agent can test mechanically.
