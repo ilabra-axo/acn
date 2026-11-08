@@ -1,6 +1,6 @@
 //! Provisional kind block (spec §5.1, open decision D-1). Code MUST use these names, never literals.
 
-pub const VERSION: &str = "acn/0.2";
+pub const VERSION: &str = "acn/0.3";
 
 pub const K_REQUEST: u16 = 7700;
 pub const K_COUNTER: u16 = 7701;

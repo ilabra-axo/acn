@@ -636,6 +636,15 @@ fn cr001_judged_vectors_under_every_arrival_order() {
     }
 }
 
+/// `judged` needs acn-terms/0.3; 0.2 documents without it still parse.
+#[test]
+fn cr001_judged_requires_terms_0_3() {
+    let judged = common::judged::judged_terms(|t| t["v"] = json!("acn-terms/0.2"));
+    assert!(acn_core::Terms::parse(&judged).is_err());
+    assert!(acn_core::Terms::parse(&terms(|t| t["v"] = json!("acn-terms/0.2"))).is_ok());
+    assert!(acn_core::Terms::parse(&terms(|t| t["v"] = json!("acn-terms/9.9"))).is_err());
+}
+
 /// The validator rejects a judged condition satisfied by an interpretive report, by a
 /// performer-run judge, or by a mismatched judge fingerprint (CR-001 "done when").
 #[test]

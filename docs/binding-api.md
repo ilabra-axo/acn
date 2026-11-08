@@ -23,7 +23,7 @@ Price 2,000 sat; deadline 1 hour; review window 30 minutes. Overall assurance: *
 
 ```json
 {
-  "v": "acn-terms/0.2",
+  "v": "acn-terms/0.3",
   "deliverable": {"description": "500-word technical summary of <document hash>"},
   "conditions": [
     {"id": "c1", "class": "mechanical", "description": "plain text, at most 500 words"},

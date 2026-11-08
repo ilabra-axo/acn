@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const TERMS_VERSION: &str = "acn-terms/0.2";
+pub const TERMS_VERSION: &str = "acn-terms/0.3";
+/// Still parsed (no `judged` conditions); CR-001 introduced 0.3.
+pub const TERMS_VERSION_0_2: &str = "acn-terms/0.2";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Terms {
@@ -268,8 +270,15 @@ pub enum GovernedParty {
 impl Terms {
     pub fn parse(v: &Value) -> Result<Self, String> {
         let t: Terms = serde_json::from_value(v.clone()).map_err(|e| e.to_string())?;
-        if !t.v.starts_with("acn-terms/") {
+        if t.v != TERMS_VERSION && t.v != TERMS_VERSION_0_2 {
             return Err(format!("unsupported terms version `{}`", t.v));
+        }
+        if t.v == TERMS_VERSION_0_2
+            && t.conditions
+                .iter()
+                .any(|c| c.class == ConditionClass::Judged)
+        {
+            return Err("`judged` conditions need acn-terms/0.3".into());
         }
         let mut ids: Vec<&str> = t.conditions.iter().map(|c| c.id.as_str()).collect();
         ids.sort_unstable();

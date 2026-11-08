@@ -1,7 +1,8 @@
-# Agent Commitments over Nostr — Logical Design Spec v0.2
+# Agent Commitments over Nostr — Logical Design Spec v0.3
 
-Nov 7, 2026 · @ivan Labra · v0.2 revision aligned with current NIPs/NUTs and the nmesh prototype.
-Amended by CR-001 (the `judged` condition class), see [Appendix B](#appendix-b-change-requests-after-v02).
+Nov 8, 2026 · @ivan Labra · v0.3 = v0.2 (aligned with current NIPs/NUTs and the nmesh prototype)
+plus CR-001, the `judged` condition class ([Appendix B](#appendix-b-change-requests-after-v02)).
+Wire versions: `acn/0.3`, `acn-terms/0.3`.
 v0.1 is preserved at [Core-v0.1.md](Core-v0.1.md); see the [change log](#appendix-a-change-log-v01--v02).
 
 ## 1. Purpose and scope
@@ -179,7 +180,7 @@ geocaching 7516–7517). Code MUST reference symbolic names.
 | `x` | 0+ | sha256 of referenced artifacts. |
 | `parent` | 0–1 | Parent commitment id (subcontracting). |
 | `profile` | 1 on request | `T0`, `T1` or `N`. |
-| `v` | 1 | Protocol version, `acn/0.2`. |
+| `v` | 1 | Protocol version, `acn/0.3`. Validators reject other versions (`bad_version`). |
 
 ### 5.3 Content
 
@@ -341,7 +342,7 @@ Otherwise they are stored on Blossom and supplied to the validator as a document
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `v` | string | Terms schema version (`acn-terms/0.2`) |
+| `v` | string | Terms schema version (`acn-terms/0.3`; `acn-terms/0.2` documents still parse, without `judged` conditions) |
 | `deliverable` | object | `description`; optional `output_schema` hash, `output_contract` id, `tool` name, `input` arguments |
 | `conditions` | array | Conditions of satisfaction; each has `id`, `class` (`mechanical`, `grounding`, `judged`, `interpretive`, `human`), and class-specific fields |
 | `deadline` | unix s | Latest `REPORT` time |
@@ -377,7 +378,7 @@ INV-8 is enforced.
   | `threshold` | number | θ; pass when the aggregate score ≥ θ. MUST lie within `scale` |
   | `aggregation` | enum | `all` (every judge ≥ θ), `mean`, or `median` (across judges) |
   | `repeats` | integer, ≥ 1 | Runs per judge; the per-judge score is the median of its runs (non-determinism control) |
-  | `runners` | pubkeys, ≥ 1 | Keys allowed to run the judges and sign the attestation. MUST NOT include the performer |
+  | `runners` | pubkeys, ≥ 1 | Keys allowed to run the judges and sign the attestation: the requester (its binding) or a third party. MUST NOT include the performer |
   | `audit` | object or null | `rate` (0–1), `auditors[]` pubkeys, `window` seconds |
   | `holdback` | object or null | `fraction` (0–1) of the price released only after the audit window. *Parsed and displayed; its settlement (§8.5) is pending, see Appendix B* |
 
@@ -589,7 +590,8 @@ list). Every rule failure produces an anomaly with a code and a severity:
 16. **V-16 Rejection grounding (new).** A `REJECT` gap that names a `mechanical` condition with a
     passing attestation from a listed verifier, and no failing one, is flagged
     `contradicted_rejection` (flag). The rejection still applies (INV-5); the contradiction is
-    visible.
+    visible. `judged` conditions are deliberately not covered: a judged pass is an opinion, so
+    rejecting it contradicts no check (CR-001).
 
 17. **V-17 Judged evidence (new, CR-001).** A `K_ATTEST_JUDGED` counts toward its `judged`
     condition only if every check below passes. Each failure records its own anomaly; all are
@@ -847,4 +849,4 @@ invent patterns. Kind numbers and tag letters are symbolic until D-1 closes.
 
 | CR | Date | Sections | Change | Status |
 |---|---|---|---|---|
-| CR-001 `judged` condition class | 2026-11-08 | INV-8, §3, §5.1, §6.2, §7, §8.2, §8.5, §9, §10 (V-11, V-17, vectors), §12, §13, §14 (D-14…D-19), §15 | New condition class `judged` with derived assurance labels; `K_ATTEST_JUDGED` (7725); V-11 amended; new V-17 with codes `self_judged`, `judge_mismatch`, `rubric_mismatch`, `injection_detected`, `below_threshold`; INV-8 clarified (judged attestations are evidence about an opinion and satisfy only `judged`); client display of assurance; auto-satisfy by the requester's binding; five threat rows; open decisions D-14…D-19; worked example in [binding-api.md](binding-api.md) | Applied, except the §2.4 **holdback** (two tokens, condition-scoped `SATISFY` after closure, audit attestation; vectors J-9, J-10): held for confirmation because it changes INV-6 ("closing and paying are one signed act") and the §6.2 state machine (`SATISFY` is legal only from `Reported`) |
+| CR-001 `judged` condition class | 2026-11-08 | INV-8, §3, §5.1, §6.2, §7, §8.2, §8.5, §9, §10 (V-11, V-17, vectors), §12, §13, §14 (D-14…D-19), §15 | New condition class `judged` with derived assurance labels; `K_ATTEST_JUDGED` (7725); V-11 amended; new V-17 with codes `self_judged`, `judge_mismatch`, `rubric_mismatch`, `injection_detected`, `below_threshold`; INV-8 clarified (judged attestations are evidence about an opinion and satisfy only `judged`); client display of assurance; auto-satisfy by the requester's binding; five threat rows; open decisions D-14…D-19; worked example in [binding-api.md](binding-api.md) | Applied (wire versions bumped to `acn/0.3` and `acn-terms/0.3`; `judged` requires terms 0.3; 0.2 terms still parse), except the §2.4 **holdback** (two tokens, condition-scoped `SATISFY` after closure, audit attestation; vectors J-9, J-10): held for confirmation because it changes INV-6 ("closing and paying are one signed act") and the §6.2 state machine (`SATISFY` is legal only from `Reported`) |
