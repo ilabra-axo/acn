@@ -338,11 +338,11 @@ only against a failing attestation, and `SATISFY` is not legal. From Funded, the
 | `PROGRESS` | performer | Promised, Reworking (annotating) | unchanged | `{p_on_time?, note?}` |
 | `REPORT` | performer | Promised, Reworking; Requested in T0/T1 | Reported (Offered under `contingent`) | `x` tags for artifacts; `{result?: <inline JSON ≤16 KiB>, contract?: <id>, derivation?: <hash>, note?}`; under `contingent` also `{ciphertext, hashlock, sealed?: <NIP-44 v2 payload>}` (§8.2) |
 | `SATISFY` | requester (by hand, or automatically by its binding under a pre-set policy, §8.2) | Reported (requester trigger); Settled (judgement, once) | Satisfied; unchanged after Settled | `{preimage?: <hex>}`; required when the terms carry a hashlock and the trigger is `requester` |
-| `REJECT` | requester | Reported (under `verifier`: only with a failing attestation); Settled (judgement, once) | Reworking, or Rejected at the rework limit (always Rejected in T0/T1); unchanged after Settled | `{gaps: [{condition, evidence: [..], note?}]}`, non-empty; conditions must exist in terms |
+| `REJECT` | requester | Reported (under `verifier`: only with a failing attestation or a disqualifier hit); Settled (judgement, once) | Reworking, or Rejected at the rework limit (always Rejected in T0/T1, and when it names a hit disqualifier, CR-003); unchanged after Settled | `{gaps: [{condition, evidence: [..], note?}]}`, non-empty; conditions must exist in terms |
 | `DISPUTE` | either | Reported; Rejected (if disputable) | Disputed | `{reason, evidence?: [..]}`; terms must name an arbiter |
 | `RULING` | arbiter | Disputed | Satisfied or Rejected (final) | `{decision: "performer"\|"requester", rationale?: <hash>, preimage?: <hex>}` |
 | `K_ESCROW_ACK` | settlement verifier (or arbiter) | annotating; any time | unchanged; under `verifier`, enables promising | `c` tag; `{hashlock}`: the `H` the escrowed secret was checked against |
-| `RELEASE` | settlement verifier | Reported (`verifier` trigger) | Settled (terminal) | `{preimage, attestations?: [ids]}`; every condition passing (V-20) |
+| `RELEASE` | settlement verifier | Reported (`verifier` trigger) | Settled (terminal) | `{preimage, attestations?: [ids]}`; every condition passing, no disqualifier hit (V-20) |
 | `FUND` | requester | Offered (`contingent`) | Funded | `{hashlock, amount, mint, locktime, token: <NIP-44 ciphertext to performer>}`; bound to the `REPORT`'s `H` (V-22) |
 | `CLAIM` | performer | Funded (`contingent`) | Settled (terminal) | `{key: <hex k>}`; `sha256(k) = H` (V-23) |
 
@@ -415,6 +415,7 @@ Otherwise they are stored on Blossom and supplied to the validator as a document
 | `settlement_trigger` | enum | Who can release payment: `requester` (default), `verifier`, or `contingent` (§8.2; CR-002) |
 | `settlement_verifier` | pubkey | Required with `verifier`: holds the escrowed secret and releases it on pass |
 | `fund_window` | seconds | `contingent` only: time the requester has to fund after a passing attestation |
+| `disqualifiers` | array | From 0.5: public predicates whose attested hit fails the commitment (CR-003; below) |
 
 **Condition classes.** The class decides which evidence can satisfy a condition. This is where
 INV-8 is enforced.
@@ -458,6 +459,38 @@ INV-8 is enforced.
 - **`interpretive`:** quality judgement (rubric). Interpretive reports MAY inform it, but the
   requester always judges it in the end.
 - **`human`:** the requester's own judgement, expressed by `SATISFY` or `REJECT`.
+
+**Disqualifiers (CR-003, 0.5).** A disqualifier is a public predicate about the deliverable or
+the way it was produced, e.g. "modifies or deletes existing tests". When attested as hit, the
+commitment fails regardless of how its conditions scored. The performer accepted it as a term,
+so a hit is breach, not a quality dispute. Fields: `id` (unique across conditions and
+disqualifiers), `description` (the disqualifying act), `class` (`mechanical` or `judged`),
+`window` (`until_satisfy`), `runners` (the keys allowed to attest it), and for `judged` the
+judged fields above.
+
+- **Attestation.** With the attestation kind of its class, `cond` = the disqualifier id, and
+  `result` = `hit` or `clear`. For a `judged` disqualifier the pinned judges score whether the act
+  happened: an aggregate at or above θ is a `hit`, and so is a detected injection. Only the
+  disqualifier's `runners` count (V-25).
+- **Window.** `until_satisfy`: an attestation after the act that settles the `REPORT`
+  (`SATISFY`, `RELEASE`, `CLAIM` or a performer-side `RULING`) is `late` and not counted.
+- **Effects of a counted hit.** `disqualified` is recorded on the performer's `REPORT`. The
+  requester MUST NOT `SATISFY`, and auto-satisfy is blocked (§8.2). Under `verifier`, `RELEASE` is
+  invalid (V-20). A `REJECT` is legal under every trigger (as with a failing attestation), and a
+  `REJECT` naming the hit disqualifier moves straight to **Rejected**, with no rework: a breach is
+  not repaired by trying again. `status_at` treats a hit as failing: nobody is obliged to release,
+  fund or satisfy.
+- **Withholding without a hit** (on an attested `clear`, or no attestation) is a requester fault,
+  as for any review lapse (§6.5). A `REJECT` naming a disqualifier with no counted hit still applies
+  (INV-5) but is flagged `unsupported_disqualification` on the requester.
+- **Assurance.** Each disqualifier has its own derived label (from its class), shown beside the
+  commitment's. Disqualifiers don't enter the overall label, which describes how satisfaction is
+  established. Reputation projections SHOULD weigh `disqualified` as breach and `below_threshold`
+  as a quality miss.
+
+Not yet: `human` disqualifiers (no declaration kind exists, D-30), `grounding` or `interpretive`
+ones (D-29), `until_audit_end` (needs a holdback, which acn-terms doesn't have, D-31), and
+`instances` (CR-003 Phase B).
 
 **Assurance labels.** Every condition carries a derived assurance label: `check`
 (`mechanical`), `grounded` (`grounding`), `opinion` (`judged` and `interpretive`), `human`
@@ -561,7 +594,8 @@ the deliverable. Settlement and delivery are one atomic swap at the mint.
 condition is met (for example, `c1` passes mechanically and `c2` passes as judged). The
 `SATISFY` is signed with the requester's key and remains the requester's act (INV-5): the
 policy is the requester's pre-commitment, not a transfer of closure. Validators neither can nor
-need to tell an automatic `SATISFY` from a manual one.
+need to tell an automatic `SATISFY` from a manual one. A counted disqualifier hit blocks
+auto-satisfy (CR-003): the binding rejects naming the disqualifier instead.
 
 ### 8.3 T0
 
@@ -641,7 +675,9 @@ execution log), `started`/`ended` (advisory).
 **Attestation kinds** (annotating). Signed by verifier keys. Tags: `c`; `["e", <REPORT id>, "",
 "report"]`; `["cond", <condition id>]`; `x` subject hashes.
 
-- **`K_ATTEST_MECH`:** `{result: "pass"|"fail", method, recipe?, env?}`. Under `contingent`, also
+- **`K_ATTEST_MECH`:** `{result: "pass"|"fail", method, recipe?, env?}`; `result` is
+  `"hit"|"clear"` when `cond` names a disqualifier (CR-003; also for `K_ATTEST_GROUND` and
+  `K_ATTEST_JUDGED`). Under `contingent`, also
   `ciphertext`, `hashlock` and `plaintext` (V-21).
 - **`K_ATTEST_GROUND`:** `{result, referent: {source, hash}, method}`.
 - **`K_ATTEST_JUDGED`:** signed by a runner key listed in the condition's `runners`. Content:
@@ -759,8 +795,9 @@ list). Every rule failure produces an anomaly with a code and a severity:
     the hashlock of the terms it promises. `missing_escrow_ack` (reject). An acknowledgement from
     anyone but a settlement verifier or arbiter of the commitment is `unauthorized`.
 20. **V-20 Release (new, CR-002).** `RELEASE` is signed by the `settlement_verifier`, its preimage
-    hashes to `H`, and every condition passes against the current `REPORT` by the evidence rules
-    (V-11, V-17), whoever attested. `bad_release` (reject).
+    hashes to `H`, every condition passes against the current `REPORT` by the evidence rules
+    (V-11, V-17), whoever attested, and no disqualifier has a counted hit (CR-003). `bad_release`
+    (reject).
 
 21. **V-21 Contingent attestation (new, CR-002).** Under `contingent`, an attestation names the
     `REPORT`'s `ciphertext` and `hashlock` exactly, and a `plaintext` hash. `attestation_mismatch`
@@ -776,6 +813,14 @@ list). Every rule failure produces an anomaly with a code and a severity:
     `check_hash` without `check_ref` (0.5). `hidden_criteria` (reject; on a `REQUEST`, no
     commitment). Whether a reference actually resolves is I/O, left to clients and bindings, like
     V-12.
+25. **V-25 Disqualifiers (new, CR-003).** An attestation naming a disqualifier counts only if it
+    has the disqualifier's class, is signed by one of its `runners` (never the performer), says
+    `hit` or `clear` (for `judged`, as recomputed by V-17, with hit = aggregate ≥ θ or injection),
+    and comes before the act that settles the `REPORT`. An unnamed signer is
+    `unsupported_disqualification` (flag, on the signer's attestation; not counted); a late one is
+    `late` (not counted). A counted hit records `disqualified` on the `REPORT` (flag). A `REJECT`
+    gap naming a disqualifier without a counted hit is `unsupported_disqualification` (flag, on
+    the `REJECT`). Effects on `SATISFY`, `REJECT` and `RELEASE`: §7 "Disqualifiers".
 
 V-18 also covers the contingent constraint that every condition is `mechanical`:
 `contingent_nondeterministic` (reject; on a `REQUEST`, no commitment).
@@ -851,6 +896,13 @@ permutation.
 | C-2 | `judged` condition without `rubric_ref` | `REQUEST` rejected; `hidden_criteria` |
 | C-2b | A check named by `check_hash` without `check_ref` | `REQUEST` rejected; `hidden_criteria` |
 | C-2c | Inline `rubric_text` that doesn't hash to `rubric_hash` | `REQUEST` rejected; `malformed` (inconsistent, not hidden) |
+| C-6 | Conditions pass; mechanical disqualifier hit before `SATISFY`; requester rejects naming it | `disqualified` on the `REPORT`; auto-satisfy blocked (binding); Rejected with rework still available (breach path) |
+| C-6b | `verifier` trigger; conditions pass; disqualifier hit | `RELEASE` not applied (`bad_release`); `REJECT` legal; Rejected |
+| C-6c | Hit attested after `SATISFY` | Not counted; `late`; no `disqualified` |
+| C-6j | `judged` disqualifier; judges score ≥ θ | Counted as `hit`; `disqualified` |
+| C-7 | Hit signed by an unnamed key; requester withholds | Hit not counted; `unsupported_disqualification`; requester fault once the review window lapses |
+| C-7b | As C-7; requester rejects naming the disqualifier | `REJECT` applies (Reworking); `unsupported_disqualification` on it |
+| C-8 | `until_audit_end` disqualifier | Resolved by decision: terms don't parse (`malformed`; no holdback exists, D-31). The CR's expectation (main settlement stands, holdback refunds) waits for D-31 |
 
 ## 11. Bindings, governance and reputation
 

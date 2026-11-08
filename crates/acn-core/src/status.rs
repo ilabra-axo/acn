@@ -39,13 +39,16 @@ pub fn status_at(c: &Commitment, now: u64) -> Status {
     };
     let now_i = now as i64;
     let verifier = terms.settlement_trigger == crate::terms::SettlementTrigger::Verifier;
-    let failing = c
-        .conditions
-        .values()
-        .any(|s| *s == crate::fold::ConditionStatus::Fail);
-    // Contingent: the funding deadline, once every condition passed.
+    // A disqualifier hit counts as failing: the move is the requester's (REJECT), and nobody is
+    // obliged to release, fund or satisfy (CR-003 §2.2).
+    let failing = c.disqualified()
+        || c.conditions
+            .values()
+            .any(|s| *s == crate::fold::ConditionStatus::Fail);
+    // Contingent: the funding deadline, once every condition passed (and nothing was hit).
     let passed = c
         .passed_at
+        .filter(|_| !c.disqualified())
         .zip(terms.fund_window)
         .map(|(p, w)| p.saturating_add(w));
     let rejected_final = st.ruled

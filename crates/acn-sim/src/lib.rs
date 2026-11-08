@@ -1213,6 +1213,7 @@ pub fn requester_hint(events: &[Event], commitment: &str, now: u64) -> Option<Hi
 
     if status.terminal {
         let narration = match st.phase {
+            Phase::Rejected if c.disqualified() => "Rejected for breach: a disqualifier was attested as hit, so the commitment failed however its conditions scored. `disqualified` is on Atlas's REPORT, distinct from a low score.",
             Phase::Settled if scenario == "contingent" => "Settled: Atlas redeemed with its key, which the mint now reveals to you, and published CLAIM. The card shows the decrypted module.",
             Phase::Settled => "Settled: Verity released the secret when both judges passed and Atlas redeemed. You never had to say yes; you can still record a judgement.",
             Phase::Rejected if scenario == "injected" => "Rejected: nothing was released, your 60 sat refund after the locktime, and the injection attempt is on record against Atlas's REPORT.",
@@ -1230,6 +1231,20 @@ pub fn requester_hint(events: &[Event], commitment: &str, now: u64) -> Option<Hi
     }
     let pass = |cond: &str| c.conditions.get(cond) == Some(&acn_core::ConditionStatus::Pass);
     let failed = |cond: &str| c.conditions.get(cond) == Some(&acn_core::ConditionStatus::Fail);
+    // CR-003 §2.2: a counted disqualifier hit blocks auto-satisfy in every binding; the
+    // requester rejects naming it, and the commitment fails outright (breach, no rework).
+    if let (Some((id, _)), Phase::Reported | Phase::Offered) = (
+        c.disqualifiers
+            .iter()
+            .find(|(_, s)| **s == acn_core::DisqualifierStatus::Hit),
+        st.phase,
+    ) {
+        return hint(
+            HintAction::Reject { condition: id.clone(), note: "Disqualifier attested as hit".into() },
+            &format!("Reject: {id} hit"),
+            &format!("Disqualifier {id} was attested as hit, so auto-satisfy is blocked even though the conditions passed. Reject naming {id}: a breach of stated terms fails the commitment, with no rework."),
+        );
+    }
     match (scenario, st.phase) {
         ("judged" | "injected", Phase::Requested) => {
             return hint(HintAction::Wait, "Waiting…", "Your 60 sat are locked, and the secret that releases them is escrowed with Verity. Atlas waits for Verity's acknowledgement before promising.");

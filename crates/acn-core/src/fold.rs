@@ -15,7 +15,13 @@ use crate::binding::{BindingStatus, Bindings};
 use crate::event::Event;
 use crate::jcs;
 use crate::kinds::*;
-use crate::terms::{Assurance, ConditionClass, GovernedParty, SettlementTrigger, Terms};
+use crate::terms::{
+    Assurance, ConditionClass, Disqualifier, DisqualifierStatus, GovernedParty, SettlementTrigger,
+    Terms,
+};
+
+/// (REPORT id, condition or disqualifier id) -> counted verdicts with their attestation ids.
+type EvidenceMap = BTreeMap<(String, String), Vec<(String, String)>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Profile {
@@ -119,6 +125,17 @@ pub struct Commitment {
     /// When every condition of the current REPORT passed: the latest of each condition's
     /// earliest counted passing attestation. Starts the contingent `fund_window`.
     pub passed_at: Option<u64>,
+    /// Status of each disqualifier against the current REPORT (CR-003 §2.2).
+    pub disqualifiers: BTreeMap<String, DisqualifierStatus>,
+}
+
+impl Commitment {
+    /// A counted `hit` on any disqualifier of the current REPORT: the commitment failed (breach).
+    pub fn disqualified(&self) -> bool {
+        self.disqualifiers
+            .values()
+            .any(|s| *s == DisqualifierStatus::Hit)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -350,6 +367,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
             conditions: BTreeMap::new(),
             assurance: None,
             passed_at: None,
+            disqualifiers: BTreeMap::new(),
             performer_binding: BindingStatus::Unbound,
             report: None,
         };
@@ -593,7 +611,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
         }
 
         // Annotating acts.
-        let mut evidence: BTreeMap<(String, String), Vec<(String, String)>> = BTreeMap::new();
+        let mut evidence: EvidenceMap = BTreeMap::new();
         for p in self.members.iter() {
             match p.kind() {
                 K_PROGRESS => self.progress(acc, &run, &snapshots, p, &mut commitment),
@@ -617,9 +635,30 @@ impl<'a, 'e> Ctx<'a, 'e> {
             }
         }
 
+        // Disqualifier hits are breach, recorded on the performer's REPORT (CR-003 §2.2).
+        for ((report, id), list) in &evidence {
+            let disq = snapshots
+                .get(report)
+                .and_then(|s| run.terms.get(&s.terms))
+                .is_some_and(|t| t.disqualifier(id).is_some());
+            if disq && list.iter().any(|(r, _)| r == "hit") {
+                acc.push(
+                    report,
+                    Code::Disqualified,
+                    format!("disqualifier `{id}` attested as hit"),
+                );
+            }
+        }
+
         // Condition status for the current report.
         let terms_now = run.terms.get(&st.terms).cloned().unwrap_or(root);
         if let Some(report) = &st.report {
+            for d in &terms_now.disqualifiers {
+                let ev = evidence.get(&(report.clone(), d.id.clone()));
+                commitment
+                    .disqualifiers
+                    .insert(d.id.clone(), disqualifier_status(ev));
+            }
             for cond in &terms_now.conditions {
                 let ev = evidence.get(&(report.clone(), cond.id.clone()));
                 commitment
@@ -742,7 +781,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
         run: &Run,
         snaps: &BTreeMap<String, State>,
         p: &Parsed,
-        evidence: &mut BTreeMap<(String, String), Vec<(String, String)>>,
+        evidence: &mut EvidenceMap,
     ) {
         let report = p.ev.e_marked("report")[0];
         let cond = p.ev.single("cond").unwrap_or_default();
@@ -766,11 +805,16 @@ impl<'a, 'e> Ctx<'a, 'e> {
             return;
         };
         let Some(condition) = t.condition(cond) else {
-            acc.push(
-                p.id(),
-                Code::Malformed,
-                format!("unknown condition `{cond}`"),
-            );
+            match t.disqualifier(cond) {
+                Some(d) => {
+                    self.disqualifier_attestation(acc, run, snaps, (snap, t), d, p, evidence)
+                }
+                None => acc.push(
+                    p.id(),
+                    Code::Malformed,
+                    format!("unknown condition or disqualifier `{cond}`"),
+                ),
+            }
             return;
         };
         let kind_class = match p.kind() {
@@ -792,7 +836,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
             return;
         }
         if condition.class == ConditionClass::Judged {
-            let Some(verdict) = self.judged_evidence(acc, run, condition, report, p) else {
+            let Some(verdict) = self.judged_evidence(acc, run, condition, report, p, false) else {
                 return;
             };
             let list = evidence
@@ -810,24 +854,18 @@ impl<'a, 'e> Ctx<'a, 'e> {
             );
             return;
         }
-        // Contingent: the verifier attests the plaintext behind the reported ciphertext, so the
-        // attestation must name the REPORT's ciphertext hash and hashlock exactly.
-        if t.settlement_trigger == SettlementTrigger::Contingent {
-            let same = |f: &str, want: &Option<String>| {
-                p.str_field(f).map(str::to_ascii_lowercase) == *want
-            };
-            let plaintext = p.str_field("plaintext").is_some_and(is_sha256_hex);
-            if !same("ciphertext", &snap.ciphertext)
-                || !same("hashlock", &snap.offer_hashlock)
-                || !plaintext
-            {
-                acc.push(
-                    p.id(),
-                    Code::AttestationMismatch,
-                    "a contingent attestation must name the REPORT's ciphertext and hashlock, and the plaintext hash",
-                );
-                return;
-            }
+        if !contingent_bound(acc, t, snap, p) {
+            return;
+        }
+        if matches!(p.kind(), K_ATTEST_MECH | K_ATTEST_GROUND)
+            && !matches!(p.str_field("result"), Some("pass" | "fail"))
+        {
+            acc.push(
+                p.id(),
+                Code::Malformed,
+                format!("`{cond}` is a condition: its attestation's result is `pass` or `fail`"),
+            );
+            return;
         }
         let verdict = p
             .str_field("result")
@@ -841,8 +879,101 @@ impl<'a, 'e> Ctx<'a, 'e> {
         list.sort();
     }
 
-    /// V-17 for one `K_ATTEST_JUDGED`. Returns the verdict it counts as (`pass` / `fail`), or
-    /// `None` if it doesn't count. Every failed check records its own anomaly.
+    /// An attestation on a disqualifier (CR-003 §2.2): only the keys it names count, it must say
+    /// `hit` or `clear`, and under `until_satisfy` it must come before the settling act.
+    #[allow(clippy::too_many_arguments)]
+    fn disqualifier_attestation(
+        &self,
+        acc: &mut Acc,
+        run: &Run,
+        snaps: &BTreeMap<String, State>,
+        (snap, t): (&State, &Terms),
+        d: &Disqualifier,
+        p: &Parsed,
+        evidence: &mut EvidenceMap,
+    ) {
+        let report = snap.report.as_deref().unwrap_or_default();
+        let kind_class = match p.kind() {
+            K_ATTEST_MECH => ConditionClass::Mechanical,
+            K_ATTEST_GROUND => ConditionClass::Grounding,
+            K_ATTEST_JUDGED => ConditionClass::Judged,
+            _ => ConditionClass::Interpretive,
+        };
+        if kind_class != d.class {
+            acc.push(
+                p.id(),
+                Code::WrongEvidenceClass,
+                format!(
+                    "{} cannot attest a {:?} disqualifier",
+                    name(p.kind()),
+                    d.class
+                ),
+            );
+            return;
+        }
+        let signer = p.ev.pubkey.as_str();
+        let listed = d.runners().iter().any(|r| r == signer);
+        if signer == run.performer && d.class == ConditionClass::Judged {
+            // V-17.1 reports it (`self_judged`).
+        } else if !listed || signer == run.performer {
+            acc.push(
+                p.id(),
+                Code::UnsupportedDisqualification,
+                format!("signer is not named in disqualifier `{}`", d.id),
+            );
+            return;
+        }
+        // until_satisfy: the window closes with the act that settles this REPORT.
+        let closed = snaps
+            .values()
+            .filter(|s| s.report.as_deref() == Some(report))
+            .filter(|s| matches!(s.phase, Phase::Satisfied | Phase::Settled))
+            .map(|s| s.head_at)
+            .min();
+        if closed.is_some_and(|c| p.at() > c) {
+            acc.push(
+                p.id(),
+                Code::Late,
+                format!(
+                    "disqualifier `{}` attested after the commitment settled (until_satisfy)",
+                    d.id
+                ),
+            );
+            return;
+        }
+        if !contingent_bound(acc, t, snap, p) {
+            return;
+        }
+        let verdict = if d.class == ConditionClass::Judged {
+            match self.judged_evidence(acc, run, &d.as_condition(), report, p, true) {
+                Some(v) => v,
+                None => return,
+            }
+        } else {
+            match p.str_field("result") {
+                Some("hit") => "hit",
+                Some("clear") => "clear",
+                _ => {
+                    acc.push(
+                        p.id(),
+                        Code::Malformed,
+                        "a disqualifier attestation's result is `hit` or `clear`",
+                    );
+                    return;
+                }
+            }
+        };
+        let list = evidence
+            .entry((report.to_string(), d.id.clone()))
+            .or_default();
+        list.push((verdict.to_string(), p.id().to_string()));
+        list.sort();
+    }
+
+    /// V-17 for one `K_ATTEST_JUDGED`. Returns the verdict it counts as (`pass` / `fail`; for a
+    /// disqualifier `hit` / `clear`), or `None` if it doesn't count. Every failed check records
+    /// its own anomaly. For a judged disqualifier (CR-003) the judges score whether the act
+    /// happened: at or above θ is a `hit`, and so is a detected injection.
     fn judged_evidence(
         &self,
         acc: &mut Acc,
@@ -850,6 +981,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
         condition: &crate::terms::Condition,
         report: &str,
         p: &Parsed,
+        disqualifier: bool,
     ) -> Option<&'static str> {
         // Terms parse only with consistent judged fields (Terms::parse).
         let j = condition.judged().ok()?;
@@ -945,10 +1077,15 @@ impl<'a, 'e> Ctx<'a, 'e> {
         };
         let injected = p.content["injection_detected"] == true;
         let pass = aggregate >= j.threshold && !injected;
+        let hit = aggregate >= j.threshold || injected;
+        let verdict = match (disqualifier, pass, hit) {
+            (false, true, _) => "pass",
+            (false, false, _) => "fail",
+            (true, _, true) => "hit",
+            (true, _, false) => "clear",
+        };
         let declared = p.content["aggregate_score"].as_f64().unwrap_or(f64::NAN);
-        if (declared - aggregate).abs() > 1e-9
-            || p.str_field("result") != Some(if pass { "pass" } else { "fail" })
-        {
+        if (declared - aggregate).abs() > 1e-9 || p.str_field("result") != Some(verdict) {
             acc.push(
                 p.id(),
                 Code::Malformed,
@@ -968,15 +1105,15 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 ),
             );
         }
-        // 6. Threshold under the declared aggregation.
-        if aggregate < j.threshold {
+        // 6. Threshold under the declared aggregation (a low score on a disqualifier is `clear`).
+        if aggregate < j.threshold && !disqualifier {
             acc.push(
                 p.id(),
                 Code::BelowThreshold,
                 format!("aggregate {aggregate} < threshold {}", j.threshold),
             );
         }
-        Some(if pass { "pass" } else { "fail" })
+        Some(verdict)
     }
 
     /// Under the verifier trigger, nothing becomes promised before the escrow is acknowledged.
@@ -992,11 +1129,14 @@ impl<'a, 'e> Ctx<'a, 'e> {
         Ok(())
     }
 
-    /// REJECT gaps must name conditions of the terms.
+    /// REJECT gaps must name conditions (or disqualifiers) of the terms.
     fn check_gaps(&self, terms: &Terms, k: &Parsed) -> Result<(), (Code, String)> {
         for gap in k.content["gaps"].as_array().into_iter().flatten() {
             let cond = gap["condition"].as_str().unwrap_or_default();
-            if terms.condition(cond).is_none() && cond != "artifact_unavailable" {
+            if terms.condition(cond).is_none()
+                && terms.disqualifier(cond).is_none()
+                && cond != "artifact_unavailable"
+            {
                 return Err((
                     Code::Malformed,
                     format!("gap names unknown condition `{cond}`"),
@@ -1027,8 +1167,30 @@ impl<'a, 'e> Ctx<'a, 'e> {
         terms: &Terms,
         st: &State,
     ) -> BTreeMap<String, ConditionStatus> {
+        self.verdicts_at(run, terms, st).0
+    }
+
+    /// Disqualifiers with a counted `hit` against the REPORT at `st`.
+    fn hits_at(&self, run: &Run, terms: &Terms, st: &State) -> BTreeSet<String> {
+        self.verdicts_at(run, terms, st)
+            .1
+            .into_iter()
+            .filter(|(_, s)| *s == DisqualifierStatus::Hit)
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    fn verdicts_at(
+        &self,
+        run: &Run,
+        terms: &Terms,
+        st: &State,
+    ) -> (
+        BTreeMap<String, ConditionStatus>,
+        BTreeMap<String, DisqualifierStatus>,
+    ) {
         let Some(report) = st.report.clone() else {
-            return BTreeMap::new();
+            return Default::default();
         };
         let snaps = BTreeMap::from([(report.clone(), st.clone())]);
         let mut scratch = Acc::default();
@@ -1041,14 +1203,59 @@ impl<'a, 'e> Ctx<'a, 'e> {
         }) {
             self.attestation(&mut scratch, run, &snaps, p, &mut evidence);
         }
-        terms
+        let conditions = terms
             .conditions
             .iter()
             .map(|c| {
                 let ev = evidence.get(&(report.clone(), c.id.clone()));
                 (c.id.clone(), condition_status(c.class, ev))
             })
-            .collect()
+            .collect();
+        let disqualifiers = terms
+            .disqualifiers
+            .iter()
+            .map(|d| {
+                let ev = evidence.get(&(report.clone(), d.id.clone()));
+                (d.id.clone(), disqualifier_status(ev))
+            })
+            .collect();
+        (conditions, disqualifiers)
+    }
+
+    /// A REJECT's gaps against the disqualifiers: whether one names a counted hit (the
+    /// commitment fails outright, CR-003 §2.2), and a flag for each gap naming a disqualifier
+    /// without one (a pretextual disqualification, recorded on the requester).
+    fn reject_disqualifiers(
+        &self,
+        run: &Run,
+        terms: &Terms,
+        st: &State,
+        k: &Parsed,
+        flags: &mut Flags,
+    ) -> bool {
+        let named: Vec<&str> = k.content["gaps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|g| g["condition"].as_str())
+            .filter(|c| terms.disqualifier(c).is_some())
+            .collect();
+        if named.is_empty() {
+            return false;
+        }
+        let hits = self.hits_at(run, terms, st);
+        let mut breach = false;
+        for d in named {
+            if hits.contains(d) {
+                breach = true;
+            } else {
+                flags.push((
+                    Code::UnsupportedDisqualification,
+                    format!("REJECT names disqualifier `{d}`, which has no counted hit"),
+                ));
+            }
+        }
+        breach
     }
 
     /// V-15, V-5, V-6, V-9, V-10, V-8 for one candidate act at the current head.
@@ -1244,6 +1451,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 }
                 if kind == K_REJECT {
                     self.check_gaps(terms, k)?;
+                    self.reject_disqualifiers(run, terms, st, k, &mut flags);
                 }
                 next.judged = true;
             }
@@ -1259,23 +1467,25 @@ impl<'a, 'e> Ctx<'a, 'e> {
                         "the designated trigger settles (RELEASE or CLAIM); SATISFY is a judgement after it".into(),
                     ));
                 }
-                // REJECT for rework only against a failing attestation, so a requester can't
-                // pre-empt the settlement of work that passes.
+                // REJECT for rework only against a failing attestation or a disqualifier hit, so
+                // a requester can't pre-empt the settlement of work that passes.
                 self.check_gaps(terms, k)?;
                 let failing = self
                     .conditions_at(run, terms, st)
                     .values()
                     .any(|s| *s == ConditionStatus::Fail);
-                if !failing {
+                let hit = !self.hits_at(run, terms, st).is_empty();
+                if !failing && !hit {
                     return Err((
                         Code::IllegalTransition,
-                        "before settlement, REJECT needs a failing attestation".into(),
+                        "before settlement, REJECT needs a failing attestation or a disqualifier hit".into(),
                     ));
                 }
                 if late_review(terms, st, k) {
                     flags.push((Code::Late, "REJECT after the review window".into()));
                 }
-                if n && st.rework_count < terms.rework_limit {
+                let breach = self.reject_disqualifiers(run, terms, st, k, &mut flags);
+                if n && !breach && st.rework_count < terms.rework_limit {
                     next.rework_count += 1;
                     next.phase = Reworking;
                 } else {
@@ -1360,6 +1570,12 @@ impl<'a, 'e> Ctx<'a, 'e> {
                         format!("condition `{c}` has not passed ({s:?})"),
                     ));
                 }
+                if let Some(d) = self.hits_at(run, terms, st).into_iter().next() {
+                    return Err((
+                        Code::BadRelease,
+                        format!("disqualifier `{d}` was attested as hit"),
+                    ));
+                }
                 next.phase = Settled;
             }
             K_SATISFY => {
@@ -1386,7 +1602,9 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 if late_review(terms, st, k) {
                     flags.push((Code::Late, "REJECT after the review window".into()));
                 }
-                if n && st.rework_count < terms.rework_limit {
+                // A REJECT naming a hit disqualifier fails the commitment: breach, no rework.
+                let breach = self.reject_disqualifiers(run, terms, st, k, &mut flags);
+                if n && !breach && st.rework_count < terms.rework_limit {
                     next.rework_count += 1;
                     next.phase = Reworking;
                 } else {
@@ -1449,6 +1667,37 @@ impl<'a, 'e> Ctx<'a, 'e> {
 
 fn is_sha256_hex(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Contingent (V-21): an attestation names the REPORT's ciphertext, hashlock and plaintext hash.
+/// Records `attestation_mismatch` and returns false otherwise.
+fn contingent_bound(acc: &mut Acc, t: &Terms, snap: &State, p: &Parsed) -> bool {
+    if t.settlement_trigger != SettlementTrigger::Contingent {
+        return true;
+    }
+    let same =
+        |f: &str, want: &Option<String>| p.str_field(f).map(str::to_ascii_lowercase) == *want;
+    let plaintext = p.str_field("plaintext").is_some_and(is_sha256_hex);
+    if !same("ciphertext", &snap.ciphertext)
+        || !same("hashlock", &snap.offer_hashlock)
+        || !plaintext
+    {
+        acc.push(
+            p.id(),
+            Code::AttestationMismatch,
+            "a contingent attestation must name the REPORT's ciphertext and hashlock, and the plaintext hash",
+        );
+        return false;
+    }
+    true
+}
+
+fn disqualifier_status(ev: Option<&Vec<(String, String)>>) -> DisqualifierStatus {
+    match ev {
+        Some(v) if v.iter().any(|(r, _)| r == "hit") => DisqualifierStatus::Hit,
+        Some(v) if v.iter().any(|(r, _)| r == "clear") => DisqualifierStatus::Clear,
+        _ => DisqualifierStatus::Unchecked,
+    }
 }
 
 fn condition_status(class: ConditionClass, ev: Option<&Vec<(String, String)>>) -> ConditionStatus {

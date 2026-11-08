@@ -69,9 +69,10 @@ fn judged_content(c: &Value) -> Result<(), String> {
     if c.get("aggregate_score").and_then(Value::as_f64).is_none() {
         return Err("`aggregate_score` must be a number".into());
     }
+    // `hit` / `clear` for a judged disqualifier (CR-003); which one applies is checked in the fold.
     match c.get("result").and_then(Value::as_str) {
-        Some("pass" | "fail") => {}
-        _ => return Err("attestation result must be `pass` or `fail`".into()),
+        Some("pass" | "fail" | "hit" | "clear") => {}
+        _ => return Err("attestation result must be `pass`, `fail`, `hit` or `clear`".into()),
     }
     if !c
         .get("rubric_text_hash")
@@ -265,9 +266,10 @@ pub fn parse(ev: &Event) -> R<Option<Parsed<'_>>> {
                 }
             }
         }
+        // `hit` / `clear` attest a disqualifier (CR-003); the fold checks which applies.
         K_ATTEST_MECH | K_ATTEST_GROUND => match content.get("result").and_then(Value::as_str) {
-            Some("pass" | "fail") => {}
-            _ => return malformed("attestation result must be `pass` or `fail`"),
+            Some("pass" | "fail" | "hit" | "clear") => {}
+            _ => return malformed("attestation result must be `pass`, `fail`, `hit` or `clear`"),
         },
         K_INTERP_REPORT => need("verdict")?,
         K_RELEASE => need("preimage")?,

@@ -59,6 +59,8 @@ pub enum Code {
     BadKey,
     // Conditions-of-satisfaction authorship (CR-003).
     HiddenCriteria,
+    Disqualified,
+    UnsupportedDisqualification,
 }
 
 impl Code {
@@ -101,6 +103,8 @@ impl Code {
         Code::PrematureFund,
         Code::BadKey,
         Code::HiddenCriteria,
+        Code::Disqualified,
+        Code::UnsupportedDisqualification,
     ];
 
     pub fn severity(self) -> Severity {
@@ -119,6 +123,8 @@ impl Code {
             | InjectionDetected
             | BelowThreshold
             | OverruledJudgement
+            | Disqualified
+            | UnsupportedDisqualification
             | AttestationMismatch
             | PrematureFund => Severity::Flag,
             _ => Severity::Reject,
@@ -166,6 +172,8 @@ impl Code {
             PrematureFund => "premature_fund",
             BadKey => "bad_key",
             HiddenCriteria => "hidden_criteria",
+            Disqualified => "disqualified",
+            UnsupportedDisqualification => "unsupported_disqualification",
         }
     }
 }

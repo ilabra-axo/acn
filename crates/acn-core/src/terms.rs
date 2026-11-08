@@ -47,6 +47,109 @@ pub struct Terms {
     /// Seconds the requester has to fund after a passing attestation (`contingent`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fund_window: Option<u64>,
+    /// Public predicates whose attested hit fails the commitment (CR-003 §2.2; 0.5).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disqualifiers: Vec<Disqualifier>,
+}
+
+/// A disqualifier (spec §7, CR-003 §2.2): an act the performer agreed not to commit. An attested
+/// `hit` is breach, distinct from a condition that scored low.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Disqualifier {
+    pub id: String,
+    /// `mechanical` or `judged` (human and grounding disqualifiers are open decisions).
+    pub class: ConditionClass,
+    #[serde(default)]
+    pub description: String,
+    pub window: DisqualifierWindow,
+    /// Class fields: `runners` (keys allowed to attest it) and, for `judged`, the judged fields.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DisqualifierWindow {
+    /// Checked until the requester's SATISFY (or the trigger's release).
+    UntilSatisfy,
+    /// Needs a holdback, which acn-terms doesn't have (CR-001 dropped it): rejected for now.
+    UntilAuditEnd,
+}
+
+/// What an attestation says about a disqualifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DisqualifierStatus {
+    /// A counted attestation found the act.
+    Hit,
+    /// Counted attestations found nothing.
+    Clear,
+    /// No counted attestation yet.
+    Unchecked,
+}
+
+impl Disqualifier {
+    /// The same fields read as a condition of its class (for the judged fields and checks).
+    pub fn as_condition(&self) -> Condition {
+        Condition {
+            id: self.id.clone(),
+            class: self.class,
+            description: self.description.clone(),
+            extra: self.extra.clone(),
+        }
+    }
+
+    /// Keys whose attestations count (CR-003 §2.2: only keys named in the disqualifier).
+    pub fn runners(&self) -> Vec<String> {
+        if self.class == ConditionClass::Judged {
+            return self
+                .as_condition()
+                .judged()
+                .map(|j| j.runners)
+                .unwrap_or_default();
+        }
+        self.extra
+            .get("runners")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn check(&self) -> Result<(), String> {
+        let bad = |m: &str| Err(format!("disqualifier `{}`: {m}", self.id));
+        match self.class {
+            ConditionClass::Mechanical => {}
+            ConditionClass::Judged => {
+                self.as_condition().judged()?;
+            }
+            ConditionClass::Human => {
+                return bad("human disqualifiers need a declaration kind, which doesn't exist yet (open decision D-30)")
+            }
+            _ => return bad("must be mechanical or judged (open decision D-29)"),
+        }
+        if self.window == DisqualifierWindow::UntilAuditEnd {
+            return bad("until_audit_end needs a holdback, which acn-terms doesn't have (open decision D-31)");
+        }
+        if self.extra.contains_key("instances") {
+            return bad("instances arrive with CR-003 Phase B");
+        }
+        let runners = self.runners();
+        if runners.is_empty()
+            || self
+                .extra
+                .get("runners")
+                .and_then(Value::as_array)
+                .is_none()
+        {
+            return bad("needs `runners`, the keys allowed to attest it");
+        }
+        Ok(())
+    }
 }
 
 /// Who can cause payment to be released (spec §7, §8; CR-002).
@@ -308,7 +411,12 @@ impl Terms {
     fn hidden_criteria(&self) -> Result<(), (crate::anomaly::Code, String)> {
         use crate::anomaly::Code;
         let v05 = self.v == TERMS_VERSION;
-        for c in &self.conditions {
+        let disq: Vec<Condition> = self
+            .disqualifiers
+            .iter()
+            .map(Disqualifier::as_condition)
+            .collect();
+        for c in self.conditions.iter().chain(&disq) {
             if c.class == ConditionClass::Judged {
                 let j = c.judged().map_err(|e| (Code::Malformed, e))?;
                 if j.rubric_disclosure == Some(RubricDisclosure::CommitReveal) {
@@ -399,10 +507,22 @@ impl Terms {
         if settlement_fields && ![TERMS_VERSION, TERMS_VERSION_0_4].contains(&t.v.as_str()) {
             return Err("settlement triggers need acn-terms/0.4".into());
         }
-        let mut ids: Vec<&str> = t.conditions.iter().map(|c| c.id.as_str()).collect();
+        if !t.disqualifiers.is_empty() && t.v != TERMS_VERSION {
+            return Err("disqualifiers need acn-terms/0.5".into());
+        }
+        // Attestations name a condition or a disqualifier by id, so ids share one namespace.
+        let mut ids: Vec<&str> = t
+            .conditions
+            .iter()
+            .map(|c| c.id.as_str())
+            .chain(t.disqualifiers.iter().map(|d| d.id.as_str()))
+            .collect();
         ids.sort_unstable();
         if ids.windows(2).any(|w| w[0] == w[1]) {
-            return Err("duplicate condition id".into());
+            return Err("duplicate condition or disqualifier id".into());
+        }
+        for d in &t.disqualifiers {
+            d.check()?;
         }
         for c in t
             .conditions
@@ -416,6 +536,10 @@ impl Terms {
 
     pub fn condition(&self, id: &str) -> Option<&Condition> {
         self.conditions.iter().find(|c| c.id == id)
+    }
+
+    pub fn disqualifier(&self, id: &str) -> Option<&Disqualifier> {
+        self.disqualifiers.iter().find(|d| d.id == id)
     }
 
     /// Overall assurance: the weakest condition's label. With no conditions, closure rests on

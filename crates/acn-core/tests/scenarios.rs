@@ -561,6 +561,13 @@ const ALL: &[Scenario] = &[
     ("C-2", common::cos::c2),
     ("C-2b", common::cos::c2b),
     ("C-2c", common::cos::c2c),
+    ("C-6", common::cos::c6),
+    ("C-6b", common::cos::c6b),
+    ("C-6c", common::cos::c6c),
+    ("C-7", common::cos::c7),
+    ("C-7b", common::cos::c7b),
+    ("C-8", common::cos::c8),
+    ("C-6j", common::cos::c_judged_hit),
 ];
 
 // ---------- CR-003 vectors (spec §10 conformance table) ----------
@@ -576,10 +583,56 @@ fn check_cos(name: &str, w: &W, out: &acn_core::Output) {
             assert!(has(0, Code::HiddenCriteria), "{ctx}");
             assert!(!out.commitments.contains_key(&req.id), "{ctx}");
         }
-        "C-2c" => {
+        "C-2c" | "C-8" => {
             assert!(has(0, Code::Malformed), "{ctx}");
             assert!(!has(0, Code::HiddenCriteria), "{ctx}");
             assert!(!out.commitments.contains_key(&req.id), "{ctx}");
+        }
+        // e: REQUEST, PROMISE, REPORT, ATTEST c1 pass, ...
+        "C-6" => {
+            let c = &out.commitments[&req.id];
+            assert!(has(2, Code::Disqualified), "{ctx}");
+            assert!(c.disqualified(), "{ctx}");
+            // One rework was allowed, but a disqualified commitment fails outright.
+            assert_eq!(c.state.as_ref().unwrap().phase, Phase::Rejected, "{ctx}");
+            assert!(out.anomalies_for(&e[5].id).next().is_none(), "{ctx}");
+        }
+        // e: REQUEST, ESCROW_ACK, PROMISE, REPORT, c1 pass, d1 hit, RELEASE, REJECT
+        "C-6b" => {
+            assert!(has(6, Code::BadRelease), "{ctx}");
+            assert!(has(3, Code::Disqualified), "{ctx}");
+            let st = out.commitments[&req.id].state.clone().unwrap();
+            assert_eq!(st.phase, Phase::Rejected, "{ctx}");
+        }
+        // e: ..., SATISFY, d1 hit (late)
+        "C-6c" => {
+            let c = &out.commitments[&req.id];
+            assert!(has(5, Code::Late), "{ctx}");
+            assert!(!has(2, Code::Disqualified) && !c.disqualified(), "{ctx}");
+            assert_eq!(c.state.as_ref().unwrap().phase, Phase::Satisfied, "{ctx}");
+        }
+        "C-7" => {
+            let c = &out.commitments[&req.id];
+            assert!(has(4, Code::UnsupportedDisqualification), "{ctx}");
+            assert!(!c.disqualified() && !has(2, Code::Disqualified), "{ctx}");
+            // Withholding on an unsupported hit is the requester's fault once review lapses.
+            let late = c.state.as_ref().unwrap().report_at.unwrap() + 501;
+            assert_eq!(status_at(c, late).lapsed, Some(Party::Requester), "{ctx}");
+        }
+        "C-7b" => {
+            let c = &out.commitments[&req.id];
+            assert!(has(5, Code::UnsupportedDisqualification), "{ctx}");
+            assert_eq!(c.state.as_ref().unwrap().phase, Phase::Reworking, "{ctx}");
+        }
+        "C-6j" => {
+            let c = &out.commitments[&req.id];
+            assert!(has(2, Code::Disqualified), "{ctx}");
+            assert_eq!(
+                c.disqualifiers.get("d2"),
+                Some(&acn_core::DisqualifierStatus::Hit),
+                "{ctx}"
+            );
+            assert!(out.anomalies_for(&e[4].id).next().is_none(), "{ctx}");
         }
         other => panic!("no expectation for {other}"),
     }
@@ -590,6 +643,13 @@ const COS: &[Scenario] = &[
     ("C-2", common::cos::c2),
     ("C-2b", common::cos::c2b),
     ("C-2c", common::cos::c2c),
+    ("C-6", common::cos::c6),
+    ("C-6b", common::cos::c6b),
+    ("C-6c", common::cos::c6c),
+    ("C-7", common::cos::c7),
+    ("C-7b", common::cos::c7b),
+    ("C-8", common::cos::c8),
+    ("C-6j", common::cos::c_judged_hit),
 ];
 
 /// CR-003 §5.2: every Phase A vector, under every arrival-order permutation.

@@ -701,7 +701,8 @@ fn one(
         Phase::Reported
     };
     let judged = st.is_some_and(|s| s.judged);
-    let failing = c.conditions.values().any(|s| *s == ConditionStatus::Fail);
+    // A disqualifier hit counts as failing; clients MUST NOT offer SATISFY then (CR-003 §2.2).
+    let failing = c.disqualified() || c.conditions.values().any(|s| *s == ConditionStatus::Fail);
     let after_release = phase == Some(Phase::Settled) && !judged;
     let allowed = Allowed {
         // Verifier trigger: RELEASE settles; SATISFY / REJECT after it are recorded judgements,
@@ -710,7 +711,7 @@ fn one(
             && if verifier_trigger {
                 after_release
             } else {
-                phase == Some(Phase::Reported)
+                phase == Some(Phase::Reported) && !c.disqualified()
             },
         reject: mine
             && if verifier_trigger {
