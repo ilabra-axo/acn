@@ -141,7 +141,7 @@ Addressable is allowed here because it is metadata, not commitment state (INV-1)
 - tools offered, with input/output schema hashes (JCS-sha256) and, optionally, nmesh contract ids;
 - profiles supported (`T0`, `T1`, `N`);
 - price schedule and minimum price;
-- accepted mints and the NUTs each supports;
+- accepted mints, each as `{url, capabilities: [..]}` with its rail capabilities (§8.6);
 - terms templates by hash;
 - verifier requirements;
 - the MCP invocation transport (`nostr` or an HTTPS endpoint);
@@ -539,6 +539,21 @@ Mints are custodial trust points. The terms MUST name the mint URL and keyset id
 SHOULD set per-mint value caps in bindings. Support for NUT-07, NUT-11, NUT-12 and NUT-14 varies
 and MUST be checked via NUT-06 info at service-advertisement time. A mint that does not support
 NUT-14 may treat HTLC proofs as anyone-can-spend.
+
+**Rail capabilities (CR-002).** A service advertisement declares, per mint, which capabilities it
+offers; a trigger may only be used with a mint that has what it needs.
+
+| Capability | Needed by | Cashu |
+| --- | --- | --- |
+| `hashlock` | every trigger | NUT-14 |
+| `timelock_refund` | every trigger | NUT-14 |
+| `p2pk` | `requester`, `verifier` | NUT-11 |
+| `reveals_preimage_to_payer` | `contingent` | per mint, pending the spike (CR-002 Phase B) |
+
+Checking a mint is I/O, so validators don't: **bindings** check the capability before committing
+(the requester before `REQUEST`, the performer before promising), and decline otherwise. This
+replaces CR-002's `rail_incapable` validator code. Cashu is the only rail in this version; a
+second rail (e.g. Lightning, D-25) would add a `rail` terms field.
 
 ## 9. Provenance: artifacts, derivation, attestations
 
