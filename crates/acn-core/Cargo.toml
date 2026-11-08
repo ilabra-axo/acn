@@ -15,6 +15,9 @@ hex.workspace = true
 # Pure-Rust BIP-340 so the crate builds for wasm32-unknown-unknown without a C toolchain.
 k256 = { version = "0.13", default-features = false, features = ["schnorr", "alloc"] }
 thiserror.workspace = true
+# Sealed deliverables (NIP-44 v2 payload construction); pure Rust, already in the tree via nostr.
+chacha20 = "0.9"
+base64 = "0.22"
 
 [dev-dependencies]
 # Cross-check against rust-nostr's event signing.

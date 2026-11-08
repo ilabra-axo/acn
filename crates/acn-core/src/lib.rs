@@ -18,6 +18,7 @@ pub mod draft;
 pub mod event;
 pub mod jcs;
 pub mod kinds;
+pub mod sealed;
 pub mod terms;
 
 mod act;

@@ -6,6 +6,8 @@ version = 4
 name = "acn-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "chacha20",
  "hex",
  "k256",
  "nostr",
@@ -22,8 +24,10 @@ version = "0.1.0"
 dependencies = [
  "acn-core",
  "acn-view",
+ "hex",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -31,6 +35,7 @@ name = "acn-view"
 version = "0.1.0"
 dependencies = [
  "acn-core",
+ "hex",
  "serde",
  "serde_json",
 ]
