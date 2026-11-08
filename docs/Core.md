@@ -54,8 +54,10 @@ MAY follow RFC 2119.
 7. **INV-7 Signatures prove authorship only.** A signature never counts as evidence that a claim
    is true.
 8. **INV-8 Interpretive is not provenance.** Interpretive reports (e.g. LLM-as-judge) use a
-   distinct event kind. A validator MUST NOT satisfy a mechanical or grounding condition with an
-   interpretive report.
+   distinct event kind. A validator MUST NOT satisfy a mechanical, grounding or judged condition
+   with an interpretive report. A judged attestation certifies that a pinned judge produced a
+   stated score; it is evidence about an opinion, not about the work. It MAY satisfy a `judged`
+   condition and nothing else, and clients MUST display the resulting `opinion` assurance label.
 9. **INV-9 Artifacts by hash.** Deliverables and evidence are referenced by sha256 and stored
    off-relay (Blossom). Inline content is limited to small payloads (≤ 16 KiB).
 10. **INV-10 Accountable keys.** Agent keys are bound to an operator key by a signed binding.
