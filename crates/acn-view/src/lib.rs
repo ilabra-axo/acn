@@ -13,7 +13,7 @@ use acn_core::{
     Profile, Severity,
 };
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -501,15 +501,35 @@ fn one(
         (a.created_at, pa, &a.id).cmp(&(b.created_at, pb, &b.id))
     });
 
+    // Contingent (CR-002): the key revealed by CLAIM opens a sealed REPORT.
+    let claimed_key: Option<[u8; 32]> = c.chain.iter().find_map(|id| {
+        let e = by_id.get(id.as_str()).filter(|e| e.kind == K_CLAIM)?;
+        hex::decode(content(e)["key"].as_str()?)
+            .ok()?
+            .try_into()
+            .ok()
+    });
     // Current report and its evidence.
     let report = st
         .and_then(|s| s.report.as_deref())
         .and_then(|r| by_id.get(r))
         .map(|e| {
             let v = content(e);
+            let payload = match v.get("sealed").and_then(Value::as_str) {
+                Some(sealed) => claimed_key
+                    .and_then(|k| acn_core::sealed::open(&k, sealed).ok())
+                    .and_then(|b| serde_json::from_slice(&b).ok())
+                    .unwrap_or_else(|| {
+                        json!({
+                            "title": "🔒 Encrypted delivery",
+                            "body": format!("Readable once the payment is claimed and the key revealed. Ciphertext {}…", s(&v, "ciphertext").get(..16).unwrap_or_default()),
+                        })
+                    }),
+                None => v.get("result").cloned().unwrap_or(Value::Null),
+            };
             ReportView {
                 id: e.id.clone(),
-                payload: v.get("result").cloned().unwrap_or(Value::Null),
+                payload,
                 contract: v.get("contract").and_then(Value::as_str).map(str::to_owned),
                 note: v.get("note").and_then(Value::as_str).map(str::to_owned),
                 artifacts: e

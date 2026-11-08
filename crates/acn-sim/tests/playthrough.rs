@@ -10,13 +10,15 @@ use acn_sim::*;
 use serde_json::json;
 
 struct World {
-    keys: BTreeMap<Actor, [u8; 32]>,
+    actor_keys: BTreeMap<Actor, [u8; 32]>,
     me: [u8; 32],
     cast: Cast,
     events: Vec<Event>,
     clock: u64,
     escrow: BTreeMap<String, String>,
     secret: [u8; 32],
+    /// Contingent performer keys (the host's job in live and presenter mode).
+    keys: BTreeMap<String, String>,
 }
 
 impl World {
@@ -37,13 +39,14 @@ impl World {
             mint: SIM_MINT.into(),
         };
         Self {
-            keys,
+            actor_keys: keys,
             me: [1; 32],
             cast,
             events: vec![],
             clock: 1_000_000,
             escrow: BTreeMap::new(),
             secret: [9; 32],
+            keys: BTreeMap::new(),
         }
     }
 
@@ -68,8 +71,15 @@ impl World {
         .unwrap();
         let d = Draft::request(self.cast.key(info.actor), &t.profile, &terms, None).unwrap();
         let r = self.sign(&d, self.me, 0);
-        if t.terms["arbiter"].is_string() {
+        // The secret's holder: the arbiter, or the settlement verifier (verifier trigger).
+        let holder = t.terms["arbiter"].is_string()
+            || (t.terms["settlement_trigger"] == "verifier"
+                && t.terms["settlement_verifier"].is_string());
+        if holder && t.hashlock {
             self.escrow.insert(r.id.clone(), hex(&self.secret));
+        }
+        if t.terms["settlement_trigger"] == "contingent" {
+            self.keys.insert(r.id.clone(), hex(&[0x6b; 32]));
         }
         r.id
     }
@@ -78,11 +88,16 @@ impl World {
     fn play(&mut self, c: &str) -> Vec<String> {
         let mut narration = vec![];
         for _ in 0..40 {
-            let moves = react(&self.cast, &self.events, &self.escrow);
+            let moves = react_with(&self.cast, &self.events, &self.escrow, None, &self.keys);
             if !moves.is_empty() {
                 for m in moves {
                     narration.push(m.narration.clone());
-                    let key = self.keys[&m.actor];
+                    if let Some(e) = &m.escrow {
+                        // The holder receives the escrowed key (NIP-44 in the live host).
+                        assert_eq!(e.to, Actor::Verifier);
+                        self.escrow.insert(c.to_string(), e.secret.clone());
+                    }
+                    let key = self.actor_keys[&m.actor];
                     self.sign(&m.draft, key, m.not_before);
                 }
                 continue;
@@ -189,6 +204,26 @@ fn scenario_outcomes() {
         codes(&p).contains(&"unbound")
             || !matches!(p.binding, acn_core::BindingStatus::Bound { .. })
     );
+
+    // CR-001 MVP: the verifier runs both judges and releases.
+    let p = run("judged");
+    assert_eq!(p.phase, Some(Phase::Settled), "{:?}", acts(&p));
+    let tl = p.timeline.iter().map(|e| e.act).collect::<Vec<_>>();
+    assert!(tl.contains(&"ATTEST_JUDGED") && tl.contains(&"RELEASE"), "{tl:?} / {:?}", acts(&p));
+
+    let p = run("injected");
+    assert_eq!(p.phase, Some(Phase::Rejected), "{:?}", acts(&p));
+    assert!(codes(&p).contains(&"injection_detected"), "{:?}", codes(&p));
+    assert!(!acts(&p).contains(&"RELEASE"));
+
+    let p = run("judged-auto");
+    assert_eq!(p.phase, Some(Phase::Satisfied), "{:?}", acts(&p));
+
+    // CR-002 contingent: sealed until CLAIM reveals k.
+    let p = run("contingent");
+    assert_eq!(p.phase, Some(Phase::Settled), "{:?}", acts(&p));
+    assert!(acts(&p).contains(&"FUND") && acts(&p).contains(&"CLAIM"));
+    assert_eq!(p.report.unwrap().payload["title"], "Parser module");
 }
 
 /// Lanes and whose-move as a scenario plays (deduplicated consecutive states).
@@ -205,10 +240,13 @@ fn lanes(id: &str) -> Vec<(acn_view::Lane, Option<acn_view::Role>)> {
     };
     note(&w);
     for _ in 0..40 {
-        let moves = react(&w.cast, &w.events, &w.escrow);
+        let moves = react_with(&w.cast, &w.events, &w.escrow, None, &w.keys);
         if !moves.is_empty() {
             for m in moves {
-                let key = w.keys[&m.actor];
+                if let Some(e) = &m.escrow {
+                    w.escrow.insert(c.clone(), e.secret.clone());
+                }
+                let key = w.actor_keys[&m.actor];
                 w.sign(&m.draft, key, m.not_before);
                 note(&w);
             }
@@ -269,6 +307,11 @@ fn board_lanes_follow_the_workflow() {
     let silent = lanes("silent");
     assert_eq!(silent.last(), Some(&(Closed, None)));
 
+    for id in ["judged", "injected", "judged-auto", "contingent"] {
+        let l = lanes(id);
+        assert_eq!(l.last(), Some(&(Closed, None)), "{id}: {l:?}");
+    }
+
     // needs_me is relative to the viewer's role.
     let mut w = World::new();
     let c = w.request("quick");
@@ -327,7 +370,7 @@ fn reactions_are_idempotent() {
     assert_eq!(keys(&a), keys(&b));
     // Once performed, the same move is not proposed again.
     for m in a {
-        let k = w.keys[&m.actor];
+        let k = w.actor_keys[&m.actor];
         w.sign(&m.draft, k, m.not_before);
     }
     let after = react(&w.cast, &w.events, &w.escrow);
