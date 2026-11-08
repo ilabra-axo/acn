@@ -120,13 +120,20 @@ pub fn invoke(req: &str) -> Result<Value, String> {
             let cast: Cast = arg(&r, "cast")?;
             let events: Vec<Event> = arg(&r, "events")?;
             let escrow: BTreeMap<String, String> = arg(&r, "escrow").unwrap_or_default();
-            match r.get("payments").filter(|p| !p.is_null()) {
-                Some(_) => {
-                    let payments: BTreeMap<String, PaymentCheck> = arg(&r, "payments")?;
-                    ser(&acn_sim::react_paid(&cast, &events, &escrow, &payments))
-                }
-                None => ser(&acn_sim::react(&cast, &events, &escrow)),
-            }
+            // Contingent performer keys `k` by commitment (the host generates them).
+            let keys: BTreeMap<String, String> = arg(&r, "keys").unwrap_or_default();
+            let payments: Option<BTreeMap<String, PaymentCheck>> =
+                match r.get("payments").filter(|p| !p.is_null()) {
+                    Some(_) => Some(arg(&r, "payments")?),
+                    None => None,
+                };
+            ser(&acn_sim::react_with(
+                &cast,
+                &events,
+                &escrow,
+                payments.as_ref(),
+                &keys,
+            ))
         }
 
         // --- Simulated mint (presenter mode): the state travels as JSON in `mint`. ---

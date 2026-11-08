@@ -39,6 +39,8 @@ interface Move {
   narration: string;
   draft: Draft;
   not_before: number;
+  /** The host escrows `secret` with `to` (contingent key k → the settlement verifier). */
+  escrow?: { to: Actor; secret: string };
 }
 
 const ACTORS: Actor[] = ["performer", "rogue", "verifier", "judge", "arbiter", "gatekeeper"];
@@ -72,6 +74,8 @@ export class AcnWorld {
   /** commitment -> token I locked. */
   private tokens: Record<string, string> = {};
   private redeemed = new Set<string>();
+  /** Contingent (CR-002): Atlas's delivery key k per commitment. */
+  private keys: Record<string, string> = {};
   /** Called when any wallet balance changes. */
   onWallet: () => void = () => {};
   /** Narration of the most recent simulated move, per commitment. */
@@ -156,7 +160,9 @@ export class AcnWorld {
       s = randomHex32();
       hashlock = acn<string>("sha256", { bytes: s });
     }
-    const arbiter = template.terms?.arbiter;
+    // The secret's holder: the arbiter (Core.md §8.4) or the settlement verifier (verifier trigger, §8.2).
+    const terms = template.terms ?? {};
+    const holder = terms.arbiter ?? (terms.settlement_trigger === "verifier" ? terms.settlement_verifier : undefined);
     const draft = acn<Draft>("request", {
       template,
       tool: scenario,
@@ -165,8 +171,8 @@ export class AcnWorld {
       hashlock,
       input: { brief },
       // Presenter mode plays every role locally, so the escrow is a placeholder; the live app
-      // NIP-44-encrypts s to the arbiter (Core.md §8.4).
-      escrow: arbiter ? "presenter-escrow" : undefined,
+      // NIP-44-encrypts s to its holder.
+      escrow: holder && s ? "presenter-escrow" : undefined,
     });
     // Lock the price to the performer before signing (Core.md §8.2 steps 1-2). Presenter mode
     // carries the token in the clear; the live app NIP-44-encrypts it to the performer.
@@ -187,8 +193,9 @@ export class AcnWorld {
     const e = this.sign(this.mySecret, draft, this.now());
     if (s) {
       this.preimages[e.id] = s;
-      if (arbiter) this.escrow[e.id] = s;
+      if (holder) this.escrow[e.id] = s;
     }
+    if (terms.settlement_trigger === "contingent") this.keys[e.id] = randomHex32();
     if (token) {
       this.tokens[e.id] = token;
       this.mint = acn<any>("mint_tag", { mint: this.mint, token, commitment: e.id }).mint;
@@ -206,6 +213,20 @@ export class AcnWorld {
       action,
       preimage: this.preimages[commitment] ?? null,
     });
+    if (action.type === "fund") {
+      // Contingent: lock the price to the offer's hashlock H = sha256(k), payable to the performer.
+      const content = JSON.parse(draft.content);
+      const performer = this.project().find((p) => p.id === commitment)?.performer ?? this.cast.performer;
+      const r = acn<any>("mint_lock", {
+        mint: this.mint, owner: this.me, amount: content.amount, hashlock: content.hashlock,
+        receiver: performer, locktime: content.locktime, commitment, now: this.now(),
+      });
+      this.mint = r.mint;
+      this.tokens[commitment] = r.token;
+      content.token = r.token;
+      draft.content = JSON.stringify(content);
+      this.onWallet();
+    }
     this.add(this.sign(this.mySecret, draft, Math.max(this.now(), not_before)));
   }
 
@@ -223,7 +244,8 @@ export class AcnWorld {
     for (const e of this.events) {
       if (e.kind !== 7700 || e.id in this.payments) continue;
       const terms = JSON.parse(e.content).terms;
-      if (!terms?.payment || !(terms.price?.amount > 0)) continue;
+      // Contingent requests carry no token: the requester pays later, by FUND.
+      if (!terms?.payment || !(terms.price?.amount > 0) || terms.settlement_trigger === "contingent") continue;
       this.payments[e.id] = acn("payment_check", { mint: this.mint, events: this.events, commitment: e.id, me: this.cast.performer });
     }
   }
@@ -254,11 +276,32 @@ export class AcnWorld {
   private react() {
     this.checkPayments();
     this.redeem();
-    const moves = acn<Move[]>("react", { cast: this.cast, events: this.events, escrow: this.escrow, payments: this.payments });
+    const moves = acn<Move[]>("react", { cast: this.cast, events: this.events, escrow: this.escrow, payments: this.payments, keys: this.keys });
     for (const m of moves) {
       if (this.scheduled.has(m.key)) continue;
       this.scheduled.add(m.key);
       const t = window.setTimeout(() => {
+        const c = m.draft.tags.find((t) => t[0] === "c")?.[1] ?? "";
+        if (m.escrow) {
+          // Placeholder ciphertext (every role is local); the holder learns the key in-process.
+          m.draft.tags.push(["escrow", "presenter-escrow", this.cast[m.escrow.to]]);
+          this.escrow[c] = m.escrow.secret;
+        }
+        if (m.draft.kind === 7715) {
+          // CLAIM: Atlas redeems the FUND token with k at the mint, then signs (revealing k).
+          const fund = this.events.find((e) => e.kind === 7714 && commitmentOf(e) === c);
+          const token = fund && JSON.parse(fund.content).token;
+          this.redeemed.add(c);
+          try {
+            const r = acn<any>("mint_redeem", { mint: this.mint, token, by: this.cast.performer, preimage: this.keys[c], now: this.now() });
+            this.mint = r.mint;
+            this.onWallet();
+          } catch (err) {
+            this.narration[c] = `Atlas could not claim: ${err}`;
+            this.onChange(c);
+            return;
+          }
+        }
         const e = this.sign(this.secrets[m.actor], m.draft, Math.max(this.now(), m.not_before));
         // Narrations already name the actor ("Atlas counters…").
         this.narration[commitmentOf(e)] = m.narration;
@@ -280,6 +323,7 @@ export class AcnWorld {
     this.payments = {};
     this.tokens = {};
     this.redeemed.clear();
+    this.keys = {};
     this.resetMint();
   }
 }

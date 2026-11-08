@@ -298,9 +298,7 @@ export async function createPresenterBackend(): Promise<Backend> {
     },
     acnWithdraw: async (_p, c) => (world.act(c, { type: "withdraw" }), commitment(c)!),
     acnAcceptCounter: async (_p, c) => (world.act(c, { type: "accept_counter" }), commitment(c)!),
-    acnFund: async () => {
-      throw "contingent settlement is live-mode only for now";
-    },
+    acnFund: async (_p, c) => (world.act(c, { type: "fund" }), commitment(c)!),
     acnDispute: async (_p, c, reason) => (world.act(c, { type: "dispute", reason: reason || "I dispute this outcome" }), commitment(c)!),
     acnHint: async (_p, c) => {
       const h = world.hint(c);

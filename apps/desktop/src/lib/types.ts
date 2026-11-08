@@ -248,7 +248,7 @@ export interface BoardView {
 }
 
 export type HintAction =
-  | { type: "accept_counter" } | { type: "satisfy" } | { type: "withdraw" } | { type: "wait" } | { type: "done" }
+  | { type: "accept_counter" } | { type: "satisfy" } | { type: "withdraw" } | { type: "wait" } | { type: "done" } | { type: "fund" }
   | { type: "reject"; condition: string; note: string }
   | { type: "dispute"; reason: string }
   | { type: "advance_clock"; secs: number };

@@ -268,7 +268,10 @@
       {#if c.allowed.fund}<button class="btn primary" onclick={() => act("fund")} disabled={busy} title="Lock the price to the reported hashlock; the performer's claim reveals the key">Fund {c.price_sat} sat</button>{/if}
       {#if c.allowed.accept_counter}<button class="btn primary" onclick={() => act("accept_counter")} disabled={busy}>Accept counter-offer</button>{/if}
       {#if c.allowed.satisfy}
-        <button class="btn primary" onclick={() => act("satisfy")} disabled={busy}>{c.settlement ? "Satisfy & pay" : "Accept result"}</button>
+        <button class="btn primary" onclick={() => act("satisfy")} disabled={busy}
+          title={c.phase === "settled" ? "Already paid; this records your judgement on the outcome (it moves no money)" : undefined}>
+          {c.phase === "settled" ? "Record satisfied" : c.settlement ? "Satisfy & pay" : "Accept result"}
+        </button>
       {/if}
       {#if c.allowed.reject}<button class="btn" onclick={startReject} disabled={busy}>Reject…</button>{/if}
       {#if c.allowed.dispute}<button class="btn" onclick={() => (mode = "dispute")} disabled={busy}>Dispute…</button>{/if}

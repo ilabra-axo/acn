@@ -19,10 +19,13 @@ const shot = async (name) => {
 const EXPECT = {
   quick: "Satisfied", paid: "Satisfied", negotiate: "Satisfied", rework: "Satisfied", verified: "Satisfied",
   dispute: "Satisfied", governed: "Satisfied", silent: "Withdrawn", rogue: "Declined",
+  judged: "Settled", injected: "Rejected", "judged-auto": "Satisfied", contingent: "Settled",
 };
 const TITLES = {
   quick: "Quick tool call", paid: "Paid call (Cashu)", negotiate: "Negotiation", rework: "Rework loop",
   verified: "Verified work", dispute: "Dispute & ruling", governed: "Governance gate", silent: "Silent performer", rogue: "Rogue agent",
+  judged: "Judged, verifier releases", injected: "Judge prompt injection", "judged-auto": "Judged, you settle",
+  contingent: "Contingent (encrypted until paid)",
 };
 
 await page.goto(url);
@@ -118,6 +121,25 @@ await page.locator(".director .reset", { hasText: "Click again" }).click();
 await page.locator(".wallet-btn").filter({ hasText: "100 sat" }).waitFor({ timeout: 5000 });
 if ((await page.locator(".commitment").count()) !== 0) throw new Error("reset left commitments");
 console.log("ok   reset demo");
+
+// The MVP: pay only if two LLM judges score the rubric ≥ θ (CR-001), settled without you (CR-002).
+await walletBtn.click();
+await page.getByRole("button", { name: "Top up 100 test sats" }).click();
+await walletBtn.filter({ hasText: "200 sat" }).waitFor({ timeout: 10000 });
+await page.locator(".wallet .x").click();
+await run("judged", { manual: [{ waitFor: ".commitment >> text=opinion", shot: "p10-judged-terms" }] });
+await shot("p11-judged-released");
+await run("injected");
+await page.locator(".commitment").last().locator("text=injection_detected").first().waitFor({ timeout: 10000 });
+await shot("p12-injected");
+await run("judged-auto");
+await run("contingent", { manual: [{ waitFor: ".commitment >> text=Encrypted delivery", shot: "p13-contingent-sealed" }] });
+await page.locator(".commitment").last().locator("text=Parser module").first().waitFor({ timeout: 10000 });
+await shot("p14-contingent-opened");
+// 200 - 60 (judged) - 60 (injected, still locked) - 40 (judged-auto) - 30 (contingent).
+await walletBtn.filter({ hasText: "10 sat" }).waitFor({ timeout: 10000 });
+await page.locator(".director .bal", { hasText: "Atlas" }).filter({ hasText: "130 sat" }).waitFor({ timeout: 10000 });
+console.log("ok   judged MVP: you 10 sat (60 locked), Atlas 130 sat");
 
 await browser.close();
 if (errors.length) {
