@@ -165,8 +165,8 @@ pub const SCENARIOS: &[ScenarioInfo] = &[
         summary: "Same terms, but the summary hides a note to the judges. Verity's harness catches it: the condition fails, nothing is released, and the attempt is recorded on Atlas.",
         shows: &["injection_detected", "no RELEASE", "recorded on the performer"] },
     ScenarioInfo { id: "judged-auto", title: "Judged, you settle", actor: Actor::Performer, profile: "N",
-        summary: "40 sat. Muse runs the judges as a third party; when every condition passes, your side pays with SATISFY (what an auto-satisfy policy does).",
-        shows: &["judged (CR-001)", "requester trigger", "third-party runner", "auto-satisfy"] },
+        summary: "40 sat. Muse runs the judges as a third party; when every condition passes, your side pays with SATISFY (what an auto-satisfy policy does). Payment rests on your good faith: compare with Judged, verifier releases.",
+        shows: &["judged (CR-001)", "requester trigger", "auto-satisfy", "trusts the requester"] },
     ScenarioInfo { id: "contingent", title: "Contingent (encrypted until paid)", actor: Actor::Performer, profile: "N",
         summary: "No money up front. Atlas delivers encrypted; Verity decrypts and runs the tests; you fund 30 sat; Atlas's claim reveals the key through the mint and the result appears.",
         shows: &["contingent (CR-002)", "mechanical only", "FUND → CLAIM", "key via NUT-07"] },
@@ -705,7 +705,7 @@ fn react_settlement(
             let n = if ctx.scenario == "contingent" {
                 "Atlas promises. No money has moved: it will deliver encrypted and be paid against the attested result."
             } else {
-                "Atlas promises against the terms hash."
+                "Atlas promises against the terms hash, trusting you: under the requester trigger you'll read the summary before anything pays, and only your SATISFY releases the 40 sat."
             };
             push(mv(
                 Actor::Performer,
@@ -1187,7 +1187,7 @@ pub fn requester_hint(events: &[Event], commitment: &str, now: u64) -> Option<Hi
             return hint(HintAction::Wait, "Waiting…", "Verity counts the words and runs the judges. If both conditions pass it releases payment; you don't act.");
         }
         ("judged-auto", Phase::Reported) if pass("c1") && pass("c2") => {
-            return hint(HintAction::Satisfy, "Auto-satisfy: every condition met", "Both conditions passed. Your binding's auto-satisfy policy signs SATISFY now; the judges never get to pay anyone themselves.");
+            return hint(HintAction::Satisfy, "Auto-satisfy: every condition met", "Both conditions passed. Your binding's auto-satisfy policy signs SATISFY now. Nothing forces it: you have already read the summary, and holding back would only cost you reputation (a lapse is a requester fault). /judged takes that choice away by escrowing the secret with the runner.");
         }
         ("judged-auto", Phase::Reported) => {
             return hint(

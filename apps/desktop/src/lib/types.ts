@@ -227,6 +227,8 @@ export interface Commitment {
   allowed: Allowed;
   /** Overall assurance (weakest condition); null while the terms are unavailable. */
   assurance: Assurance | null;
+  /** Priced terms: whose act releases the payment (spec §12). */
+  payment_depends_on: PaymentDependency | null;
   result: Body | null;
   performer_binding: BindingView;
   // Board (computed in acn-view)
@@ -367,3 +369,8 @@ export interface RendererHost {
   submit(actionId: string | undefined, values: Record<string, unknown>, label?: string): Promise<void>;
   openUrl(url: string): void;
 }
+
+export type PaymentDependency =
+  | { kind: "requester"; arbiter: string | null }
+  | { kind: "verifier"; verifier: string }
+  | { kind: "contingent"; verifier: string };

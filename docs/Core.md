@@ -848,7 +848,12 @@ A client subscribes, validates, folds and renders; it owns no semantics (INV-12)
 Show anomalies, not just state: a stale or unauthorized act is information. Sign acts only through
 the act schemas. Display a commitment's overall assurance label (§7) before the performer signs
 `PROMISE` or `ACCEPT` and before the requester signs `SATISFY`, and name the judges and the
-threshold for any `judged` condition. Free-text messages in a commitment thread are ordinary messages and carry no
+threshold for any `judged` condition. On priced terms, clients SHOULD also show **what payment
+depends on** before the performer signs `PROMISE` or `ACCEPT`, derived from the terms: the
+requester's `SATISFY` (requester trigger; with an arbiter, or the arbiter's `RULING`), the
+settlement verifier's `RELEASE` (verifier trigger), or the requester's `FUND` against an offer it
+can't read yet (contingent). Under the requester trigger the requester sees the deliverable before
+paying, so payment rests on its good faith and reputation. Free-text messages in a commitment thread are ordinary messages and carry no
 commitment meaning.
 
 **Projections.** All are derived from the same fold, and any can be generated or replaced without
@@ -898,6 +903,7 @@ row needs a scenario test in the conformance suite.
 | Pre-empted release (verifier trigger) | The requester rejects passing work before the verifier releases | `REJECT` before `RELEASE` is legal only against a failing attestation (§6.1; vector S-8b) |
 | False pass (verifier trigger) | Verifier and performer collude to pass bad work | Deterministic conditions make the false pass provable from the artifacts; verifier reputation destroyed |
 | Key leak (contingent v1) | The attesting verifier passes `k` or the plaintext to the requester, who reads it without funding | Verifier scored and value-capped; residual risk until zero-knowledge proofs replace the verifier's attestation (D-20) |
+| Withheld satisfaction (requester trigger) | The requester reads a deliverable whose conditions all passed, then lets the review window lapse or rejects; the token refunds at `L` | Requester fault on lapse (§6.5); `contradicted_rejection` for rejecting a passed mechanical condition (V-16), nothing yet for a passed `judged` one (D-28); clients show what payment depends on (§12); a performer that won't rely on the requester takes the verifier or contingent trigger. Auto-satisfy is the requester's own pre-commitment and can't be enforced |
 | Unfunded offer (contingent) | The requester sees a passing attestation and never funds | The requester gains nothing (no `k`); requester fault recorded (§6.5); optional requester bond (D-21) |
 | Silent claim (contingent) | The performer takes the payment without publishing `k` | Contingent only on mints with `reveals_preimage_to_payer`: redeeming writes `k` into the spent proof's witness, which the payer reads with NUT-07 (§8.6) |
 | Ciphertext swap (contingent) | The ciphertext doesn't match the attested plaintext | The verifier decrypts `C` with `k` and attests the plaintext hash; attestations must name the `REPORT`'s `ciphertext` and `hashlock` (V-21) |
@@ -1004,6 +1010,14 @@ From CR-002 (settlement triggers; its OD-1…OD-7):
 - [ ] **D-27 Arbiter escrow acknowledgement.** §8.4 asks the arbiter to acknowledge the escrowed
   secret, but validators don't enforce it, so commitments from before CR-002 keep their meaning.
   Decide whether to enforce `K_ESCROW_ACK` for arbiters too (e.g. from a future terms version).
+- [ ] **D-28 Overruled judgement.** V-16 deliberately leaves `judged` conditions out: a judged
+  pass is an opinion, so rejecting it contradicts no check. But a requester that names a judge
+  runner in its own terms and then rejects a passing `K_ATTEST_JUDGED` from it is exactly what
+  scoring needs to see (requester-trigger commitments, where the requester also read the
+  deliverable). Proposal: a flag-only code `overruled_judgement` on such a `REJECT`, which still
+  applies (INV-5) and is discounted or weighed by scorers like `contradicted_rejection` (§11).
+  Open: whether a rejection naming another condition alongside counts, and whether rejecting
+  within the judges' own disagreement (e.g. `mean` aggregation with one judge below θ) is exempt.
 
 ## 15. Implementation phases and acceptance criteria
 
@@ -1061,4 +1075,5 @@ invent patterns. Kind numbers and tag letters are symbolic until D-1 closes.
 | CR-002 settlement triggers, Phase A | 2026-11-08 | §1, INV-5, INV-6, §3, §4, §5.1, §5.4, §6.1, §6.2, §6.5, §7, §8.2, §8.4, §8.6, §10 (V-18…V-20, vectors), §13, §14 (D-20…D-27), §15 | `settlement_trigger` / `settlement_verifier` / `fund_window`; valid combinations; verifier trigger with `K_ESCROW_ACK` (7726) and `RELEASE` (7713), state `Settled`, verifier lapse; INV-5 and INV-6 replaced as authorized, with `RULING` added; rail capabilities per mint, checked by bindings; policy filters in the bindings; three threat rows; wire versions `acn/0.4`, `acn-terms/0.4` | Phase A applied. **Changed from CR-002 by decision:** commitments are atomic, so the `delivery` field and `staged` delivery are dropped (S-2, S-3 retired; staging composes above the protocol), and `fulfillment_proof` and `rail` wait until a second value exists (zk, Lightning); `VERIFIER_ACK` is the shared `K_ESCROW_ACK` and its code `missing_escrow_ack`; `rail_incapable` is a binding check; the verifier trigger excludes `human`/`interpretive` conditions and arbiters; `RELEASE` needs every condition passing, whoever attested. Phase B (spike) and Phase C (contingent) pending |
 | CR-002 Phase B, spike | 2026-11-08 | §8.6, §14 (D-26) | Cashu reveals the preimage to the payer through NUT-07 on mints declaring NUT-07 and NUT-14 (CDK 0.18.3 and Nutshell 0.20.2 tested); `reveals_preimage_to_payer` rule recorded | Done; Phase C may proceed on Cashu |
 | CR-002 Phase C, contingent | 2026-11-08 | §3, §5.1, §5.4, §6.1, §6.2, §6.5, §7, §8.2, §9, §10 (V-21…V-23, vectors), §13 | Contingent trigger on Cashu: `REPORT` with `ciphertext` and `hashlock` → Offered; per-condition attestations bound to them; `FUND` (7714) → Funded; `CLAIM` (7715) → Settled; requester, verifier and performer lapses; codes `contingent_nondeterministic`, `attestation_mismatch`, `fund_mismatch`, `premature_fund`, `bad_key`; requester binding: `refuse_contingent`, trusted verifiers, `rail_incapable` from the `K_SVC` capability; six threat rows | Applied, same wire versions (`acn/0.4`). **Changed from CR-002 by decision:** `fulfillment_proof` dropped until `zk` exists (`verifier_attested` implied; the settlement verifier must be a listed mechanical verifier); `rail_incapable` is a binding check; one attestation per condition; profile T1 or N; added vectors S-16 (`fund_mismatch`), S-17 (unclaimed), S-18 (no `SATISFY`/pre-emptive `REJECT`). Demo performer added later (next row) |
+| Payment dependency, overruled judgement | 2026-11-08 | §12, §13, §14 (D-28) | Clients SHOULD show what payment depends on before the performer promises; new threat row "withheld satisfaction (requester trigger)"; open decision D-28 on flagging rejections of passed `judged` conditions | Clarification, no wire change. Reference: `acn_view::Projection.payment_depends_on`, shown on the card |
 | Contingent sealing format | 2026-11-08 | §6.2 (`REPORT`), §8.2 step 2 | The sealed deliverable `C` is a NIP-44 v2 payload keyed directly by `k`; inline as `content.sealed` or on Blossom; `ciphertext` = sha256 of the payload bytes. Reference: `acn-core::sealed`, interop-tested against rust-nostr | Clarification, no wire version change. Implemented end to end in the demo cast (`/contingent`), with `/judged`, `/injected` and `/judged-auto` for CR-001 |

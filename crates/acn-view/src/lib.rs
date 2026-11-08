@@ -147,6 +147,19 @@ pub struct Allowed {
     pub fund: bool,
 }
 
+/// What a priced commitment's payment depends on, derived from the terms (spec §12, §13).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PaymentDependency {
+    /// The requester's `SATISFY` (or, with an arbiter, its `RULING`). The requester sees the
+    /// deliverable first, so payment rests on its good faith.
+    Requester { arbiter: Option<String> },
+    /// The settlement verifier's `RELEASE` once every condition passes; the requester can't stop it.
+    Verifier { verifier: String },
+    /// The requester's `FUND` against an offer it can't read yet; the claim reveals the key.
+    Contingent { verifier: String },
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ReportView {
     pub id: String,
@@ -221,6 +234,8 @@ pub struct Projection {
     pub allowed: Allowed,
     /// Overall assurance (weakest condition), computed by the validator (spec §7, §12).
     pub assurance: Option<Assurance>,
+    /// Priced terms: whose act releases the payment (spec §12). `None` when free.
+    pub payment_depends_on: Option<PaymentDependency>,
     // --- board ---
     pub lane: Lane,
     /// The local user's role in this commitment.
@@ -755,9 +770,21 @@ fn one(
     let my_role = role(me, c);
     let updated_at = timeline.iter().map(|e| e.created_at).max().unwrap_or(0);
 
+    let payment_depends_on = terms.filter(|t| t.price.amount > 0).map(|t| {
+        use acn_core::terms::SettlementTrigger as T;
+        let verifier = t.settlement_verifier.clone().unwrap_or_default();
+        match t.settlement_trigger {
+            T::Requester => PaymentDependency::Requester {
+                arbiter: t.arbiter.clone(),
+            },
+            T::Verifier => PaymentDependency::Verifier { verifier },
+            T::Contingent => PaymentDependency::Contingent { verifier },
+        }
+    });
     Projection {
         lane,
         assurance: c.assurance,
+        payment_depends_on,
         needs_me: next.is_some() && next == Some(my_role),
         my_role,
         next,

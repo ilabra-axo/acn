@@ -218,6 +218,13 @@ fn scenario_outcomes() {
 
     let p = run("judged-auto");
     assert_eq!(p.phase, Some(Phase::Satisfied), "{:?}", acts(&p));
+    // Spec §12: what payment depends on, per trigger.
+    use acn_view::PaymentDependency as D;
+    assert_eq!(p.payment_depends_on, Some(D::Requester { arbiter: None }));
+    assert!(matches!(run("judged").payment_depends_on, Some(D::Verifier { .. })));
+    assert!(matches!(run("contingent").payment_depends_on, Some(D::Contingent { .. })));
+    assert!(matches!(run("dispute").payment_depends_on, Some(D::Requester { arbiter: Some(_) })));
+    assert_eq!(run("quick").payment_depends_on, None);
 
     // CR-002 contingent: sealed until CLAIM reveals k.
     let p = run("contingent");

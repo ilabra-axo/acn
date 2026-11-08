@@ -10,6 +10,26 @@
   const performerName = $derived(store.contacts.find((x) => x.pubkey === c.performer)?.name ?? "the performer");
   const nowSecs = $derived(store.backend?.kind === "presenter" ? store.clock.now : Math.floor(Date.now() / 1000));
 
+  // What payment depends on (spec §12), worded for whoever is looking.
+  const depends = $derived.by(() => {
+    const d = c.payment_depends_on;
+    if (!d) return null;
+    const who = c.mine ? "you" : "the requester";
+    if (d.kind === "requester") {
+      const arb = d.arbiter ? `, or the arbiter's ruling` : "";
+      return {
+        trust: true,
+        text: c.mine
+          ? `Pays only when you satisfy${arb}. You see the work first, so ${performerName} relies on your good faith.`
+          : `Pays only when ${who} satisfies${arb}. They see the work first: this rests on their good faith and reputation.`,
+      };
+    }
+    if (d.kind === "verifier") {
+      return { trust: false, text: `Pays when the settlement verifier releases on pass; ${who} can't block it.` };
+    }
+    return { trust: false, text: `Paid by ${c.mine ? "your" : "the requester's"} FUND against a sealed offer; the claim reveals the key.` };
+  });
+
   let mode = $state<"idle" | "reject" | "dispute">("idle");
   let note = $state("");
   let condition = $state<string | null>(null);
@@ -215,6 +235,9 @@
       <span class="muted d">{c.settlement.detail}</span>
       {#if c.settlement.simulated}<span class="pill sim" title={c.settlement.mint}>simulated mint</span>
       {:else}<span class="pill test" title={c.settlement.mint}>test sats</span>{/if}
+      {#if depends}
+        <span class="depends" class:trust={depends.trust} title="What releases the payment (spec §12)">{depends.trust ? "⚠ " : ""}{depends.text}</span>
+      {/if}
       {#if lock}
         <span class="token" data-t={lock.state}>
           your token: {lock.state === "locked" ? "locked at the mint" : lock.state === "redeemed" ? `redeemed by ${performerName}` : "refunded to you"}
@@ -385,6 +408,8 @@
   .settle[data-s="paid"] { border-color: color-mix(in srgb, var(--ok) 50%, transparent); background: color-mix(in srgb, var(--ok) 6%, transparent); }
   .settle[data-s="locked"] { border-color: var(--agent-border); }
   .pill.test { background: #dcfce7; color: #166534; }
+  .depends { flex-basis: 100%; font-size: 11.5px; color: var(--muted); }
+  .depends.trust { color: var(--warn); }
   .token { font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: var(--sunken); }
   .token[data-t="redeemed"] { color: var(--ok); }
   .token[data-t="refunded"] { color: var(--agent); }
