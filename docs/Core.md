@@ -1,6 +1,7 @@
 # Agent Commitments over Nostr — Logical Design Spec v0.2
 
 Nov 7, 2026 · @ivan Labra · v0.2 revision aligned with current NIPs/NUTs and the nmesh prototype.
+Amended by CR-001 (the `judged` condition class), see [Appendix B](#appendix-b-change-requests-after-v02).
 v0.1 is preserved at [Core-v0.1.md](Core-v0.1.md); see the [change log](#appendix-a-change-log-v01--v02).
 
 ## 1. Purpose and scope
@@ -378,7 +379,7 @@ INV-8 is enforced.
   | `repeats` | integer, ≥ 1 | Runs per judge; the per-judge score is the median of its runs (non-determinism control) |
   | `runners` | pubkeys, ≥ 1 | Keys allowed to run the judges and sign the attestation. MUST NOT include the performer |
   | `audit` | object or null | `rate` (0–1), `auditors[]` pubkeys, `window` seconds |
-  | `holdback` | object or null | `fraction` (0–1) of the price released only after the audit window (§8.5) |
+  | `holdback` | object or null | `fraction` (0–1) of the price released only after the audit window. *Parsed and displayed; its settlement (§8.5) is pending, see Appendix B* |
 
   Terms whose `judged` conditions lack these fields, or are inconsistent (no judges, `repeats` 0,
   θ outside the scale, a malformed `rubric_hash`), do not parse (`terms_mismatch`, V-9).
@@ -466,6 +467,12 @@ keys like any other. Rulings MUST land before `L - redeem_margin`.
 The terms MAY split payment into several tokens, each with its own hashlock, released by
 `SATISFY` events scoped to milestone condition ids (D-8). An optional unconditional up-front
 portion reduces performer risk on larger jobs.
+
+**Holdback (CR-001 §2.4): pending.** CR-001 releases a `holdback` fraction by a second,
+condition-scoped `SATISFY` after the audit window. That needs the milestone mechanism (D-8),
+which this spec does not yet define in the state machine, and it touches INV-6. Until resolved
+(Appendix B), a `holdback` is parsed and shown to both parties but settles nothing: the whole
+price is under the single hashlock.
 
 ### 8.6 Mint risk
 
@@ -835,3 +842,9 @@ invent patterns. Kind numbers and tag letters are symbolic until D-1 closes.
 | §5.1 | Concrete provisional kind table incl. `K_PRIVATE_ACT`, `K_SVC` 37700 | Implementable |
 | §4 | `K_SVC` supersedes the nmesh agent manifest; data-handling fields | Alignment with the nmesh prototype |
 | §11, §13, §14 | Reputation inputs qualified for private commitments; new open decision D-13 and threat row | §11 assumed public outcomes while §5.5 makes them private |
+
+## Appendix B. Change requests after v0.2
+
+| CR | Date | Sections | Change | Status |
+|---|---|---|---|---|
+| CR-001 `judged` condition class | 2026-11-08 | INV-8, §3, §5.1, §6.2, §7, §8.2, §8.5, §9, §10 (V-11, V-17, vectors), §12, §13, §14 (D-14…D-19), §15 | New condition class `judged` with derived assurance labels; `K_ATTEST_JUDGED` (7725); V-11 amended; new V-17 with codes `self_judged`, `judge_mismatch`, `rubric_mismatch`, `injection_detected`, `below_threshold`; INV-8 clarified (judged attestations are evidence about an opinion and satisfy only `judged`); client display of assurance; auto-satisfy by the requester's binding; five threat rows; open decisions D-14…D-19; worked example in [binding-api.md](binding-api.md) | Applied, except the §2.4 **holdback** (two tokens, condition-scoped `SATISFY` after closure, audit attestation; vectors J-9, J-10): held for confirmation because it changes INV-6 ("closing and paying are one signed act") and the §6.2 state machine (`SATISFY` is legal only from `Reported`) |
