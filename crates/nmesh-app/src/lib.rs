@@ -370,10 +370,19 @@ impl App {
         let pk = parse_pk(pubkey)?.to_hex();
         let mut st = self.inner.state.lock().await;
         st.active = Some(pk.clone());
+        let mut is_agent = false;
         if let Some(c) = st.contacts.get_mut(&pk) {
             c.unread = 0;
+            is_agent = c.is_agent;
         }
-        Ok(st.messages.get(&pk).cloned().unwrap_or_default())
+        let history = st.messages.get(&pk).cloned().unwrap_or_default();
+        drop(st);
+        // Agents change their commands and terms templates (e.g. a restarted demo cast); re-read
+        // the advertisement so the composer and Director don't show a stale copy.
+        if is_agent {
+            self.spawn_refresh(pk);
+        }
+        Ok(history)
     }
 
     /// Add (or re-fetch) a contact by npub / hex / nprofile.
