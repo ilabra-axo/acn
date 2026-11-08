@@ -342,7 +342,7 @@ Otherwise they are stored on Blossom and supplied to the validator as a document
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `v` | string | Terms schema version (`acn-terms/0.3`; `acn-terms/0.2` documents still parse, without `judged` conditions) |
+| `v` | string | Terms schema version (`acn-terms/0.4`; 0.3 and 0.2 documents still parse, without the fields introduced after them: `judged` in 0.3, settlement triggers in 0.4) |
 | `deliverable` | object | `description`; optional `output_schema` hash, `output_contract` id, `tool` name, `input` arguments |
 | `conditions` | array | Conditions of satisfaction; each has `id`, `class` (`mechanical`, `grounding`, `judged`, `interpretive`, `human`), and class-specific fields |
 | `deadline` | unix s | Latest `REPORT` time |
@@ -356,6 +356,9 @@ Otherwise they are stored on Blossom and supplied to the validator as a document
 | `subcontracting` | bool | Whether child commitments are permitted |
 | `disclosure` | enum | `public` or `private` (§5.5) |
 | `governance` | object or null | `{keys: [..], kinds: [..], window: seconds}` (V-14) |
+| `settlement_trigger` | enum | Who can release payment: `requester` (default), `verifier`, or `contingent` (§8.2; CR-002) |
+| `settlement_verifier` | pubkey | Required with `verifier`: holds the escrowed secret and releases it on pass |
+| `fund_window` | seconds | `contingent` only: time the requester has to fund after a passing attestation |
 
 **Condition classes.** The class decides which evidence can satisfy a condition. This is where
 INV-8 is enforced.
@@ -400,6 +403,20 @@ INV-8 is enforced.
 `grounded` > `check` > `human` > `opinion` (D-14); a commitment without conditions is `human`.
 The label is computed by the validator from the terms in force, never asserted by a party, and
 clients MUST display it (§12).
+
+**Settlement combinations (CR-002).** A commitment's terms MUST be one of these; anything else
+makes the act carrying them invalid (`invalid_settlement_combo`, V-18). Terms without the new
+fields are the `requester` trigger and behave exactly as before.
+
+| `settlement_trigger` | Who must trust whom | Constraints |
+| --- | --- | --- |
+| `requester` | The performer trusts the requester | No `settlement_verifier`, no `fund_window` |
+| `verifier` | Both trust a scored, listed settlement verifier | `settlement_verifier` set; a hash-locked payment; at least one condition, none `human` or `interpretive` (no attestation can pass those); no `arbiter` (the settlement verifier already decides on the conditions) |
+| `contingent` | Neither party trusts the other; in v1 both trust the attesting verifier with the key | Specified, not yet available: invalid in this version (Phase C) |
+
+The deliverable's exposure follows from the trigger: in the clear for `requester` and `verifier`,
+encrypted until paid for `contingent`. There is no separate delivery mode; staged delivery is a
+sequence of atomic commitments composed above the protocol (§1).
 
 **Templates.** Service advertisements publish terms templates by hash. A request that uses a
 template unchanged references the template hash directly, which keeps transactional calls cheap.
