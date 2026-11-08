@@ -26,6 +26,8 @@ export interface Backend {
   acnWithdraw(pubkey: string, commitment: string): Promise<Commitment>;
   acnAcceptCounter(pubkey: string, commitment: string): Promise<Commitment>;
   acnDispute(pubkey: string, commitment: string, reason: string): Promise<Commitment>;
+  /** Contingent settlement: fund an attested, encrypted delivery (CR-002). */
+  acnFund(pubkey: string, commitment: string): Promise<Commitment>;
   acnHint(pubkey: string, commitment: string): Promise<Hint | null>;
   acnRunHint(pubkey: string, commitment: string): Promise<Commitment | null>;
   clock(): Promise<Clock>;
@@ -70,6 +72,7 @@ async function createTauriBackend(): Promise<Backend> {
     acnWithdraw: (pubkey, commitment) => invoke("acn_withdraw", { pubkey, commitment }),
     acnAcceptCounter: (pubkey, commitment) => invoke("acn_accept_counter", { pubkey, commitment }),
     acnDispute: (pubkey, commitment, reason) => invoke("acn_dispute", { pubkey, commitment, reason }),
+    acnFund: (pubkey, commitment) => invoke("acn_fund", { pubkey, commitment }),
     acnHint: (pubkey, commitment) => invoke("acn_hint", { pubkey, commitment }),
     acnRunHint: (pubkey, commitment) => invoke("acn_run_hint", { pubkey, commitment }),
     clock: () => invoke("clock"),

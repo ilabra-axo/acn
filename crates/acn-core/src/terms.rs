@@ -324,9 +324,29 @@ impl Terms {
             .unwrap_or(Assurance::Human)
     }
 
-    /// CR-002 valid combinations (spec §7). The fold reports a failure as
-    /// `invalid_settlement_combo` on the act carrying the terms.
-    pub fn settlement_combo(&self) -> Result<(), String> {
+    /// CR-002 valid combinations (spec §7). The fold reports a failure with the returned code
+    /// (`invalid_settlement_combo`, or `contingent_nondeterministic`) on the act carrying the
+    /// terms.
+    pub fn settlement_combo(&self) -> Result<(), (crate::anomaly::Code, String)> {
+        use crate::anomaly::Code;
+        self.settlement_combo_inner()
+            .map_err(|e| (Code::InvalidSettlementCombo, e))?;
+        if self.settlement_trigger == SettlementTrigger::Contingent {
+            if let Some(c) = self
+                .conditions
+                .iter()
+                .find(|c| c.class != ConditionClass::Mechanical)
+            {
+                return Err((
+                    Code::ContingentNondeterministic,
+                    format!("condition `{}` is {:?}; contingent settlement needs every condition mechanical", c.id, c.class),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn settlement_combo_inner(&self) -> Result<(), String> {
         match self.settlement_trigger {
             SettlementTrigger::Requester => {
                 if self.settlement_verifier.is_some() || self.fund_window.is_some() {
@@ -365,7 +385,34 @@ impl Terms {
                 }
             }
             SettlementTrigger::Contingent => {
-                return Err("the contingent trigger is not available in this version".into());
+                let Some(v) = self.settlement_verifier.as_deref() else {
+                    return Err(
+                        "the contingent trigger needs a settlement_verifier to attest".into(),
+                    );
+                };
+                if !self.verifier_counts(v, ConditionClass::Mechanical) {
+                    return Err(
+                        "the settlement_verifier must be a listed mechanical verifier".into(),
+                    );
+                }
+                if self.fund_window.is_none() {
+                    return Err("the contingent trigger needs a fund_window".into());
+                }
+                if self.price.amount == 0 || self.payment.as_ref().is_none_or(|p| p.mint.is_empty())
+                {
+                    return Err("the contingent trigger needs a price and a payment mint".into());
+                }
+                if self.hashlock().is_some() {
+                    return Err(
+                        "under contingent the hashlock comes from the REPORT, not the terms".into(),
+                    );
+                }
+                if self.arbiter.is_some() {
+                    return Err("an arbiter is only available with the requester trigger".into());
+                }
+                if self.conditions.is_empty() {
+                    return Err("the contingent trigger needs conditions to attest".into());
+                }
             }
         }
         Ok(())

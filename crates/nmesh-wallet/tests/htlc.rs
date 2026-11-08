@@ -66,7 +66,17 @@ async fn htlc_lock_redeem_refund() -> anyhow::Result<()> {
     assert!(req.refund(&tok).await.is_err());
 
     // Redeem; a second redeem is a double spend.
+    assert_eq!(
+        req.revealed_preimage(&tok).await?,
+        None,
+        "unspent: nothing revealed yet"
+    );
     assert_eq!(perf.redeem(&tok, &pre, Some("c1")).await?, 21);
+    // Contingent settlement relies on this: the payer learns the preimage from the mint.
+    assert_eq!(
+        req.revealed_preimage(&tok).await?.as_deref(),
+        Some(pre.as_str())
+    );
     assert!(perf.redeem(&tok, &pre, None).await.is_err());
     assert!(!perf.inspect(&tok).await?.unspent);
     let pv = perf.view().await?;

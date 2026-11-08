@@ -158,3 +158,157 @@ pub fn s8c() -> W {
     v.w.add(d_reject(&r, &rep, "tests"), &REQ, 1300);
     v.w
 }
+
+// ---------- CR-002 Phase C: contingent settlement ----------
+
+/// The performer's key `k` and its hashlock `H = sha256(k)`; `C` is the ciphertext hash.
+pub const KEY: [u8; 32] = [0x6b; 32];
+pub fn key_hex() -> String {
+    hex::encode(KEY)
+}
+pub fn key_hash() -> String {
+    acn_core::jcs::sha256_hex(&KEY)
+}
+pub fn ciphertext() -> String {
+    "cc".repeat(32)
+}
+pub fn plaintext() -> String {
+    "dd".repeat(32)
+}
+
+/// Contingent terms: every condition mechanical, VER attests (listed verifier) and is the
+/// settlement verifier, a fund window, a price at a mint, no hashlock in the terms.
+pub fn contingent_terms(deadline: u64, f: impl FnOnce(&mut Value)) -> Value {
+    verifier_terms(deadline, |t| {
+        t["settlement_trigger"] = json!("contingent");
+        t["fund_window"] = json!(300);
+        t["payment"] = json!({"mint": "https://mint.test"});
+        f(t);
+    })
+}
+
+pub struct K {
+    pub w: W,
+    pub r: Event,
+}
+
+pub fn contingent(deadline: u64, f: impl FnOnce(&mut Value)) -> (K, Event) {
+    let mut w = W::default();
+    let t = contingent_terms(deadline, f);
+    let r = request(&mut w, "N", &t);
+    let p = w.add(d_promise(&r, &r, &terms_hash(&t)), &PERF, 1100);
+    let [a, b] = parties();
+    let rep = w.add(
+        Draft::act(K_REPORT, &r.id, &p.id, &[&a, &b])
+            .tag(vec!["x".into(), ciphertext()])
+            .content(json!({"ciphertext": ciphertext(), "hashlock": key_hash(), "note": "encrypted delivery"})),
+        &PERF,
+        1200,
+    );
+    (K { w, r }, rep)
+}
+
+impl K {
+    pub fn attest(&mut self, rep: &Event, result: &str, ct: &str, at: u64) -> Event {
+        let d = Draft::attest(
+            K_ATTEST_MECH,
+            &self.r.id,
+            &rep.id,
+            "tests",
+            json!({"result": result, "method": "cargo test", "ciphertext": ct, "hashlock": key_hash(), "plaintext": plaintext()}),
+        );
+        self.w.add(d, &VER, at)
+    }
+    pub fn fund(&mut self, prev: &Event, hashlock: &str, at: u64) -> Event {
+        let [a, b] = parties();
+        let d = Draft::act(K_FUND, &self.r.id, &prev.id, &[&a, &b]).content(json!({
+            "hashlock": hashlock, "amount": 100, "mint": "https://mint.test", "locktime": 5000, "token": "<nip44>"
+        }));
+        self.w.add(d, &REQ, at)
+    }
+    pub fn claim(&mut self, prev: &Event, key: &str, at: u64) -> Event {
+        let [a, b] = parties();
+        let d = Draft::act(K_CLAIM, &self.r.id, &prev.id, &[&a, &b]).content(json!({"key": key}));
+        self.w.add(d, &PERF, at)
+    }
+}
+
+/// S-9: contingent with a judged condition.
+pub fn s9() -> W {
+    let mut w = W::default();
+    let t = super::judged::judged_terms(|t| {
+        t["deadline"] = json!(3009);
+        t["price"] = json!({"amount": 100, "unit": "sat"});
+        t["payment"] = json!({"mint": "https://mint.test"});
+        t["settlement_trigger"] = json!("contingent");
+        t["settlement_verifier"] = json!(pk(&VER));
+        t["fund_window"] = json!(300);
+    });
+    request(&mut w, "N", &t);
+    w
+}
+
+/// S-11: happy path Requested → Promised → Offered → (attestation) → Funded → Settled.
+pub fn s11() -> W {
+    let (mut k, rep) = contingent(3011, |_| {});
+    k.attest(&rep, "pass", &ciphertext(), 1250);
+    let f = k.fund(&rep, &key_hash(), 1300);
+    k.claim(&f, &key_hex(), 1400);
+    k.w
+}
+
+/// S-12: the attestation names a different ciphertext hash.
+pub fn s12() -> W {
+    let (mut k, rep) = contingent(3012, |_| {});
+    k.attest(&rep, "pass", &"ee".repeat(32), 1250);
+    k.w
+}
+
+/// S-13: CLAIM with a key that doesn't hash to H.
+pub fn s13() -> W {
+    let (mut k, rep) = contingent(3013, |_| {});
+    k.attest(&rep, "pass", &ciphertext(), 1250);
+    let f = k.fund(&rep, &key_hash(), 1300);
+    k.claim(&f, &"00".repeat(32), 1400);
+    k.w
+}
+
+/// S-14: passing attestation, no FUND (lapse checked with `status_at`).
+pub fn s14() -> W {
+    let (mut k, rep) = contingent(3014, |_| {});
+    k.attest(&rep, "pass", &ciphertext(), 1250);
+    k.w
+}
+
+/// S-15: FUND before any passing attestation: valid, flagged.
+pub fn s15() -> W {
+    let (mut k, rep) = contingent(3015, |_| {});
+    k.fund(&rep, &key_hash(), 1300);
+    k.w
+}
+
+/// S-16: FUND bound to a different hashlock.
+pub fn s16() -> W {
+    let (mut k, rep) = contingent(3016, |_| {});
+    k.attest(&rep, "pass", &ciphertext(), 1250);
+    k.fund(&rep, &"ab".repeat(32), 1300);
+    k.w
+}
+
+/// S-17: funded, never claimed (lapse checked with `status_at`).
+pub fn s17() -> W {
+    let (mut k, rep) = contingent(3017, |_| {});
+    k.attest(&rep, "pass", &ciphertext(), 1250);
+    k.fund(&rep, &key_hash(), 1300);
+    k.w
+}
+
+/// S-18: before settlement the requester can't SATISFY, nor REJECT passing work.
+pub fn s18() -> W {
+    let (mut k, rep) = contingent(3018, |_| {});
+    k.attest(&rep, "pass", &ciphertext(), 1250);
+    let r = k.r.clone();
+    k.w.add(d_satisfy(&r, &rep, None), &REQ, 1300);
+    k.w.add(d_reject(&r, &rep, "tests"), &REQ, 1310);
+    k.w
+}

@@ -153,7 +153,7 @@ export class AppStore {
 
   /** Requester acts. `arg` is the reject note / dispute reason. */
   async commitmentAct(
-    kind: "satisfy" | "reject" | "withdraw" | "accept_counter" | "dispute",
+    kind: "satisfy" | "reject" | "withdraw" | "accept_counter" | "dispute" | "fund",
     id: string,
     arg = "",
     condition: string | null = null,
@@ -168,6 +168,7 @@ export class AppStore {
         : kind === "reject" ? await b.acnReject(p, id, condition, arg)
         : kind === "withdraw" ? await b.acnWithdraw(p, id)
         : kind === "accept_counter" ? await b.acnAcceptCounter(p, id)
+        : kind === "fund" ? await b.acnFund(p, id)
         : await b.acnDispute(p, id, arg);
       if (c.conversation === this.active) this.putCommitment(c);
       if (this.view === "board") await this.loadBoard();

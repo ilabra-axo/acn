@@ -88,8 +88,8 @@ underneath it.
 
 | Role | Signs | Holds |
 |---|---|---|
-| **Requester** | `REQUEST`, `COUNTER`, `ACCEPT`, `WITHDRAW`, `SATISFY`, `REJECT`, `DISPUTE` | the payment preimage `s` |
-| **Performer** | `PROMISE`, `COUNTER`, `ACCEPT`, `DECLINE`, `REVOKE`, `PROGRESS`, `REPORT`, `DISPUTE` | a binding to an operator |
+| **Requester** | `REQUEST`, `COUNTER`, `ACCEPT`, `WITHDRAW`, `SATISFY`, `REJECT`, `DISPUTE`, `FUND` | the payment preimage `s` (not under `contingent`) |
+| **Performer** | `PROMISE`, `COUNTER`, `ACCEPT`, `DECLINE`, `REVOKE`, `PROGRESS`, `REPORT`, `DISPUTE`, `CLAIM` | a binding to an operator; under `contingent`, the key `k` to the deliverable |
 | **Verifier** | `K_ATTEST_MECH`, `K_ATTEST_GROUND`, `K_INTERP_REPORT`; as a listed **runner** of a `judged` condition, `K_ATTEST_JUDGED` | a verifier-scoped binding |
 | **Arbiter** | `RULING`, `K_ESCROW_ACK` (optional) | an escrowed copy of `s` (§8.4), if named in the terms |
 | **Settlement verifier** | `K_ESCROW_ACK`, `RELEASE` (and its attestations, as a listed verifier) | the escrowed `s` under the `verifier` trigger (§8.2) |
@@ -180,6 +180,8 @@ geocaching 7516–7517). Code MUST reference symbolic names.
 | 7711 | `K_DISPUTE` | 7726 | `K_ESCROW_ACK` (CR-002) |
 | 7712 | `K_RULING` | | |
 | 7713 | `K_RELEASE` (CR-002) | | |
+| 7714 | `K_FUND` (CR-002) | | |
+| 7715 | `K_CLAIM` (CR-002) | | |
 
 ### 5.2 Tags
 
@@ -211,8 +213,8 @@ Every advancing act carries exactly one `prev`, which MUST belong to the same co
 advancing acts whose `prev` is that head and that pass V-1…V-9 and V-14. The winner is chosen
 deterministically (INV-2):
 
-1. **Closing acts** (`WITHDRAW`, `DECLINE`, `REVOKE`, `SATISFY`, `RULING`, `RELEASE`) win over
-2. **term-preserving acts** (`PROMISE`, `ACCEPT`, `REPORT`, `REJECT`, `DISPUTE`), which win over
+1. **Closing acts** (`WITHDRAW`, `DECLINE`, `REVOKE`, `SATISFY`, `RULING`, `RELEASE`, `CLAIM`) win over
+2. **term-preserving acts** (`PROMISE`, `ACCEPT`, `REPORT`, `REJECT`, `DISPUTE`, `FUND`), which win over
 3. **term-changing acts** (`COUNTER`).
 4. Remaining ties break on the lowest event id (lexicographic hex).
 
@@ -249,6 +251,7 @@ State {
   phase:          Requested | Countered | Promised | Reported | Reworking
                 | Satisfied | Rejected | Disputed | Declined | Withdrawn | Revoked
                 | Settled       // released by the designated trigger (CR-002)
+                | Offered | Funded   // contingent (CR-002)
   terms:          hash of the terms currently in force (request terms until a promise/accept)
   pending:        Option<(counter terms hash, countering party)>   // a counter awaiting ACCEPT
   promised:       bool          // a promise is in force
@@ -256,6 +259,9 @@ State {
   report:         Option<event id>
   rejected_at:    Option<event id>
   judged:         bool          // after Settled: the requester's one recorded judgement was made
+  ciphertext:     Option<hash>  // contingent: the current REPORT's ciphertext C
+  offer_hashlock: Option<hash>  // contingent: H = sha256(k) from that REPORT
+  fund_locktime:  Option<unix s> // contingent: the FUND payment's locktime (claim deadline)
   head:           event id
 }
 ```
@@ -289,6 +295,10 @@ stateDiagram-v2
     Disputed --> Satisfied: RULING performer
     Disputed --> Rejected: RULING requester (final)
     Reported --> Settled: RELEASE (verifier trigger)
+    Promised --> Offered: REPORT (contingent)
+    Offered --> Funded: FUND
+    Offered --> Reworking: REJECT (failing attestation)
+    Funded --> Settled: CLAIM
     Settled --> Settled: SATISFY / REJECT (recorded judgement)
 ```
 
@@ -303,6 +313,12 @@ before it, and `REJECT` is legal only against a failing attestation, so passing 
 pre-empted. After `Settled`, the requester MAY record one `SATISFY` or `REJECT` as a judgement;
 it changes nothing and feeds scoring only.
 
+**Contingent trigger.** A `REPORT` moves Promised or Reworking (Requested in T1) to **Offered**
+and MUST carry `ciphertext` (the hash of the encrypted deliverable `C`) and `hashlock`
+(`H = sha256(k)`). From Offered, the requester's `FUND` moves to **Funded**; a `REJECT` is legal
+only against a failing attestation, and `SATISFY` is not legal. From Funded, the performer's
+`CLAIM` with `k` moves to **Settled**. After `Settled`, the one recorded judgement applies as above.
+
 ### 6.2 Acts
 
 | Act | Signer | Legal from (phase) | Result | Required content (JSON) |
@@ -315,13 +331,15 @@ it changes nothing and feeds scoring only.
 | `WITHDRAW` | requester | Requested, Countered, Promised | Withdrawn | `{reason}` |
 | `REVOKE` | performer | Promised, Reworking | Revoked (scored) | `{reason}` |
 | `PROGRESS` | performer | Promised, Reworking (annotating) | unchanged | `{p_on_time?, note?}` |
-| `REPORT` | performer | Promised, Reworking; Requested in T0/T1 | Reported | `x` tags for artifacts; `{result?: <inline JSON ≤16 KiB>, contract?: <id>, derivation?: <hash>, note?}` |
+| `REPORT` | performer | Promised, Reworking; Requested in T0/T1 | Reported (Offered under `contingent`) | `x` tags for artifacts; `{result?: <inline JSON ≤16 KiB>, contract?: <id>, derivation?: <hash>, note?}` |
 | `SATISFY` | requester (by hand, or automatically by its binding under a pre-set policy, §8.2) | Reported (requester trigger); Settled (judgement, once) | Satisfied; unchanged after Settled | `{preimage?: <hex>}`; required when the terms carry a hashlock and the trigger is `requester` |
 | `REJECT` | requester | Reported (under `verifier`: only with a failing attestation); Settled (judgement, once) | Reworking, or Rejected at the rework limit (always Rejected in T0/T1); unchanged after Settled | `{gaps: [{condition, evidence: [..], note?}]}`, non-empty; conditions must exist in terms |
 | `DISPUTE` | either | Reported; Rejected (if disputable) | Disputed | `{reason, evidence?: [..]}`; terms must name an arbiter |
 | `RULING` | arbiter | Disputed | Satisfied or Rejected (final) | `{decision: "performer"\|"requester", rationale?: <hash>, preimage?: <hex>}` |
 | `K_ESCROW_ACK` | settlement verifier (or arbiter) | annotating; any time | unchanged; under `verifier`, enables promising | `c` tag; `{hashlock}`: the `H` the escrowed secret was checked against |
 | `RELEASE` | settlement verifier | Reported (`verifier` trigger) | Settled (terminal) | `{preimage, attestations?: [ids]}`; every condition passing (V-20) |
+| `FUND` | requester | Offered (`contingent`) | Funded | `{hashlock, amount, mint, locktime, token: <NIP-44 ciphertext to performer>}`; bound to the `REPORT`'s `H` (V-22) |
+| `CLAIM` | performer | Funded (`contingent`) | Settled (terminal) | `{key: <hex k>}`; `sha256(k) = H` (V-23) |
 
 Profile restrictions: `COUNTER`, `ACCEPT`, `PROMISE`, `REVOKE`, `DISPUTE` and `RULING` are only
 legal in profile `N`.
@@ -355,6 +373,11 @@ Requesters who doubt a timestamp can dispute with external evidence (§13).
 - **Lapsed (verifier):** `verifier` trigger, phase `Reported`, no failing attestation, and
   `now > report.created_at + terms.review_window` without a `RELEASE`. A verifier fault; the
   payment refunds at `L`. With a failing attestation the move is the requester's (above).
+- **Contingent lapses.** Offered without a passing or failing attestation within `review_window`
+  of the `REPORT`: **verifier** fault. Every condition passed (at `passed_at`, the latest of each
+  condition's first passing attestation) and no `FUND` within `fund_window`: **requester** fault;
+  the performer loses its effort, and the requester gains nothing, since it never got `k`. Funded
+  and no `CLAIM` before the `FUND` locktime: **performer** fault; the payment refunds.
 
 A `REPORT` with `created_at > terms.deadline` is applied but flagged `late`. A `SATISFY` after the
 review window is applied but flagged `late` (payment may already have been refunded at `L`).
@@ -440,7 +463,7 @@ fields are the `requester` trigger and behave exactly as before.
 | --- | --- | --- |
 | `requester` | The performer trusts the requester | No `settlement_verifier`, no `fund_window` |
 | `verifier` | Both trust a scored, listed settlement verifier | `settlement_verifier` set; a hash-locked payment; at least one condition, none `human` or `interpretive` (no attestation can pass those); no `arbiter` (the settlement verifier already decides on the conditions) |
-| `contingent` | Neither party trusts the other; in v1 both trust the attesting verifier with the key | Specified, not yet available: invalid in this version (Phase C) |
+| `contingent` | Neither party trusts the other; in v1 both trust the attesting verifier with the key | `settlement_verifier` set and listed as a `mechanical` verifier (it attests, `verifier_attested`); `fund_window` set; a price and a payment mint, but **no** hashlock in the terms (`H` comes from the `REPORT`); no `arbiter`; at least one condition, **every** condition `mechanical` (else `contingent_nondeterministic`); profile T1 or N |
 
 The deliverable's exposure follows from the trigger: in the clear for `requester` and `verifier`,
 encrypted until paid for `contingent`. There is no separate delivery mode; staged delivery is a
@@ -499,6 +522,26 @@ requester can't withhold it once the work passes.
 3. After `REPORT`, the verifier evaluates the conditions (or collects the listed verifiers' and
    runners' attestations). When every condition passes it publishes `RELEASE` with `s`, and the
    performer redeems. On a failing attestation the requester MAY `REJECT` for rework.
+
+**Contingent trigger (CR-002).** The performer holds the secret, and the secret is the key to
+the deliverable. Settlement and delivery are one atomic swap at the mint.
+
+1. `REQUEST` carries terms but no payment token. The performer `PROMISE`s (no escrow).
+2. The performer generates a 32-byte key `k`, encrypts the deliverable to `C` (on Blossom), and
+   computes `H = sha256(k)`.
+3. It sends `k` NIP-44-encrypted to the `settlement_verifier` (an `["escrow", <ct>, <verifier>]`
+   tag on the `REPORT`) and publishes `REPORT` with `ciphertext` = hash of `C` and `hashlock` = `H`.
+   State: Offered.
+4. The verifier decrypts `C` with `k`, checks `sha256(k) = H`, runs every mechanical condition on
+   the plaintext, and publishes one mechanical attestation per condition naming `ciphertext`,
+   `hashlock` and `plaintext` (the plaintext hash) with the result (V-21). It MUST NOT reveal `k`
+   or the plaintext.
+5. On passing attestations, the requester publishes `FUND`: a NUT-14 token locked to the
+   performer and `H`, NIP-44-encrypted to the performer in `content.token`, at the terms' mint.
+   State: Funded.
+6. The performer redeems the token with `k`; the mint records `k` in the spent proof's witness,
+   which the requester reads with NUT-07 (§8.6, `reveals_preimage_to_payer`). The performer also
+   publishes `CLAIM` with `k`; withholding it gains nothing. The requester decrypts `C`.
 
 **Auto-satisfy (CR-001).** A requester's binding MAY issue `SATISFY` automatically when every
 condition is met (for example, `c1` passes mechanically and `c2` passes as judged). The
@@ -584,7 +627,8 @@ execution log), `started`/`ended` (advisory).
 **Attestation kinds** (annotating). Signed by verifier keys. Tags: `c`; `["e", <REPORT id>, "",
 "report"]`; `["cond", <condition id>]`; `x` subject hashes.
 
-- **`K_ATTEST_MECH`:** `{result: "pass"|"fail", method, recipe?, env?}`.
+- **`K_ATTEST_MECH`:** `{result: "pass"|"fail", method, recipe?, env?}`. Under `contingent`, also
+  `ciphertext`, `hashlock` and `plaintext` (V-21).
 - **`K_ATTEST_GROUND`:** `{result, referent: {source, hash}, method}`.
 - **`K_ATTEST_JUDGED`:** signed by a runner key listed in the condition's `runners`. Content:
   - `judges[]`: per judge, the full fingerprint (`model_id`, `model_version`,
@@ -700,6 +744,18 @@ list). Every rule failure produces an anomaly with a code and a severity:
     hashes to `H`, and every condition passes against the current `REPORT` by the evidence rules
     (V-11, V-17), whoever attested. `bad_release` (reject).
 
+21. **V-21 Contingent attestation (new, CR-002).** Under `contingent`, an attestation names the
+    `REPORT`'s `ciphertext` and `hashlock` exactly, and a `plaintext` hash. `attestation_mismatch`
+    (flag; not counted).
+22. **V-22 Fund (new, CR-002).** `FUND` is signed by the requester from Offered, and binds the
+    `REPORT`'s `hashlock`, at least the price, at the terms' mint. `fund_mismatch` (reject). A `FUND`
+    before every condition passed is valid but flagged `premature_fund` (flag).
+23. **V-23 Claim (new, CR-002).** `CLAIM` is signed by the performer from Funded, and
+    `sha256(key) = H`. `bad_key` (reject).
+
+V-18 also covers the contingent constraint that every condition is `mechanical`:
+`contingent_nondeterministic` (reject; on a `REQUEST`, no commitment).
+
 Deadline-related flags: `late` (flag) for a `REPORT` after the deadline or a `SATISFY`/`REJECT`
 after the review window.
 
@@ -742,6 +798,21 @@ is reused for the remaining invalid combination.
 | S-8 | Verifier silent past the review window | Lapsed; verifier fault |
 | S-8b | `verifier`; requester `SATISFY`, then `REJECT` without a failing attestation | Neither applied; `illegal_transition` |
 | S-8c | `verifier`; failing attestation; requester `REJECT` | Reworking |
+
+**Contingent vectors (CR-002 Phase C).** Each also runs under every arrival-order permutation.
+
+| Id | Setup | Expected |
+| --- | --- | --- |
+| S-9 | `contingent` with a `judged` condition | `REQUEST` invalid; `contingent_nondeterministic` |
+| S-10 | `contingent` on a mint lacking `reveals_preimage_to_payer` | Refused by the requester's binding before signing (`rail_incapable`; §8.6) |
+| S-11 | Happy path | Requested → Promised → Offered → (attestation) → Funded → Settled |
+| S-12 | Attestation names a different ciphertext hash | Not counted; `attestation_mismatch` |
+| S-13 | `CLAIM` with a key that doesn't hash to `H` | Not applied; `bad_key` |
+| S-14 | Passing attestation; no `FUND` within `fund_window` | Lapsed; requester fault |
+| S-15 | `FUND` before a passing attestation | Valid; `premature_fund` |
+| S-16 | `FUND` bound to a different hashlock | Not applied; `fund_mismatch` |
+| S-17 | Funded; no `CLAIM` before the `FUND` locktime | Lapsed; performer fault |
+| S-18 | Offered; requester `SATISFY`, then `REJECT` of passing work | Neither applied; `illegal_transition` |
 
 ## 11. Bindings, governance and reputation
 
@@ -930,7 +1001,7 @@ From CR-002 (settlement triggers; its OD-1…OD-7):
 Each phase is gated by acceptance criteria that a coding agent can test mechanically.
 
 1. **P0 Grammar and validator crate (`acn-core`).** Act schemas, terms schema, JCS hashing, the
-   fold, sibling resolution, V-1…V-11 and V-13…V-20, anomaly codes, `status_at`.
+   fold, sibling resolution, V-1…V-11 and V-13…V-23, anomaly codes, `status_at`.
    - Gate: scenario tests for every act and every anomaly code pass.
    - Gate: a property test shows identical state and anomalies under arrival-order permutations
      of each scenario (INV-2).

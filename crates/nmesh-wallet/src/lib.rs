@@ -453,6 +453,23 @@ impl CashuWallet {
         Ok(got)
     }
 
+    /// Contingent settlement (CR-002): once the receiver has redeemed `token`, the mint's NUT-07
+    /// state check returns each spent proof's witness, which carries the preimage. `None` while
+    /// unspent, or if the mint returns no witness (no NUT-07). See
+    /// docs/acn/spikes/cashu-preimage-visibility.md.
+    pub async fn revealed_preimage(&self, token: &str) -> Result<Option<String>, WalletError> {
+        let t = Token::from_str(token).map_err(cdk_err)?;
+        let states = self
+            .wallet
+            .check_proofs_spent(self.proofs_of(&t).await?)
+            .await
+            .map_err(cdk_err)?;
+        Ok(states.iter().find_map(|s| match (&s.state, &s.witness) {
+            (State::Spent, Some(Witness::HTLCWitness(w))) => Some(w.preimage.clone()),
+            _ => None,
+        }))
+    }
+
     /// Record an incoming lock (performer side) so the wallet can show it before redemption.
     pub fn note_incoming(&self, token: &str, v: &Verified, from: &str, commitment: &str) {
         let id = lock_id(token);

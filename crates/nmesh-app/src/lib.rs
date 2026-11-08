@@ -854,6 +854,54 @@ impl App {
         self.persist().await;
     }
 
+    /// Contingent settlement (Core.md §8.2): pay for an attested, encrypted delivery. Locks the
+    /// price to the REPORT's hashlock and signs `FUND`; the performer's redemption then reveals
+    /// the key (by `CLAIM`, and through the mint).
+    pub async fn fund(&self, pubkey: &str, commitment: &str) -> Result<CommitmentView, AppError> {
+        let pk = parse_pk(pubkey)?;
+        let conv = pk.to_hex();
+        let events = self.fold_input(&conv).await;
+        let out = acn_core::fold(&events, &BTreeMap::new());
+        let c = out
+            .commitments
+            .get(commitment)
+            .ok_or_else(|| AppError::Invalid("unknown commitment".into()))?;
+        let (Some(st), Some(terms)) = (&c.state, &c.terms) else {
+            return Err(AppError::Invalid("terms unavailable".into()));
+        };
+        let (acn_core::Phase::Offered, Some(h)) = (st.phase, st.offer_hashlock.as_deref()) else {
+            return Err(AppError::Invalid(
+                "nothing to fund: no encrypted delivery is offered".into(),
+            ));
+        };
+        let mint = terms
+            .payment
+            .as_ref()
+            .map(|p| p.mint.clone())
+            .unwrap_or_default();
+        let w = self.wallet_for(&mint)?;
+        let amount = terms.price.amount;
+        // The performer must claim before this; then the requester can refund. Real time: the
+        // mint enforces it, the presentation clock doesn't apply.
+        let locktime = Timestamp::now().as_secs() + terms.review_window + 24 * 3600;
+        let tok = w
+            .lock_htlc(amount, h, &c.performer, locktime, Some(commitment))
+            .await
+            .map_err(|e| AppError::Invalid(format!("wallet: {e}")))?;
+        let ct = self.inner.session.nip44_encrypt(&pk, &tok)?;
+        let parties = [c.requester.as_str(), c.performer.as_str()];
+        let draft = Draft::act(K_FUND, &c.id, &st.head, &parties).content(serde_json::json!({
+            "hashlock": h, "amount": amount, "mint": mint, "locktime": locktime, "token": ct
+        }));
+        let act = self.inner.session.sign_act(&draft, Some(st.head_at))?;
+        self.inner.session.send_act(pk, &act).await?;
+        self.on_act(&conv, act).await;
+        self.emit_wallet().await;
+        self.commitment(&conv, commitment)
+            .await
+            .ok_or_else(|| AppError::Invalid("unknown commitment".into()))
+    }
+
     /// The scripted next step for the requester (presenter guidance), if any.
     pub async fn hint(&self, pubkey: &str, commitment: &str) -> Result<Option<Hint>, AppError> {
         let conv = parse_pk(pubkey)?.to_hex();

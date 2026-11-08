@@ -15,7 +15,7 @@ use crate::binding::{BindingStatus, Bindings};
 use crate::event::Event;
 use crate::jcs;
 use crate::kinds::*;
-use crate::terms::{Assurance, ConditionClass, GovernedParty, Terms};
+use crate::terms::{Assurance, ConditionClass, GovernedParty, SettlementTrigger, Terms};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Profile {
@@ -38,8 +38,12 @@ pub enum Phase {
     Declined,
     Withdrawn,
     Revoked,
-    /// Payment released by the designated trigger (`RELEASE`; CR-002). Terminal.
+    /// Payment released by the designated trigger (`RELEASE` or `CLAIM`; CR-002). Terminal.
     Settled,
+    /// Contingent: encrypted deliverable reported, awaiting attestation and funding.
+    Offered,
+    /// Contingent: payment locked to the REPORT's hashlock, awaiting the performer's claim.
+    Funded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -65,6 +69,11 @@ pub struct State {
     pub ruled: bool,
     /// After `Settled`: the requester's one recorded judgement (`SATISFY`/`REJECT`) was made.
     pub judged: bool,
+    /// Contingent: the current REPORT's ciphertext hash and hashlock `H = sha256(k)`.
+    pub ciphertext: Option<String>,
+    pub offer_hashlock: Option<String>,
+    /// Contingent: locktime of the FUND payment (the claim deadline).
+    pub fund_locktime: Option<u64>,
     pub head: String,
     pub head_at: u64,
 }
@@ -107,6 +116,9 @@ pub struct Commitment {
     /// Overall assurance of the terms in force: the weakest condition's label (spec §7).
     /// `None` while the terms are unavailable.
     pub assurance: Option<Assurance>,
+    /// When every condition of the current REPORT passed: the latest of each condition's
+    /// earliest counted passing attestation. Starts the contingent `fund_window`.
+    pub passed_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -337,6 +349,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
             progress: vec![],
             conditions: BTreeMap::new(),
             assurance: None,
+            passed_at: None,
             performer_binding: BindingStatus::Unbound,
             report: None,
         };
@@ -357,8 +370,18 @@ impl<'a, 'e> Ctx<'a, 'e> {
             return Some(commitment);
         };
         // CR-002: only the valid settlement combinations make a commitment.
-        if let Err(e) = root.settlement_combo() {
-            acc.push(req.id(), Code::InvalidSettlementCombo, e);
+        let combo = root.settlement_combo().and_then(|()| {
+            if root.settlement_trigger == SettlementTrigger::Contingent && profile == Profile::T0 {
+                Err((
+                    Code::InvalidSettlementCombo,
+                    "contingent needs a conditional profile (T1 or N)".into(),
+                ))
+            } else {
+                Ok(())
+            }
+        });
+        if let Err((code, e)) = combo {
+            acc.push(req.id(), code, e);
             for p in self.members {
                 acc.push(p.id(), Code::PendingRef, "commitment root is invalid");
             }
@@ -434,6 +457,9 @@ impl<'a, 'e> Ctx<'a, 'e> {
             rejected_at: None,
             ruled: false,
             judged: false,
+            ciphertext: None,
+            offer_hashlock: None,
+            fund_locktime: None,
             head: req.id().to_string(),
             head_at: req.at(),
         };
@@ -600,6 +626,25 @@ impl<'a, 'e> Ctx<'a, 'e> {
                     .conditions
                     .insert(cond.id.clone(), condition_status(cond.class, ev));
             }
+            // passed_at: each condition's earliest counted passing attestation; the latest of those.
+            let at = |id: &str| self.members.iter().find(|p| p.id() == id).map(|p| p.at());
+            let firsts: Option<Vec<u64>> = terms_now
+                .conditions
+                .iter()
+                .map(|cond| {
+                    let ev = evidence.get(&(report.clone(), cond.id.clone()))?;
+                    if commitment.conditions.get(&cond.id) != Some(&ConditionStatus::Pass) {
+                        return None;
+                    }
+                    ev.iter()
+                        .filter(|(r, _)| r == "pass")
+                        .filter_map(|(_, id)| at(id))
+                        .min()
+                })
+                .collect();
+            commitment.passed_at = firsts
+                .filter(|f| !f.is_empty())
+                .and_then(|f| f.into_iter().max());
         }
 
         // V-16: rejections contradicted by mechanical evidence.
@@ -755,6 +800,25 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 "signer is not a listed verifier for this class",
             );
             return;
+        }
+        // Contingent: the verifier attests the plaintext behind the reported ciphertext, so the
+        // attestation must name the REPORT's ciphertext hash and hashlock exactly.
+        if t.settlement_trigger == SettlementTrigger::Contingent {
+            let same = |f: &str, want: &Option<String>| {
+                p.str_field(f).map(str::to_ascii_lowercase) == *want
+            };
+            let plaintext = p.str_field("plaintext").is_some_and(is_sha256_hex);
+            if !same("ciphertext", &snap.ciphertext)
+                || !same("hashlock", &snap.offer_hashlock)
+                || !plaintext
+            {
+                acc.push(
+                    p.id(),
+                    Code::AttestationMismatch,
+                    "a contingent attestation must name the REPORT's ciphertext and hashlock, and the plaintext hash",
+                );
+                return;
+            }
         }
         let verdict = p
             .str_field("result")
@@ -995,7 +1059,8 @@ impl<'a, 'e> Ctx<'a, 'e> {
         let n = run.profile == Profile::N;
         let is_req = by == run.requester;
         let is_perf = by == run.performer;
-        let verifier = terms.settlement_trigger == crate::terms::SettlementTrigger::Verifier;
+        let verifier = terms.settlement_trigger == SettlementTrigger::Verifier;
+        let contingent = terms.settlement_trigger == SettlementTrigger::Contingent;
         let mut next = st.clone();
         next.head = k.id().to_string();
         next.head_at = k.at();
@@ -1038,9 +1103,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
                         format!("counter terms {h} not available"),
                     ));
                 }
-                if let Err(e) = run.terms[&h].settlement_combo() {
-                    return Err((Code::InvalidSettlementCombo, e));
-                }
+                run.terms[&h].settlement_combo()?;
                 next.pending = Some(Pending {
                     terms: h,
                     by: by.into(),
@@ -1144,6 +1207,25 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 next.pending = None;
                 next.report = Some(k.id().to_string());
                 next.report_at = Some(k.at());
+                next.fund_locktime = None;
+                if contingent {
+                    // The deliverable is encrypted under k; the REPORT names C and H = sha256(k).
+                    let hex64 = |f: &str| {
+                        k.str_field(f)
+                            .filter(|h| is_sha256_hex(h))
+                            .map(str::to_ascii_lowercase)
+                    };
+                    let (Some(c), Some(h)) = (hex64("ciphertext"), hex64("hashlock")) else {
+                        return Err((
+                            Code::Malformed,
+                            "a contingent REPORT needs `ciphertext` and `hashlock` (sha256 hex)"
+                                .into(),
+                        ));
+                    };
+                    next.phase = Offered;
+                    next.ciphertext = Some(c);
+                    next.offer_hashlock = Some(h);
+                }
             }
             K_SATISFY | K_REJECT if st.phase == Settled => {
                 // After release: one recorded judgement, no settlement effect (CR-002).
@@ -1158,18 +1240,20 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 }
                 next.judged = true;
             }
-            K_SATISFY | K_REJECT if verifier && st.phase == Reported => {
+            K_SATISFY | K_REJECT
+                if (verifier && st.phase == Reported) || (contingent && st.phase == Offered) =>
+            {
                 if !is_req {
                     return unauthorized("requester");
                 }
                 if kind == K_SATISFY {
                     return Err((
                         Code::IllegalTransition,
-                        "under the verifier trigger, RELEASE settles; SATISFY is a judgement after it".into(),
+                        "the designated trigger settles (RELEASE or CLAIM); SATISFY is a judgement after it".into(),
                     ));
                 }
                 // REJECT for rework only against a failing attestation, so a requester can't
-                // pre-empt the release of work that passes.
+                // pre-empt the settlement of work that passes.
                 self.check_gaps(terms, k)?;
                 let failing = self
                     .conditions_at(run, terms, st)
@@ -1178,7 +1262,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 if !failing {
                     return Err((
                         Code::IllegalTransition,
-                        "under the verifier trigger, REJECT needs a failing attestation".into(),
+                        "before settlement, REJECT needs a failing attestation".into(),
                     ));
                 }
                 if late_review(terms, st, k) {
@@ -1191,6 +1275,60 @@ impl<'a, 'e> Ctx<'a, 'e> {
                     next.phase = Rejected;
                     next.rejected_at = Some(k.at());
                 }
+            }
+            K_FUND => {
+                if !is_req {
+                    return unauthorized("requester");
+                }
+                if !contingent || st.phase != Offered {
+                    return illegal();
+                }
+                let pay_mint = terms.payment.as_ref().map(|p| p.mint.as_str());
+                let bound = k
+                    .str_field("hashlock")
+                    .is_some_and(|h| Some(h.to_ascii_lowercase()) == st.offer_hashlock)
+                    && k.content["amount"]
+                        .as_u64()
+                        .is_some_and(|a| a >= terms.price.amount)
+                    && k.str_field("mint") == pay_mint;
+                if !bound {
+                    return Err((
+                        Code::FundMismatch,
+                        "FUND must lock the price at the terms' mint to the REPORT's hashlock"
+                            .into(),
+                    ));
+                }
+                let all_pass = self
+                    .conditions_at(run, terms, st)
+                    .values()
+                    .all(|s| *s == ConditionStatus::Pass);
+                if !all_pass {
+                    flags.push((
+                        Code::PrematureFund,
+                        "FUND before every condition passed".into(),
+                    ));
+                }
+                next.phase = Funded;
+                next.fund_locktime = k.content["locktime"].as_u64();
+            }
+            K_CLAIM => {
+                if !is_perf {
+                    return unauthorized("performer");
+                }
+                if !contingent || st.phase != Funded {
+                    return illegal();
+                }
+                let ok = k
+                    .str_field("key")
+                    .and_then(|key| hex::decode(key).ok())
+                    .is_some_and(|b| Some(jcs::sha256_hex(&b)) == st.offer_hashlock);
+                if !ok {
+                    return Err((
+                        Code::BadKey,
+                        "sha256(key) does not match the REPORT's hashlock".into(),
+                    ));
+                }
+                next.phase = Settled;
             }
             K_RELEASE => {
                 if !verifier {
@@ -1300,6 +1438,10 @@ impl<'a, 'e> Ctx<'a, 'e> {
         }
         Ok((next, flags))
     }
+}
+
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 fn condition_status(class: ConditionClass, ev: Option<&Vec<(String, String)>>) -> ConditionStatus {

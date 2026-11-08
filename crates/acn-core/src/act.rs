@@ -11,8 +11,8 @@ pub const INLINE_LIMIT: usize = 16 * 1024;
 /// Sibling-resolution class (spec §5.4). Lower wins.
 pub fn class_rank(kind: u16) -> u8 {
     match kind {
-        K_WITHDRAW | K_DECLINE | K_REVOKE | K_SATISFY | K_RULING | K_RELEASE => 0,
-        K_PROMISE | K_ACCEPT | K_REPORT | K_REJECT | K_DISPUTE => 1,
+        K_WITHDRAW | K_DECLINE | K_REVOKE | K_SATISFY | K_RULING | K_RELEASE | K_CLAIM => 0,
+        K_PROMISE | K_ACCEPT | K_REPORT | K_REJECT | K_DISPUTE | K_FUND => 1,
         _ => 2, // COUNTER
     }
 }
@@ -271,6 +271,32 @@ pub fn parse(ev: &Event) -> R<Option<Parsed<'_>>> {
         },
         K_INTERP_REPORT => need("verdict")?,
         K_RELEASE => need("preimage")?,
+        K_FUND => {
+            let hex64 = |k: &str| {
+                content
+                    .get(k)
+                    .and_then(Value::as_str)
+                    .is_some_and(|h| is_hex(h, 64))
+            };
+            if !hex64("hashlock")
+                || content.get("amount").and_then(Value::as_u64).is_none()
+                || content.get("mint").and_then(Value::as_str).is_none()
+                || content.get("locktime").and_then(Value::as_u64).is_none()
+            {
+                return malformed(
+                    "FUND requires `hashlock` (sha256 hex), `amount`, `mint` and `locktime`",
+                );
+            }
+        }
+        K_CLAIM => {
+            if !content
+                .get("key")
+                .and_then(Value::as_str)
+                .is_some_and(|k| is_hex(k, 64))
+            {
+                return malformed("CLAIM requires `key`, the 32-byte key as hex");
+            }
+        }
         K_ESCROW_ACK => {
             if !content
                 .get("hashlock")

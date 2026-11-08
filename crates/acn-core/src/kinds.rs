@@ -17,6 +17,10 @@ pub const K_DISPUTE: u16 = 7711;
 pub const K_RULING: u16 = 7712;
 /// Settlement verifier releases the escrowed secret on pass (CR-002, verifier trigger).
 pub const K_RELEASE: u16 = 7713;
+/// Requester pays against the REPORT's hashlock (CR-002, contingent trigger).
+pub const K_FUND: u16 = 7714;
+/// Performer reveals the key it was paid for (CR-002, contingent trigger).
+pub const K_CLAIM: u16 = 7715;
 
 pub const K_ATTEST_MECH: u16 = 7720;
 pub const K_ATTEST_GROUND: u16 = 7721;
@@ -42,7 +46,7 @@ pub const BLOCK: std::ops::RangeInclusive<u16> = 7700..=7739;
 /// Commitment acts (advancing + PROGRESS), in kind order.
 pub const ACTS: &[u16] = &[
     K_REQUEST, K_COUNTER, K_ACCEPT, K_PROMISE, K_DECLINE, K_WITHDRAW, K_REVOKE, K_PROGRESS,
-    K_REPORT, K_SATISFY, K_REJECT, K_DISPUTE, K_RULING, K_RELEASE,
+    K_REPORT, K_SATISFY, K_REJECT, K_DISPUTE, K_RULING, K_RELEASE, K_FUND, K_CLAIM,
 ];
 
 pub fn is_known(kind: u16) -> bool {
@@ -81,6 +85,8 @@ pub fn name(kind: u16) -> &'static str {
         K_DISPUTE => "DISPUTE",
         K_RULING => "RULING",
         K_RELEASE => "RELEASE",
+        K_FUND => "FUND",
+        K_CLAIM => "CLAIM",
         K_ATTEST_MECH => "ATTEST_MECH",
         K_ATTEST_GROUND => "ATTEST_GROUND",
         K_ATTEST_JUDGED => "ATTEST_JUDGED",

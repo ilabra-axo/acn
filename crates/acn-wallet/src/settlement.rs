@@ -2,7 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use acn_core::kinds::{K_RELEASE, K_REQUEST, K_RULING, K_SATISFY};
+use acn_core::kinds::{K_CLAIM, K_FUND, K_RELEASE, K_REQUEST, K_RULING, K_SATISFY};
+use acn_core::terms::SettlementTrigger;
 use acn_core::{fold, Event, Phase, Terms};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -59,6 +60,14 @@ pub enum Advice {
         locktime: u64,
         ready: bool,
     },
+    /// Contingent performer: the FUND token is locked to your hashlock; redeem it with your key
+    /// `k`, then sign `CLAIM` with `k`.
+    Claim { token: String },
+    /// Contingent requester: funded and waiting. Once the performer redeems, the mint reveals
+    /// `k` (NUT-07 witness), with or without a `CLAIM`.
+    LearnKey { token: String },
+    /// Contingent requester: the performer's `CLAIM` revealed `k`; decrypt the deliverable.
+    Key { key: String },
 }
 
 /// What `me` should do with the payment of `commitment` at `now`.
@@ -67,6 +76,9 @@ pub fn advise(events: &[Event], commitment: &str, me: &str, now: u64) -> Option<
     let c = out.commitments.get(commitment)?;
     let st = c.state.as_ref()?;
     let terms = c.terms.as_ref()?;
+    if terms.settlement_trigger == SettlementTrigger::Contingent {
+        return advise_contingent(events, c, me, now);
+    }
     let token = request_token(events, commitment)?;
     terms.hashlock()?;
     let status = acn_core::status_at(c, now);
@@ -95,6 +107,53 @@ pub fn advise(events: &[Event], commitment: &str, me: &str, now: u64) -> Option<
         });
     }
     None
+}
+
+/// The token in the chain's `FUND`, and the key in its `CLAIM`, if any.
+fn chain_field(
+    events: &[Event],
+    c: &acn_core::Commitment,
+    kind: u16,
+    field: &str,
+) -> Option<String> {
+    c.chain.iter().rev().find_map(|id| {
+        let e = events.iter().find(|e| &e.id == id && e.kind == kind)?;
+        let v: Value = serde_json::from_str(&e.content).ok()?;
+        v.get(field)?.as_str().map(str::to_owned)
+    })
+}
+
+fn advise_contingent(
+    events: &[Event],
+    c: &acn_core::Commitment,
+    me: &str,
+    now: u64,
+) -> Option<Advice> {
+    let st = c.state.as_ref()?;
+    match st.phase {
+        Phase::Funded => {
+            let token = chain_field(events, c, K_FUND, "token")?;
+            if me == c.performer {
+                return Some(Advice::Claim { token });
+            }
+            if me == c.requester {
+                let locktime = st.fund_locktime?;
+                if now > locktime {
+                    return Some(Advice::Refund {
+                        token,
+                        locktime,
+                        ready: true,
+                    });
+                }
+                return Some(Advice::LearnKey { token });
+            }
+            None
+        }
+        Phase::Settled if me == c.requester => {
+            chain_field(events, c, K_CLAIM, "key").map(|key| Advice::Key { key })
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -174,5 +233,86 @@ mod tests {
             None,
             "nothing to refund once settled"
         );
+    }
+}
+
+#[cfg(test)]
+mod contingent_tests {
+    use super::*;
+    use acn_core::draft::{public_key, Draft};
+    use acn_core::kinds::*;
+    use serde_json::json;
+
+    /// CR-002 contingent: who is advised to do what as the commitment is funded and claimed.
+    #[test]
+    fn contingent_advice() {
+        let (req, perf, ver) = ([1u8; 32], [2u8; 32], [4u8; 32]);
+        let (rp, pp, vp) = (
+            public_key(&req).unwrap(),
+            public_key(&perf).unwrap(),
+            public_key(&ver).unwrap(),
+        );
+        let k = [0x6bu8; 32];
+        let key: String = k.iter().map(|b| format!("{b:02x}")).collect();
+        let h = acn_core::jcs::sha256_hex(&k);
+        let ct = "cc".repeat(32);
+        let terms = json!({
+            "v": acn_core::terms::TERMS_VERSION, "deliverable": {"description": "x"},
+            "conditions": [{"id": "tests", "class": "mechanical"}], "deadline": 5000, "review_window": 500,
+            "rework_limit": 0, "price": {"amount": 10, "unit": "sat"}, "payment": {"mint": "https://m"},
+            "verifiers": [{"pubkey": vp, "classes": ["mechanical"]}], "arbiter": null,
+            "subcontracting": false, "disclosure": "private", "governance": null,
+            "settlement_trigger": "contingent", "settlement_verifier": vp, "fund_window": 300
+        });
+        let parties = [rp.as_str(), pp.as_str()];
+        let r = Draft::request(&pp, "N", &terms, None)
+            .unwrap()
+            .sign(&req, 1000)
+            .unwrap();
+        let p = Draft::promise(
+            &r.id,
+            &r.id,
+            &parties,
+            &acn_core::jcs::hash(&terms).unwrap(),
+            0.9,
+            false,
+        )
+        .sign(&perf, 1100)
+        .unwrap();
+        let rep = Draft::act(K_REPORT, &r.id, &p.id, &parties)
+            .content(json!({"ciphertext": ct, "hashlock": h}))
+            .sign(&perf, 1200)
+            .unwrap();
+        let att = Draft::attest(K_ATTEST_MECH, &r.id, &rep.id, "tests", json!({"result": "pass", "ciphertext": ct, "hashlock": h, "plaintext": "dd".repeat(32)})).sign(&ver, 1250).unwrap();
+        let fund = Draft::act(K_FUND, &r.id, &rep.id, &parties).content(json!({"hashlock": h, "amount": 10, "mint": "https://m", "locktime": 4000, "token": "ftok"})).sign(&req, 1300).unwrap();
+        let mut events = vec![r.clone(), p, rep, att, fund.clone()];
+        assert_eq!(
+            advise(&events, &r.id, &pp, 1400),
+            Some(Advice::Claim {
+                token: "ftok".into()
+            })
+        );
+        assert_eq!(
+            advise(&events, &r.id, &rp, 1400),
+            Some(Advice::LearnKey {
+                token: "ftok".into()
+            })
+        );
+        assert_eq!(
+            advise(&events, &r.id, &rp, 4001),
+            Some(Advice::Refund {
+                token: "ftok".into(),
+                locktime: 4000,
+                ready: true
+            }),
+            "never claimed: refund after the funding lock"
+        );
+        let claim = Draft::act(K_CLAIM, &r.id, &fund.id, &parties)
+            .content(json!({"key": key}))
+            .sign(&perf, 1500)
+            .unwrap();
+        events.push(claim);
+        assert_eq!(advise(&events, &r.id, &rp, 1600), Some(Advice::Key { key }));
+        assert_eq!(advise(&events, &r.id, &pp, 1600), None);
     }
 }
