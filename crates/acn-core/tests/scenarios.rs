@@ -532,6 +532,9 @@ const ALL: &[Scenario] = &[
     ("J-12", common::judged::j_declared_and_unlisted),
     ("J-13", common::judged::j13),
     ("J-14", common::judged::j14),
+    ("J-15", common::judged::j15),
+    ("J-16", common::judged::j16),
+    ("J-17", common::judged::j17),
     // CR-002 Phase A: verifier settlement trigger.
     ("S-2", common::settlement::s2),
     ("S-4", common::settlement::s4),
@@ -640,6 +643,17 @@ fn check_judged(name: &str, w: &W, out: &acn_core::Output) {
                 "{ctx}"
             );
         }
+        // e: REQUEST, PROMISE, REPORT, ATTEST_JUDGED, REJECT
+        "J-15" | "J-16" => {
+            assert_eq!(c2, Some(&ConditionStatus::Pass), "{ctx}");
+            assert_eq!(codes(4), [Code::OverruledJudgement], "{ctx}");
+            assert_eq!(c.state.as_ref().unwrap().phase, Phase::Rejected, "{ctx}");
+        }
+        "J-17" => {
+            assert_eq!(c2, Some(&ConditionStatus::Fail), "{ctx}");
+            assert!(codes(4).is_empty(), "{ctx}");
+            assert_eq!(c.state.as_ref().unwrap().phase, Phase::Rejected, "{ctx}");
+        }
         "J-12" => {
             assert!(has(3, Code::Malformed), "{ctx}");
             assert!(has(4, Code::UnlistedVerifier), "{ctx}");
@@ -663,6 +677,9 @@ const JUDGED: &[Scenario] = &[
     ("J-12", common::judged::j_declared_and_unlisted),
     ("J-13", common::judged::j13),
     ("J-14", common::judged::j14),
+    ("J-15", common::judged::j15),
+    ("J-16", common::judged::j16),
+    ("J-17", common::judged::j17),
 ];
 
 /// CR-001 §3.2: every vector's expected outcome, under every arrival-order permutation.

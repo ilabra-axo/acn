@@ -709,9 +709,13 @@ list). Every rule failure produces an anomaly with a code and a severity:
     `time_regress` (reject).
 16. **V-16 Rejection grounding (new).** A `REJECT` gap that names a `mechanical` condition with a
     passing attestation from a listed verifier, and no failing one, is flagged
-    `contradicted_rejection` (flag). The rejection still applies (INV-5); the contradiction is
-    visible. `judged` conditions are deliberately not covered: a judged pass is an opinion, so
-    rejecting it contradicts no check (CR-001).
+    `contradicted_rejection` (flag). A gap that names a `judged` condition with a counted
+    (V-17) passing attestation, and no counted failing one, is flagged `overruled_judgement`
+    (flag, D-28): a judged pass is an opinion, so the rejection contradicts no check, but the
+    requester agreed to those judges and that aggregation, and scorers need to see it overruled
+    them. Each gap is checked on its own, whatever else the `REJECT` names, and disagreement
+    among the judges is no exemption (the aggregation is part of the terms). The rejection
+    still applies (INV-5) in both cases; the flag only makes it visible.
 
 17. **V-17 Judged evidence (new, CR-001).** A `K_ATTEST_JUDGED` counts toward its `judged`
     condition only if every check below passes. Each failure records its own anomaly; all are
@@ -784,6 +788,9 @@ order (INV-2).
 | J-12 | Declared aggregate/result disagree; an unlisted runner | `malformed`; `unlisted_verifier`; not counted |
 | J-13 | Judged floor plus a `mechanical` audit condition; judges pass, audit fails | `c2` pass, audit fail: not every condition is met; assurance `opinion` |
 | J-14 | A judged condition carries an unknown field (e.g. `holdback`) | Terms don't parse; the `REQUEST` is `malformed`, no commitment |
+| J-15 | Judges pass; the requester rejects naming `c2` | `REJECT` applies; `overruled_judgement` on it (D-28) |
+| J-16 | Aggregation `mean`; one judge below θ, the mean meets it; `REJECT` names `c1` and `c2` | `c2` pass; one `overruled_judgement` on the `REJECT` |
+| J-17 | Judges fail (`below_threshold`); the requester rejects naming `c2` | `REJECT` applies; no `overruled_judgement` |
 
 **Settlement-trigger vectors (CR-002 Phase A).** Each also runs under every arrival-order
 permutation. S-2 and S-3 were about delivery modes, which commitments-are-atomic removed (§1); S-2
@@ -903,7 +910,7 @@ row needs a scenario test in the conformance suite.
 | Pre-empted release (verifier trigger) | The requester rejects passing work before the verifier releases | `REJECT` before `RELEASE` is legal only against a failing attestation (§6.1; vector S-8b) |
 | False pass (verifier trigger) | Verifier and performer collude to pass bad work | Deterministic conditions make the false pass provable from the artifacts; verifier reputation destroyed |
 | Key leak (contingent v1) | The attesting verifier passes `k` or the plaintext to the requester, who reads it without funding | Verifier scored and value-capped; residual risk until zero-knowledge proofs replace the verifier's attestation (D-20) |
-| Withheld satisfaction (requester trigger) | The requester reads a deliverable whose conditions all passed, then lets the review window lapse or rejects; the token refunds at `L` | Requester fault on lapse (§6.5); `contradicted_rejection` for rejecting a passed mechanical condition (V-16), nothing yet for a passed `judged` one (D-28); clients show what payment depends on (§12); a performer that won't rely on the requester takes the verifier or contingent trigger. Auto-satisfy is the requester's own pre-commitment and can't be enforced |
+| Withheld satisfaction (requester trigger) | The requester reads a deliverable whose conditions all passed, then lets the review window lapse or rejects; the token refunds at `L` | Requester fault on lapse (§6.5); `contradicted_rejection` for rejecting a passed mechanical condition, `overruled_judgement` for a passed `judged` one (V-16); clients show what payment depends on (§12); a performer that won't rely on the requester takes the verifier or contingent trigger. Auto-satisfy is the requester's own pre-commitment and can't be enforced |
 | Unfunded offer (contingent) | The requester sees a passing attestation and never funds | The requester gains nothing (no `k`); requester fault recorded (§6.5); optional requester bond (D-21) |
 | Silent claim (contingent) | The performer takes the payment without publishing `k` | Contingent only on mints with `reveals_preimage_to_payer`: redeeming writes `k` into the spent proof's witness, which the payer reads with NUT-07 (§8.6) |
 | Ciphertext swap (contingent) | The ciphertext doesn't match the attested plaintext | The verifier decrypts `C` with `k` and attests the plaintext hash; attestations must name the `REPORT`'s `ciphertext` and `hashlock` (V-21) |
@@ -956,7 +963,7 @@ silence is handled by scoring only. Above it, performers SHOULD require an arbit
   2. Each party publishes the receipts it has an incentive to publish, with signed proof: the
      performer publishes positives (backed by the requester's `SATISFY`); the requester publishes
      negatives (backed by the performer's own `PROMISE`/`REVOKE`/`REPORT` acts). Rejections flagged
-     `contradicted_rejection` (V-16) are discounted. Any act can be shown on its own, because private
+     `contradicted_rejection` or `overruled_judgement` (V-16) are discounted. Any act can be shown on its own, because private
      mode keeps each act verifiable (§5.5).
   3. Sybil weighting: count receipts from bound requesters only; weight by value at stake and by
      the requester's own standing / web-of-trust distance.
@@ -1010,14 +1017,11 @@ From CR-002 (settlement triggers; its OD-1…OD-7):
 - [ ] **D-27 Arbiter escrow acknowledgement.** §8.4 asks the arbiter to acknowledge the escrowed
   secret, but validators don't enforce it, so commitments from before CR-002 keep their meaning.
   Decide whether to enforce `K_ESCROW_ACK` for arbiters too (e.g. from a future terms version).
-- [ ] **D-28 Overruled judgement.** V-16 deliberately leaves `judged` conditions out: a judged
-  pass is an opinion, so rejecting it contradicts no check. But a requester that names a judge
-  runner in its own terms and then rejects a passing `K_ATTEST_JUDGED` from it is exactly what
-  scoring needs to see (requester-trigger commitments, where the requester also read the
-  deliverable). Proposal: a flag-only code `overruled_judgement` on such a `REJECT`, which still
-  applies (INV-5) and is discounted or weighed by scorers like `contradicted_rejection` (§11).
-  Open: whether a rejection naming another condition alongside counts, and whether rejecting
-  within the judges' own disagreement (e.g. `mean` aggregation with one judge below θ) is exempt.
+- [x] **D-28 Overruled judgement.** Closed: V-16 now also flags a `REJECT` gap naming a `judged`
+  condition with a counted passing attestation, `overruled_judgement` (flag; the rejection still
+  applies, INV-5). Scorers weigh it like `contradicted_rejection` (§11). Each gap counts on its
+  own, whatever else the `REJECT` names; disagreement among the judges is no exemption, because
+  the aggregation is a term both parties agreed to. Vectors J-15…J-17.
 
 ## 15. Implementation phases and acceptance criteria
 
@@ -1076,4 +1080,5 @@ invent patterns. Kind numbers and tag letters are symbolic until D-1 closes.
 | CR-002 Phase B, spike | 2026-11-08 | §8.6, §14 (D-26) | Cashu reveals the preimage to the payer through NUT-07 on mints declaring NUT-07 and NUT-14 (CDK 0.18.3 and Nutshell 0.20.2 tested); `reveals_preimage_to_payer` rule recorded | Done; Phase C may proceed on Cashu |
 | CR-002 Phase C, contingent | 2026-11-08 | §3, §5.1, §5.4, §6.1, §6.2, §6.5, §7, §8.2, §9, §10 (V-21…V-23, vectors), §13 | Contingent trigger on Cashu: `REPORT` with `ciphertext` and `hashlock` → Offered; per-condition attestations bound to them; `FUND` (7714) → Funded; `CLAIM` (7715) → Settled; requester, verifier and performer lapses; codes `contingent_nondeterministic`, `attestation_mismatch`, `fund_mismatch`, `premature_fund`, `bad_key`; requester binding: `refuse_contingent`, trusted verifiers, `rail_incapable` from the `K_SVC` capability; six threat rows | Applied, same wire versions (`acn/0.4`). **Changed from CR-002 by decision:** `fulfillment_proof` dropped until `zk` exists (`verifier_attested` implied; the settlement verifier must be a listed mechanical verifier); `rail_incapable` is a binding check; one attestation per condition; profile T1 or N; added vectors S-16 (`fund_mismatch`), S-17 (unclaimed), S-18 (no `SATISFY`/pre-emptive `REJECT`). Demo performer added later (next row) |
 | Payment dependency, overruled judgement | 2026-11-08 | §12, §13, §14 (D-28) | Clients SHOULD show what payment depends on before the performer promises; new threat row "withheld satisfaction (requester trigger)"; open decision D-28 on flagging rejections of passed `judged` conditions | Clarification, no wire change. Reference: `acn_view::Projection.payment_depends_on`, shown on the card |
+| D-28 closed: overruled judgement | 2026-11-08 | §10 (V-16, vectors J-15…J-17), §13, §14 | New flag `overruled_judgement` on a `REJECT` gap naming a `judged` condition with a counted passing attestation; per gap; no exemption for disagreeing judges | Applied, no wire change (flag only, INV-5 unchanged) |
 | Contingent sealing format | 2026-11-08 | §6.2 (`REPORT`), §8.2 step 2 | The sealed deliverable `C` is a NIP-44 v2 payload keyed directly by `k`; inline as `content.sealed` or on Blossom; `ciphertext` = sha256 of the payload bytes. Reference: `acn-core::sealed`, interop-tested against rust-nostr | Clarification, no wire version change. Implemented end to end in the demo cast (`/contingent`), with `/judged`, `/injected` and `/judged-auto` for CR-001 |

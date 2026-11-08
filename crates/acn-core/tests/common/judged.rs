@@ -270,6 +270,61 @@ pub fn j14() -> W {
     .w
 }
 
+/// J-15 (D-28): the requester rejects `c2` although its listed runner's judges passed it.
+pub fn j15() -> W {
+    let mut s = setup(2116, |_| {});
+    s.judged(attestation(PASSING, false), &REQ, 1260);
+    let (r, rep) = (s.r.clone(), s.rep.clone());
+    s.w.add(d_reject(&r, &rep, "c2"), &REQ, 1300);
+    s.w
+}
+
+/// J-16 (D-28): `mean` aggregation, one judge below θ but the mean meets it; the REJECT names
+/// `c1` (no evidence) and `c2`. Still flagged once, for `c2`: the judges' disagreement was
+/// already priced into the agreed aggregation.
+pub fn j16() -> W {
+    let mut s = setup(2117, |t| t["conditions"][1]["aggregation"] = json!("mean"));
+    let mut a = attestation(
+        &[
+            ("claude", "2026-09-01", &[8.0, 8.0, 8.0]),
+            ("gpt", "2026-08-15", &[6.0, 6.0, 6.0]),
+        ],
+        false,
+    );
+    a["aggregate_score"] = json!(7.0);
+    a["result"] = json!("pass");
+    s.judged(a, &REQ, 1260);
+    let (r, rep) = (s.r.clone(), s.rep.clone());
+    let [x, y] = p2();
+    s.w.add(
+        Draft::reject(
+            &r.id,
+            &rep.id,
+            &[&x, &y],
+            vec![("c1", "too long"), ("c2", "not convincing")],
+        ),
+        &REQ,
+        1300,
+    );
+    s.w
+}
+
+/// J-17 (D-28): rejecting a judged condition the judges failed is not flagged.
+pub fn j17() -> W {
+    let mut s = setup(2118, |_| {});
+    s.judged(
+        attestation(
+            &[PASSING[0], ("gpt", "2026-08-15", &[6.0, 6.0, 8.0])],
+            false,
+        ),
+        &REQ,
+        1260,
+    );
+    let (r, rep) = (s.r.clone(), s.rep.clone());
+    s.w.add(d_reject(&r, &rep, "c2"), &REQ, 1300);
+    s.w
+}
+
 /// Extra: declared aggregate/result disagree with the recomputation; an unlisted runner.
 pub fn j_declared_and_unlisted() -> W {
     let mut s = setup(2112, |_| {});

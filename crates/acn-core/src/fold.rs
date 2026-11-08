@@ -647,7 +647,9 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 .and_then(|f| f.into_iter().max());
         }
 
-        // V-16: rejections contradicted by mechanical evidence.
+        // V-16: rejections contradicted by mechanical evidence, or overruling a counted judged
+        // pass (D-28). Per gap, whatever else the REJECT names; no exemption for judges that
+        // disagreed among themselves, since the aggregation is part of the agreed terms.
         for (i, id) in commitment.chain.iter().enumerate() {
             if commitment.chain_kinds[i] != K_REJECT || i == 0 {
                 continue;
@@ -662,20 +664,27 @@ impl<'a, 'e> Ctx<'a, 'e> {
             let t = run.terms.get(&before.terms);
             for gap in rej.content["gaps"].as_array().into_iter().flatten() {
                 let cond = gap["condition"].as_str().unwrap_or_default();
-                let mechanical = t
-                    .and_then(|t| t.condition(cond))
-                    .is_some_and(|c| c.class == ConditionClass::Mechanical);
+                let class = t.and_then(|t| t.condition(cond)).map(|c| c.class);
                 let ev = evidence.get(&(report.clone(), cond.to_string()));
-                if mechanical
-                    && ev.is_some_and(|v| {
-                        v.iter().any(|(r, _)| r == "pass") && !v.iter().any(|(r, _)| r == "fail")
-                    })
-                {
-                    acc.push(
+                let passed = ev.is_some_and(|v| {
+                    v.iter().any(|(r, _)| r == "pass") && !v.iter().any(|(r, _)| r == "fail")
+                });
+                if !passed {
+                    continue;
+                }
+                // Judged evidence only enters `evidence` once V-17 counts it.
+                match class {
+                    Some(ConditionClass::Mechanical) => acc.push(
                         id,
                         Code::ContradictedRejection,
                         format!("condition `{cond}` has a passing mechanical attestation"),
-                    );
+                    ),
+                    Some(ConditionClass::Judged) => acc.push(
+                        id,
+                        Code::OverruledJudgement,
+                        format!("condition `{cond}` has a counted passing judged attestation"),
+                    ),
+                    _ => {}
                 }
             }
         }

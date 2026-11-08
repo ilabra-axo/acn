@@ -23,7 +23,7 @@ maps to the spec ([Core.md](Core.md) v0.2) and to the code. Status as of Nov 8, 
 | 4 | Only the requester can say the job is done | INV-5, V-5 | `SATISFY` is requester-only; a `REPORT` never closes | ✅ |
 | 4 | Saying "done" is what pays; no escrow company | INV-6, §8 | Preimage in `SATISFY` (*paid call* demo); the mint enforces the lock, nobody holds the funds | ✅ test sats |
 | 4 | Evidence and opinion are kept apart | INV-8, V-11 | Interpretive reports never count (`wrong_evidence_class`); *verified work* demo | ✅ |
-| 4 | (added) Rejecting work that passed its tests is flagged | V-16 | `contradicted_rejection` | ✅ |
+| 4 | (added) Rejecting work that passed its tests is flagged | V-16 | `contradicted_rejection`; for passed judged conditions, `overruled_judgement` (D-28) | ✅ |
 | 4 | (added, CR-001) An LLM judge may decide payment, labelled as an opinion | INV-8, §7, V-17 | `judged` conditions, `K_ATTEST_JUDGED`, derived assurance label shown before signing; *judged*, *injected* and *judged-auto* demos | 🟡 judges scripted in the demo |
 | 4 | (added, CR-002) Payment without the requester's act, for checkable work | §8.2, V-19…V-23 | Verifier trigger (`RELEASE`); contingent trigger (sealed delivery, `FUND`, `CLAIM`); *judged* and *contingent* demos | ✅ test sats |
 | 5 | Not a platform; anyone can implement | INV-13 | Open spec; the validator is a standalone pure crate | ✅ |

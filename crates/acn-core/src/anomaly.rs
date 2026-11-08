@@ -45,6 +45,8 @@ pub enum Code {
     RubricMismatch,
     InjectionDetected,
     BelowThreshold,
+    /// V-16 extended to `judged` conditions (D-28).
+    OverruledJudgement,
     // Settlement triggers (CR-002).
     InvalidSettlementCombo,
     MissingEscrowAck,
@@ -87,6 +89,7 @@ impl Code {
         Code::RubricMismatch,
         Code::InjectionDetected,
         Code::BelowThreshold,
+        Code::OverruledJudgement,
         Code::InvalidSettlementCombo,
         Code::MissingEscrowAck,
         Code::BadRelease,
@@ -112,6 +115,7 @@ impl Code {
             | RubricMismatch
             | InjectionDetected
             | BelowThreshold
+            | OverruledJudgement
             | AttestationMismatch
             | PrematureFund => Severity::Flag,
             _ => Severity::Reject,
@@ -149,6 +153,7 @@ impl Code {
             RubricMismatch => "rubric_mismatch",
             InjectionDetected => "injection_detected",
             BelowThreshold => "below_threshold",
+            OverruledJudgement => "overruled_judgement",
             InvalidSettlementCombo => "invalid_settlement_combo",
             MissingEscrowAck => "missing_escrow_ack",
             BadRelease => "bad_release",
