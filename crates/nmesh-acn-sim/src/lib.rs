@@ -332,8 +332,9 @@ async fn advertise(s: &Session, agent: Actor, cast: &Cast) -> anyhow::Result<()>
         "profiles": scenarios.iter().map(|x| x.profile).collect::<HashSet<_>>(),
         "price": {"min": 0, "unit": "sat"},
         // Rail capabilities per mint (Core.md §8.6, CR-002). Bindings check them before
-        // committing; `reveals_preimage_to_payer` waits for the Phase B spike decision.
-        "mints": [{"url": cast.mint, "capabilities": ["hashlock", "timelock_refund", "p2pk"]}],
+        // committing. The CDK test mint declares NUT-07 + NUT-14, so it reveals preimages to
+        // payers (Phase B spike, docs/acn/spikes/cashu-preimage-visibility.md).
+        "mints": [{"url": cast.mint, "capabilities": ["hashlock", "timelock_refund", "p2pk", "reveals_preimage_to_payer"]}],
         "transport": "nostr",
         "terms_defaults": {"deadline_secs": 600, "review_window_secs": 3600},
         "silence_threshold_sat": 0,
