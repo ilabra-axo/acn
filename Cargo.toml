@@ -12,6 +12,7 @@ members = [
     "crates/acn-sim",
     "crates/acn-wasm",
     "crates/acn-wallet",
+    "crates/acn-judge",
     "crates/nmesh-wallet",
     "crates/nmesh-mint",
     "crates/nmesh-acn-sim",
@@ -36,6 +37,7 @@ acn-core = { path = "crates/acn-core" }
 acn-view = { path = "crates/acn-view" }
 acn-sim = { path = "crates/acn-sim" }
 acn-wallet = { path = "crates/acn-wallet" }
+acn-judge = { path = "crates/acn-judge" }
 nmesh-wallet = { path = "crates/nmesh-wallet" }
 nmesh-mint = { path = "crates/nmesh-mint" }
 
@@ -70,5 +72,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive", "env"] }
 toml = "1"
+futures = "0.3"
+# OpenAI-compatible judge endpoints (acn-judge). TLS through the process-wide ring provider.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 # Single TLS crypto provider (ring) for the whole process; installed explicitly at startup.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

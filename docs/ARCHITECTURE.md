@@ -104,7 +104,8 @@ flowchart TB
 | `nmesh-contracts` | lib | Data contracts: JSON Schema registry, hash pinning, renderer resolution, trust policy | `ContractRegistry`, `schema_hash`, `resolve_renderer`, `TrustPolicy`, `builtin::*` | none | 450 |
 | `acn-core` | lib | ACN grammar and validator: event model, BIP-340 verification, JCS, terms, bindings, the deterministic fold, `status_at`, act drafting, contingent sealing (NIP-44 v2 keyed by `k`) | `fold`, `status_at`, `Draft`, `Terms`, `Template`, `instantiate`, `binding_status`, `Code`, `sealed::{seal, open, ciphertext_hash}` | none, no C deps | 3,460 |
 | `acn-view` | lib | Projections of the fold for UIs: timeline, evidence, counter diff, settlement, allowed acts | `project`, `Projection`, `Entry`, `ConditionView`, `SettlementView` | none | 600 |
-| `acn-sim` | lib | Demo scenarios: the cast, terms templates, reactions (incl. scripted judges and the contingent seal), requester hints | `SCENARIOS`, `template`, `react`, `react_with` (escrow, payments, contingent keys), `Move.escrow`, `requester_hint`, `requester_draft` | none | 1,400 |
+| `acn-sim` | lib | Demo scenarios: the cast, terms templates, reactions (incl. scripted judges and the contingent seal), requester hints | `SCENARIOS`, `template`, `react`, `react_with` (escrow, payments, contingent keys), `Move.escrow`, `Move.judge` (real judges: the host fills the content), `Cast.judge_panel`, `requester_hint`, `requester_draft` | none | 1,400 |
+| `acn-judge` | lib + example | Judge harness for `judged` conditions: a panel of pinned judges on OpenAI-compatible endpoints (Ollama, OpenAI, OpenRouter, ...), repeats and medians, artifact delimiting, injection scan plus model vote, `K_ATTEST_JUDGED` content that V-17 counts; pinned by `harness_hash` | `Panel::{load, fingerprints, evaluate}`, `PanelConfig`, `Llm`, `HttpLlm`, `harness_hash`; example `try_panel` | HTTP to the judges | 600 |
 | `acn-wallet` | lib | Wallet views shared by all hosts; `SimMint`, a pure Cashu-shaped mint with NUT-14 rules for presenter mode; settlement advice derived from the fold | `WalletView`, `Lock`, `SimMint`, `settlement::{check_payment, advise, request_token}` | none | 510 |
 | `acn-wasm` | cdylib | Browser entry point: JSON-in/JSON-out ABI over core + view + sim + wallet | `acn_invoke` (`op`: `fold`, `project`, `react`, `hint`, `sign`, `mint_*`, `payment_check`, `advise`, ...) | none | 300 |
 | `nmesh-wallet` | lib | Cashu wallet over CDK (wallet feature only): top up, HTLC lock, inspect (DLEQ + NUT-07 + lock shape), redeem, NUT-14 refund (manual swap), lock index + history per commitment | `CashuWallet` | mint HTTP; SQLite + JSON index | 500 |
@@ -112,7 +113,7 @@ flowchart TB
 | `nmesh-core` | lib | Nostr session: keys, relays, NIP-17 send/receive, inbox stream, peer discovery, ACN transport, MLS spike | `Session`, `Inbound`, `Body`, `PeerInfo`, `sign_act`, `send_act`, `acn_public`, `find_acn_services` | relays, key files | 810 |
 | `nmesh-app` | lib | Application state and view models for UIs: contacts, history, consent, commitments, wallet, presenter clock and hints | `App`, `AppEvent`, `ContactView`, `MessageView`, `CommitmentView`, `WalletView` | via `nmesh-core` and `nmesh-wallet`; `contacts.json`, `wallet/` | 1,600 |
 | `nmesh-agent-bridge` | lib + 2 bins | MCP servers as a Nostr agent; ACN T0 shim | `Bridge`, `McpHub`, `shim::Shim`; bins `nmesh-agent`, `nmesh-echo-mcp` | relays, MCP, key files | 1,530 |
-| `nmesh-acn-sim` | lib + bin | The demo cast as live Nostr peers; hosts the test mint; decrypts escrow for its holder (arbiter or settlement verifier); Atlas verifies tokens (REQUEST or FUND), redeems, and claims with `k` | `start(Config) -> Running`, `MintSetup` | relays, key files, mint | 800 |
+| `nmesh-acn-sim` | lib + bin | The demo cast as live Nostr peers; hosts the test mint; decrypts escrow for its holder (arbiter or settlement verifier); Atlas verifies tokens (REQUEST or FUND), redeems, and claims with `k`; with `--judges`, Verity and Muse run real judges (`acn-judge`) | `start(Config) -> Running`, `MintSetup`, `Config.judges` | relays, key files, mint, judge endpoints | 850 |
 | `nmesh-cli` | bin | Dev client (`chat`, `send`, `card`, `listen`) and in-memory dev relay (`relay`) | `nmesh` | relays | 280 |
 | `apps/desktop/src-tauri` | bin | Tauri shell: 22 commands delegating to `nmesh_app::App`; forwards `AppEvent`s | `nmesh-desktop` | WebView IPC | — |
 | `apps/desktop/src` | Svelte 5 | UI: sidebar, conversation, renderers, commitment card, Director, wallet panel; Tauri or presenter backend | `store.svelte.ts`, `api.ts`, `presenter/*`, `WalletPanel.svelte` | IPC or WASM | 4,000 total incl. shell |
@@ -422,7 +423,7 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | Capability | Implementation | Verified by | Status |
 |---|---|---|---|
 | Thirteen scenarios, scripted cast | `acn_sim::SCENARIOS`, `react_with`, `template` | `playthrough` (outcomes and lanes) | ✅ |
-| MVP: pay only if two judges score ≥ θ | `/judged` (verifier trigger, Verity runs the judges and `RELEASE`s), `/injected` (`injection_detected`, no release), `/judged-auto` (Muse runs, requester auto-satisfies); judges are scripted, no LLM calls | `playthrough`, `live`, `presenter.mjs` | ✅ |
+| MVP: pay only if two judges score ≥ θ | `/judged` (verifier trigger, Verity runs the judges and `RELEASE`s), `/injected` (`injection_detected`, no release), `/judged-auto` (Muse runs, requester auto-satisfies); scripted judges by default and in presenter mode, real ones with `nmesh-acn-sim --judges judges.toml` (`acn-judge`) | `playthrough`, `live`, `presenter.mjs`; real judges: `acn-judge/tests/end_to_end.rs`, `live -- --ignored` with `NMESH_JUDGES` | ✅ |
 | Live cast on relays | `nmesh-acn-sim` | `live` (all thirteen via the app layer; balances 39 / 201 sat, 60 locked) | ✅ |
 | Director: next step, autopilot, clock | `requester_hint` / `run_hint`; `Director.svelte`; `set_clock_offset` | `live`, `scripts/presenter.mjs` | ✅ |
 | Presenter mode in the browser | `acn-wasm` + `presenter/*` | `scripts/presenter.mjs` (all thirteen, no page errors) | ✅ |
@@ -478,9 +479,10 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | `acn-core/tests/scenarios.rs` | P0 gates: every act, every anomaly, permutation property |
 | `acn-core/tests/nostr_compat.rs` | signature interop with rust-nostr |
 | `acn-sim/tests/playthrough.rs` | all nine scenarios reach their intended end; idempotent reactions |
+| `acn-judge/tests/end_to_end.rs` | a real-judge panel (scripted models) plays `/judged`, `/judged-auto`, `/injected` through the fold; model-vote injection; refuses unpinned judges and wrong rubrics; `HttpLlm` against an OpenAI-compatible stub |
 | `nmesh-core/tests/dm_roundtrip.rs` | NIP-17 text and structured messages over a mock relay |
 | `nmesh-agent-bridge/tests/app_flow.rs` | app ↔ relay ↔ bridge ↔ MCP: chat, forms, ACN T0 |
-| `nmesh-acn-sim/tests/live.rs` | app ↔ relay ↔ cast ↔ mint: discovery, all nine scenarios via hints, real balances (100 → 29 / 71), insufficient funds |
+| `nmesh-acn-sim/tests/live.rs` | app ↔ relay ↔ cast ↔ mint: discovery, all nine scenarios via hints, real balances (100 → 29 / 71), insufficient funds; opt-in (`--ignored`, `NMESH_JUDGES`): `/judged` and `/injected` with real judges |
 | `nmesh-wallet/tests/htlc.rs` | real CDK mint: top up, lock, DLEQ/NUT-07 inspect, wrong preimage / wrong key / early refund rejected, redeem, double spend, refund after locktime, index survives reopen |
 | `acn-wallet` unit, `acn-wasm` unit | `SimMint` rules; the same through the JSON ABI |
 | `scripts/presenter.mjs`, `screenshots.mjs` | browser end-to-end and screenshots |

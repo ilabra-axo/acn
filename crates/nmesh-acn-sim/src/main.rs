@@ -31,6 +31,10 @@ struct Args {
     /// SQLite file of the in-process test mint (kept so wallets stay valid across runs).
     #[arg(long, default_value = ".nmesh/mint/mint.sqlite")]
     mint_db: PathBuf,
+    /// Real judges for the judged scenarios: a TOML panel (see crates/acn-judge/judges.example.toml).
+    /// Without it, the judges are scripted.
+    #[arg(long, env = "NMESH_JUDGES")]
+    judges: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -41,7 +45,13 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| "info,nostr_relay_pool=warn".into()),
         )
         .init();
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let a = Args::parse();
+    let judges = a
+        .judges
+        .as_deref()
+        .map(acn_judge::Panel::load)
+        .transpose()?;
     let relays = a.relays.join(", ");
     let running = start(Config {
         relays: a.relays,
@@ -54,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
                 db: Some(a.mint_db),
             },
         },
+        judges,
     })
     .await?;
 
@@ -68,6 +79,14 @@ async fn main() -> anyhow::Result<()> {
     println!(
         "\n  Cashu test mint (fake Lightning, test sats only): {}",
         running.mint_url()
+    );
+    println!(
+        "  Judges: {}",
+        if a.judges.is_some() {
+            "real (acn-judge panel)"
+        } else {
+            "scripted (pass --judges judges.toml for real ones)"
+        }
     );
     println!(
         "\nAdd Atlas (and Rogue) in the desktop app, open the 🎬 Director, and run a scenario.\n"

@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 acn-core.workspace = true
 acn-sim.workspace = true
+acn-judge.workspace = true
 acn-wallet.workspace = true
 nmesh-wallet.workspace = true
 nmesh-mint.workspace = true
@@ -21,6 +22,7 @@ serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+rustls.workspace = true
 
 [dev-dependencies]
 nmesh-app.workspace = true

@@ -19,6 +19,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "acn-judge"
+version = "0.1.0"
+dependencies = [
+ "acn-core",
+ "acn-sim",
+ "acn-view",
+ "futures",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "acn-sim"
 version = "0.1.0"
 dependencies = [
@@ -3108,6 +3126,7 @@ name = "nmesh-acn-sim"
 version = "0.1.0"
 dependencies = [
  "acn-core",
+ "acn-judge",
  "acn-sim",
  "acn-view",
  "acn-wallet",
@@ -3120,6 +3139,7 @@ dependencies = [
  "nmesh-wallet",
  "nostr-relay-builder",
  "nostr-sdk",
+ "rustls",
  "serde_json",
  "tokio",
  "tracing",

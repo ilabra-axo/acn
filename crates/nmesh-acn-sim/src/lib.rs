@@ -38,6 +38,8 @@ pub struct Config {
     /// Multiply all pacing delays (e.g. 0.5 for a faster demo).
     pub pace: f64,
     pub mint: MintSetup,
+    /// Real judges for the judged scenarios (Verity and Muse run them). `None`: scripted judges.
+    pub judges: Option<acn_judge::Panel>,
 }
 
 /// Where the cast's Cashu mint comes from.
@@ -139,6 +141,7 @@ struct Sim {
     wallet: CashuWallet,
     /// Commitments requested before the cast started are history, not work (relays replay them).
     started: u64,
+    judges: Option<acn_judge::Panel>,
 }
 
 /// Connect the cast, publish profiles / `K_SVC` / bindings, and start reacting.
@@ -191,7 +194,19 @@ pub async fn start(args: Config) -> anyhow::Result<Running> {
         arbiter: pk(Actor::Arbiter),
         gatekeeper: pk(Actor::Gatekeeper),
         mint: mint_url.clone(),
+        judge_panel: args
+            .judges
+            .as_ref()
+            .map(|p| serde_json::to_value(p.fingerprints()).unwrap_or_default()),
     };
+    if let Some(p) = &args.judges {
+        let names: Vec<String> = p
+            .fingerprints()
+            .iter()
+            .map(|f| format!("{} {}", f.model_id, f.model_version))
+            .collect();
+        tracing::info!("real judges for the judged scenarios: {}", names.join(", "));
+    }
     let wallet = CashuWallet::open(
         &mint_url,
         &sessions[&Actor::Performer]
@@ -217,6 +232,7 @@ pub async fn start(args: Config) -> anyhow::Result<Running> {
         pace: args.pace,
         wallet,
         started: Timestamp::now().as_secs(),
+        judges: args.judges,
     });
 
     for agent in [Actor::Performer, Actor::Rogue] {
@@ -419,7 +435,11 @@ impl Sim {
             }
         }
         let atlas = self.sessions[&Actor::Performer].public_key().to_hex();
-        if e.kind == K_FUND && e.tags.iter().any(|t| t[0] == "p" && t.get(1) == Some(&atlas)) {
+        if e.kind == K_FUND
+            && e.tags
+                .iter()
+                .any(|t| t[0] == "p" && t.get(1) == Some(&atlas))
+        {
             self.check_fund(&e, sender).await;
         }
         let (c, fresh) = self.store.add(e);
@@ -438,7 +458,13 @@ impl Sim {
     /// Contingent (Core.md §8.2): Atlas checks the FUND token is locked to the offer's hashlock,
     /// to him, for the price, before claiming (and so revealing `k`).
     async fn check_fund(&self, e: &acn_core::Event, sender: PublicKey) {
-        let Some(c) = e.tags.iter().find(|t| t[0] == "c").and_then(|t| t.get(1)).cloned() else {
+        let Some(c) = e
+            .tags
+            .iter()
+            .find(|t| t[0] == "c")
+            .and_then(|t| t.get(1))
+            .cloned()
+        else {
             return;
         };
         let keys = self.sessions[&Actor::Performer].keys();
@@ -448,8 +474,19 @@ impl Sim {
             let ct = content["token"].as_str().ok_or("no token in FUND")?;
             let token = nostr_sdk::nips::nip44::decrypt(keys.secret_key(), &sender, ct)
                 .map_err(|_| "token is not encrypted to me")?;
-            let v = self.wallet.inspect(&token).await.map_err(|e| e.to_string())?;
-            let k = self.store.keys.lock().unwrap().get(&c).cloned().ok_or("no key")?;
+            let v = self
+                .wallet
+                .inspect(&token)
+                .await
+                .map_err(|e| e.to_string())?;
+            let k = self
+                .store
+                .keys
+                .lock()
+                .unwrap()
+                .get(&c)
+                .cloned()
+                .ok_or("no key")?;
             let h = acn_core::jcs::sha256_hex(&from_hex(&k).ok_or("bad key")?);
             if !v.unspent || v.hashlock != h || v.receiver != me {
                 return Err("token does not match the offer".to_string());
@@ -587,6 +624,16 @@ impl Sim {
                 };
                 let session = &this.sessions[&m.actor];
                 let mut draft = m.draft.clone();
+                if let Some(job) = &m.judge {
+                    match this.judge(&c, job).await {
+                        Some(content) => draft.content = content.to_string(),
+                        None => {
+                            let msg = format!("(Demo cast) {} could not run the judges, so there is no judged attestation and the review window applies. The cast's log has the error.", m.actor.display_name());
+                            let _ = this.sessions[&Actor::Performer].send_text(to, &msg).await;
+                            return;
+                        }
+                    }
+                }
                 if let Some(esc) = &m.escrow {
                     // The key goes to its holder, NIP-44 (and in-process, since we host both).
                     let to_pk = this.sessions[&esc.to].public_key();
@@ -595,16 +642,24 @@ impl Sim {
                         Err(e) => return tracing::error!(error = %e, "escrow encrypt failed"),
                     };
                     draft = draft.tag(vec!["escrow".into(), ct, to_pk.to_hex()]);
-                    this.store.escrow.lock().unwrap().insert(c.clone(), esc.secret.clone());
+                    this.store
+                        .escrow
+                        .lock()
+                        .unwrap()
+                        .insert(c.clone(), esc.secret.clone());
                 }
                 if draft.kind == K_CLAIM {
                     let token = this.store.tokens.lock().unwrap().get(&c).cloned();
                     let k = this.store.keys.lock().unwrap().get(&c).cloned();
-                    let (Some(token), Some(k)) = (token, k) else { return };
+                    let (Some(token), Some(k)) = (token, k) else {
+                        return;
+                    };
                     this.store.redeemed.lock().unwrap().insert(c.clone());
                     match this.wallet.redeem(&token, &k, Some(&c)).await {
                         Ok(n) => tracing::info!(commitment = %c, "Atlas claimed {n} sat with k"),
-                        Err(e) => return tracing::error!(commitment = %c, error = %e, "claim redeem failed"),
+                        Err(e) => {
+                            return tracing::error!(commitment = %c, error = %e, "claim redeem failed")
+                        }
                     }
                 }
                 let act = match session.sign_act(&draft, Some(m.not_before)) {
@@ -624,6 +679,44 @@ impl Sim {
                 let _ = this.dirty.send(c);
             });
         }
+    }
+}
+
+impl Sim {
+    /// Run the real judges on a job (a few tries: endpoints time out), or give up.
+    async fn judge(&self, c: &str, job: &acn_sim::JudgeJob) -> Option<Value> {
+        let panel = self.judges.as_ref()?;
+        for attempt in 1..=3u64 {
+            match panel
+                .evaluate(&job.condition, &job.rubric, &job.task, &job.artifact)
+                .await
+            {
+                Ok(ev) => {
+                    tracing::info!(commitment = %c, "judges: {}", ev.summary);
+                    for o in &ev.judges {
+                        for (i, r) in o.rationales.iter().enumerate() {
+                            tracing::debug!(commitment = %c, model = %o.model_id, run = i + 1, score = o.runs[i], "rationale: {r}");
+                        }
+                    }
+                    return Some(ev.content);
+                }
+                // Not retryable: the terms pin judges or a rubric this panel doesn't have.
+                Err(
+                    e @ (acn_judge::Error::NotPinned(_)
+                    | acn_judge::Error::Rubric
+                    | acn_judge::Error::Terms(_)),
+                ) => {
+                    tracing::error!(commitment = %c, error = %e, "cannot judge");
+                    return None;
+                }
+                Err(e) => {
+                    tracing::warn!(commitment = %c, attempt, error = %e, "judging failed");
+                    tokio::time::sleep(Duration::from_secs(2 * attempt)).await;
+                }
+            }
+        }
+        tracing::error!(commitment = %c, "judging failed 3 times; no attestation");
+        None
     }
 }
 

@@ -88,6 +88,23 @@ cd apps/desktop && pnpm tauri dev                           # desktop app
 The relay is in memory: after restarting it, restart `nmesh-acn-sim` too, so the cast publishes its
 profiles and `K_SVC` again.
 
+**Real judges.** By default the judged scenarios use scripted judges. Pass a judge panel and
+Verity and Muse call real models instead (`crates/acn-judge`):
+
+```sh
+ollama pull qwen2.5:1.5b && ollama pull llama3.2:1b          # or hosted judges, see the file
+./target/debug/nmesh-acn-sim --judges crates/acn-judge/judges.example.toml
+cargo run -p acn-judge --example try_panel -- crates/acn-judge/judges.example.toml   # dry run
+```
+
+The panel's fingerprints go into Atlas's `K_SVC` templates, so the terms pin the judges that will
+actually run. Scores are real opinions: `/judged` may now end **Rejected** (`below_threshold`)
+instead of Settled. Two small local models take about a minute per judgement on a laptop CPU and
+are too small to be trusted judges; the example file shows hosted ones (API keys come from
+environment variables). Rationales go to the cast's log at `debug` level; only their hashes are
+published (D-19). If judging fails three times, nothing is attested and the review window
+applies.
+
 **Version and updates.** The sidebar footer shows `nmesh v<version> · <commit> · acn/<version>`. A dev
 build compares its commit with the checkout's `HEAD` every two minutes; when the checkout is
 ahead it shows **Update available** with the new commits, and **Restart** makes `pnpm tauri dev`
@@ -185,9 +202,12 @@ the silent promise turns red as overdue, without any act being sent.
   and HTLC conditions are real Cashu (CDK); only the top-up invoice is fake. Never point it at
   real funds.
 - Verifier results are scripted; no tests are actually run.
-- **The judges are scripted too:** no LLM is called. The `K_ATTEST_JUDGED` events carry real
-  fingerprints, run scores and medians, and the validator checks them exactly as it would real
-  ones (V-17); the scores are fixed (8, 7, 8 and 7, 9, 8), and injection detection is a substring
-  match on "Note to the evaluator".
+- **The judges are scripted unless you pass `--judges`** (live mode only; presenter mode is
+  always scripted). Scripted judges call no LLM: the `K_ATTEST_JUDGED` events carry fixed
+  fingerprints and scores (8, 7, 8 and 7, 9, 8), and injection detection is a substring match on
+  "Note to the evaluator". With `--judges`, `acn-judge` runs the pinned models, scans for
+  injection and lets the models vote on it. The validator checks both kinds the same way (V-17).
+- **Atlas's summary is still canned** (a fixed paragraph about the protocol, whatever the brief),
+  so real judges grade the same text every time.
 - **Contingent encryption is real:** the deliverable is sealed with NIP-44 v2 under `k`
   (`acn-core::sealed`) and only decrypts once `CLAIM` puts `k` on the record.

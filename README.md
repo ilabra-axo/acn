@@ -79,6 +79,7 @@ UI-only preview in a browser with a mock backend: `cd apps/desktop && pnpm dev`.
 | `crates/acn-sim` | Demo scenarios: scripted cast reacting to real signed acts |
 | `crates/acn-wasm` | acn-core + view + sim + wallet for the browser (presenter mode) |
 | `crates/acn-wallet` | Wallet views, a pure simulated mint with NUT-14 rules, settlement advice from the fold |
+| `crates/acn-judge` | Judge harness for `judged` conditions: pinned LLM judges (OpenAI-compatible), injection detection, `K_ATTEST_JUDGED` |
 | `crates/nmesh-wallet` | Cashu wallet (CDK): HTLC lock, DLEQ/NUT-07 verify, redeem, refund |
 | `crates/nmesh-mint` | `nmesh-mint` binary: local Cashu test mint (CDK, fake Lightning, test sats) |
 | `crates/nmesh-acn-sim` | `nmesh-acn-sim` binary: the demo cast as live Nostr peers; hosts the test mint |

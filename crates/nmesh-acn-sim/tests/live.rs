@@ -36,6 +36,7 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
             listen: "127.0.0.1:0".parse()?,
             db: None,
         },
+        judges: None,
     })
     .await?;
     let mut cfg = AppConfig::new(vec![url], dir.join("app"));
@@ -74,7 +75,10 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
     // `ONLY=judged,contingent cargo test ...` plays a subset (the final balance checks then fail).
     let only = std::env::var("ONLY").ok();
     for s in SCENARIOS {
-        if only.as_deref().is_some_and(|o| !o.split(",").any(|x| x == s.id)) {
+        if only
+            .as_deref()
+            .is_some_and(|o| !o.split(",").any(|x| x == s.id))
+        {
             continue;
         }
         let pk = cast.public_key(s.actor).to_hex();
@@ -140,7 +144,10 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
                 .iter()
                 .find(|l| l.commitment.as_deref() == Some(id.as_str()))
                 .expect("lock linked to the commitment");
-            assert_eq!((lock.amount, lock.state), (60, acn_wallet::LockState::Locked));
+            assert_eq!(
+                (lock.amount, lock.state),
+                (60, acn_wallet::LockState::Locked)
+            );
         } else if price > 0 {
             let mut atlas = 0;
             for _ in 0..100 {
@@ -247,6 +254,103 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
     assert_eq!(b.items[0].lane, acn_view::Lane::Review);
     assert!(b.items[0].needs_me);
 
+    app.shutdown().await;
+    cast.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// The judged scenarios with real judges (an `acn-judge` panel) through relay, app and mint.
+/// Needs the models the panel names, so it is opt-in:
+/// `NMESH_JUDGES=crates/acn-judge/judges.example.toml cargo test -p nmesh-acn-sim --test live -- --ignored`
+#[tokio::test]
+#[ignore = "needs real judge endpoints (NMESH_JUDGES)"]
+async fn judged_scenarios_with_real_judges() -> anyhow::Result<()> {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let path = std::env::var("NMESH_JUDGES").expect("NMESH_JUDGES=<judges.toml>");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(path);
+    let judges = acn_judge::Panel::load(&path)?;
+    let relay = LocalRelay::new(RelayBuilder::default());
+    relay.run().await?;
+    let url = relay.url().await.to_string();
+    let dir = temp_dir("judges");
+    let cast = start(Config {
+        relays: vec![url.clone()],
+        data: dir.join("cast"),
+        pace: 0.05,
+        mint: MintSetup::Host {
+            listen: "127.0.0.1:0".parse()?,
+            db: None,
+        },
+        judges: Some(judges),
+    })
+    .await?;
+    let mut cfg = AppConfig::new(vec![url], dir.join("app"));
+    cfg.mint = Some(cast.mint_url().to_string());
+    let (app, _events) = App::start(cfg).await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    app.top_up(200).await?;
+    let pk = cast.public_key(Actor::Performer).to_hex();
+    app.add_contact(&pk).await?;
+    app.accept_agent(&pk).await?;
+
+    for id in ["judged", "injected"] {
+        let c = app.request(&pk, &format!("/{id} the ACN protocol")).await?;
+        let mut done = false;
+        // Real judges on a CPU take minutes.
+        for _ in 0..1200 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            match app.hint(&pk, &c.id).await?.expect("hint").action {
+                HintAction::Done => {
+                    done = true;
+                    break;
+                }
+                HintAction::Wait => {}
+                _ => {
+                    app.run_hint(&pk, &c.id).await?;
+                }
+            }
+        }
+        let view = app
+            .commitments(&pk)
+            .await?
+            .into_iter()
+            .find(|v| v.id == c.id)
+            .unwrap();
+        let summaries: Vec<_> = view
+            .timeline
+            .iter()
+            .map(|e| (e.act, e.status, &e.summary))
+            .collect();
+        assert!(done, "{id}: stuck in {:?}: {summaries:#?}", view.phase);
+        let judged = view
+            .timeline
+            .iter()
+            .find(|e| e.act == "ATTEST_JUDGED")
+            .expect("a judged attestation");
+        let codes: Vec<_> = view.anomalies.iter().map(|a| a.code).collect();
+        assert!(
+            !codes.iter().any(|c| matches!(
+                *c,
+                "judge_mismatch" | "rubric_mismatch" | "malformed" | "unlisted_verifier"
+            )),
+            "{id}: the real attestation must count: {codes:?}"
+        );
+        println!("{id}: {:?} · {}", view.phase, judged.summary);
+        if id == "injected" {
+            assert!(codes.contains(&"injection_detected"), "{codes:?}");
+            assert_eq!(view.phase, Some(Phase::Rejected));
+        } else {
+            // Real opinions: either released (pass) or rejected as below threshold.
+            assert!(
+                matches!(view.phase, Some(Phase::Settled) | Some(Phase::Rejected)),
+                "{:?}",
+                view.phase
+            );
+        }
+    }
     app.shutdown().await;
     cast.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);

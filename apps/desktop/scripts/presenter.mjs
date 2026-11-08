@@ -43,7 +43,7 @@ async function openAgent(name) {
 async function run(id, { manual = [] } = {}) {
   const agent = id === "rogue" ? "Rogue" : "Atlas";
   await openAgent(agent);
-  await page.locator(".director .scn", { hasText: TITLES[id] }).click();
+  await page.locator(".director .scn", { has: page.locator(".name", { hasText: new RegExp(`^${TITLES[id].replace(/[()]/g, "\\$&")}$`) }) }).click();
   const card = page.locator(".commitment").last();
   for (const step of manual) {
     await page.waitForSelector(step.waitFor, { timeout: 15000 });

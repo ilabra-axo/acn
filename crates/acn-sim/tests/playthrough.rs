@@ -37,6 +37,7 @@ impl World {
             arbiter: pk(Actor::Arbiter),
             gatekeeper: pk(Actor::Gatekeeper),
             mint: SIM_MINT.into(),
+            judge_panel: None,
         };
         Self {
             actor_keys: keys,
@@ -209,7 +210,11 @@ fn scenario_outcomes() {
     let p = run("judged");
     assert_eq!(p.phase, Some(Phase::Settled), "{:?}", acts(&p));
     let tl = p.timeline.iter().map(|e| e.act).collect::<Vec<_>>();
-    assert!(tl.contains(&"ATTEST_JUDGED") && tl.contains(&"RELEASE"), "{tl:?} / {:?}", acts(&p));
+    assert!(
+        tl.contains(&"ATTEST_JUDGED") && tl.contains(&"RELEASE"),
+        "{tl:?} / {:?}",
+        acts(&p)
+    );
 
     let p = run("injected");
     assert_eq!(p.phase, Some(Phase::Rejected), "{:?}", acts(&p));
@@ -221,9 +226,18 @@ fn scenario_outcomes() {
     // Spec §12: what payment depends on, per trigger.
     use acn_view::PaymentDependency as D;
     assert_eq!(p.payment_depends_on, Some(D::Requester { arbiter: None }));
-    assert!(matches!(run("judged").payment_depends_on, Some(D::Verifier { .. })));
-    assert!(matches!(run("contingent").payment_depends_on, Some(D::Contingent { .. })));
-    assert!(matches!(run("dispute").payment_depends_on, Some(D::Requester { arbiter: Some(_) })));
+    assert!(matches!(
+        run("judged").payment_depends_on,
+        Some(D::Verifier { .. })
+    ));
+    assert!(matches!(
+        run("contingent").payment_depends_on,
+        Some(D::Contingent { .. })
+    ));
+    assert!(matches!(
+        run("dispute").payment_depends_on,
+        Some(D::Requester { arbiter: Some(_) })
+    ));
     assert_eq!(run("quick").payment_depends_on, None);
 
     // CR-002 contingent: sealed until CLAIM reveals k.

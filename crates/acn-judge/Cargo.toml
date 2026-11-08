@@ -1,0 +1,24 @@
+[package]
+name = "acn-judge"
+description = "Judge harness for ACN `judged` conditions: runs pinned LLM judges (OpenAI-compatible endpoints), detects injection, and produces a K_ATTEST_JUDGED that passes V-17"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+acn-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+futures.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net", "io-util"] }
+acn-sim.workspace = true
+acn-view.workspace = true

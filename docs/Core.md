@@ -989,7 +989,10 @@ From CR-001 (the `judged` condition class; its OD-1…OD-6):
 - [ ] **D-17 Model deprecation (CR-001 OD-4).** What happens when a pinned judge model is withdrawn
   mid-commitment: renegotiation via `COUNTER`, a named fallback judge in the terms, or lapse.
 - [ ] **D-18 Injection detection standard (CR-001 OD-5).** Harness-defined and pinned by
-  `harness_hash` (current text), or a shared reference harness maintained with ACN.
+  `harness_hash` (current text), or a shared reference harness maintained with ACN. A candidate
+  now exists: `acn-judge/1` (`crates/acn-judge`), whose `harness_hash` commits to its artifact
+  delimiting, a pattern scan, a majority vote of the judges' own flags (verbatim spans only), the
+  reply schema and the retry rule.
 - [ ] **D-19 Rationale disclosure (CR-001 OD-6).** Whether judge rationales are published by hash
   only or made available to the performer as diagnostics.
 
@@ -1080,5 +1083,6 @@ invent patterns. Kind numbers and tag letters are symbolic until D-1 closes.
 | CR-002 Phase B, spike | 2026-11-08 | §8.6, §14 (D-26) | Cashu reveals the preimage to the payer through NUT-07 on mints declaring NUT-07 and NUT-14 (CDK 0.18.3 and Nutshell 0.20.2 tested); `reveals_preimage_to_payer` rule recorded | Done; Phase C may proceed on Cashu |
 | CR-002 Phase C, contingent | 2026-11-08 | §3, §5.1, §5.4, §6.1, §6.2, §6.5, §7, §8.2, §9, §10 (V-21…V-23, vectors), §13 | Contingent trigger on Cashu: `REPORT` with `ciphertext` and `hashlock` → Offered; per-condition attestations bound to them; `FUND` (7714) → Funded; `CLAIM` (7715) → Settled; requester, verifier and performer lapses; codes `contingent_nondeterministic`, `attestation_mismatch`, `fund_mismatch`, `premature_fund`, `bad_key`; requester binding: `refuse_contingent`, trusted verifiers, `rail_incapable` from the `K_SVC` capability; six threat rows | Applied, same wire versions (`acn/0.4`). **Changed from CR-002 by decision:** `fulfillment_proof` dropped until `zk` exists (`verifier_attested` implied; the settlement verifier must be a listed mechanical verifier); `rail_incapable` is a binding check; one attestation per condition; profile T1 or N; added vectors S-16 (`fund_mismatch`), S-17 (unclaimed), S-18 (no `SATISFY`/pre-emptive `REJECT`). Demo performer added later (next row) |
 | Payment dependency, overruled judgement | 2026-11-08 | §12, §13, §14 (D-28) | Clients SHOULD show what payment depends on before the performer promises; new threat row "withheld satisfaction (requester trigger)"; open decision D-28 on flagging rejections of passed `judged` conditions | Clarification, no wire change. Reference: `acn_view::Projection.payment_depends_on`, shown on the card |
+| Reference judge harness | 2026-11-08 | §14 (D-18) | `acn-judge/1`: pinned judges on OpenAI-compatible endpoints, producing `K_ATTEST_JUDGED` that V-17 counts; noted as a D-18 candidate | No spec change; D-18 stays open |
 | D-28 closed: overruled judgement | 2026-11-08 | §10 (V-16, vectors J-15…J-17), §13, §14 | New flag `overruled_judgement` on a `REJECT` gap naming a `judged` condition with a counted passing attestation; per gap; no exemption for disagreeing judges | Applied, no wire change (flag only, INV-5 unchanged) |
 | Contingent sealing format | 2026-11-08 | §6.2 (`REPORT`), §8.2 step 2 | The sealed deliverable `C` is a NIP-44 v2 payload keyed directly by `k`; inline as `content.sealed` or on Blossom; `ciphertext` = sha256 of the payload bytes. Reference: `acn-core::sealed`, interop-tested against rust-nostr | Clarification, no wire version change. Implemented end to end in the demo cast (`/contingent`), with `/judged`, `/injected` and `/judged-auto` for CR-001 |
