@@ -260,6 +260,22 @@ export interface Hint {
   narration: string;
 }
 
+export interface BuildInfo {
+  version: string;
+  commit: string;
+  built_at: number;
+  acn: string;
+  /** Debug build from a source checkout (updates = rebuild from the repo). */
+  dev: boolean;
+}
+
+export interface UpdateStatus {
+  current: string;
+  latest: string;
+  available: boolean;
+  changes: string[];
+}
+
 export interface Clock {
   now: number;
   offset: number;

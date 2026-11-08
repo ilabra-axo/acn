@@ -1,4 +1,4 @@
-import type { AppEvent, BoardView, CastWallet, Clock, Commitment, Contact, Hint, Identity, Message, Wallet } from "./types";
+import type { AppEvent, BoardView, BuildInfo, CastWallet, Clock, Commitment, Contact, Hint, Identity, Message, UpdateStatus, Wallet } from "./types";
 
 export interface Backend {
   /** `tauri`: the real app. `presenter`: in-browser demo (mock chat + real ACN via WASM). */
@@ -45,6 +45,12 @@ export interface Backend {
   resetDemo(): Promise<void>;
   /** Commitments across all conversations and roles; closed ones newest first, paged. */
   board(closedLimit: number): Promise<BoardView>;
+  /** Version of this build. */
+  buildInfo(): Promise<BuildInfo>;
+  /** Dev builds: is the source checkout ahead of this binary? `null`: no update channel. */
+  updateCheck(): Promise<UpdateStatus | null>;
+  /** Rebuild from the current sources and relaunch (dev), or just relaunch. */
+  restartToUpdate(): Promise<void>;
 }
 
 const EVENT = "nmesh://event";
@@ -84,6 +90,9 @@ async function createTauriBackend(): Promise<Backend> {
     // Atlas runs in another process (nmesh-acn-sim); it reports redemptions by DM.
     castWallets: async () => [],
     resetDemo: () => invoke("reset_demo"),
+    buildInfo: () => invoke("build_info"),
+    updateCheck: () => invoke("update_check"),
+    restartToUpdate: () => invoke("restart_to_update"),
     board: (closedLimit) => invoke("board", { closedLimit }),
   };
 }

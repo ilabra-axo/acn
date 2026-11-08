@@ -206,6 +206,93 @@ async fn wallet_refund(
     app.refund(&pubkey, &commitment).await
 }
 
+// --- Version and dev updates ---
+
+#[derive(serde::Serialize)]
+struct BuildInfo {
+    version: &'static str,
+    commit: &'static str,
+    built_at: u64,
+    acn: &'static str,
+    /// A debug build from a source checkout: updates mean "rebuild from the repo".
+    dev: bool,
+}
+
+#[tauri::command]
+fn build_info() -> BuildInfo {
+    BuildInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        commit: env!("NMESH_GIT_COMMIT"),
+        built_at: env!("NMESH_BUILT_AT").parse().unwrap_or(0),
+        acn: nmesh_app::ACN_VERSION,
+        dev: cfg!(debug_assertions),
+    }
+}
+
+#[derive(serde::Serialize)]
+struct UpdateStatus {
+    /// The commit this binary was built from.
+    current: &'static str,
+    /// The repo's HEAD now.
+    latest: String,
+    available: bool,
+    /// Commit subjects between the two, newest first (at most 10).
+    changes: Vec<String>,
+}
+
+fn repo_git(args: &[&str]) -> Option<String> {
+    let repo = option_env!("NMESH_REPO")?;
+    let o = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .ok()?;
+    o.status
+        .success()
+        .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
+/// Dev builds only: is the source checkout ahead of this binary? There is no release channel
+/// yet, so release builds report nothing (a signed updater feed would go here).
+#[tauri::command]
+fn update_check() -> Option<UpdateStatus> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    let current = env!("NMESH_GIT_COMMIT");
+    let latest = repo_git(&["rev-parse", "--short=9", "HEAD"])?;
+    let available = latest != current;
+    let changes = if available {
+        repo_git(&["log", "--format=%h %s", "-10", &format!("{current}..HEAD")])
+            .map(|l| l.lines().map(str::to_owned).collect())
+            .unwrap_or_default()
+    } else {
+        vec![]
+    };
+    Some(UpdateStatus {
+        current,
+        latest,
+        available,
+        changes,
+    })
+}
+
+/// Dev builds only: rewrite `build.rs` (same content) so `pnpm tauri dev` rebuilds the app from
+/// the current sources and relaunches it. Release builds just relaunch.
+#[tauri::command]
+fn restart_to_update(handle: tauri::AppHandle) -> Result<(), String> {
+    if cfg!(debug_assertions) {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/build.rs");
+        let src = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        std::fs::write(path, src).map_err(|e| format!("{path}: {e}"))?;
+        tracing::info!("touched build.rs: tauri dev will rebuild and restart the app");
+        Ok(())
+    } else {
+        handle.restart()
+    }
+}
+
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
@@ -271,7 +358,10 @@ pub fn run() {
             wallet_refund,
             reset_demo,
             board,
-            acn_fund
+            acn_fund,
+            build_info,
+            update_check,
+            restart_to_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running nmesh");

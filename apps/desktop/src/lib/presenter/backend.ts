@@ -7,7 +7,7 @@
 import type { Backend } from "../api";
 import type { AppEvent, Body, Commitment, Contact, Message } from "../types";
 import { AcnWorld } from "./engine";
-import { loadAcn } from "./wasm";
+import { acn, loadAcn } from "./wasm";
 
 const ME_LABEL = "You";
 const ECHO = "e".repeat(64);
@@ -327,6 +327,10 @@ export async function createPresenterBackend(): Promise<Backend> {
       const closed = all.filter((c) => c.lane === "closed");
       return { items: [...all.filter((c) => c.lane !== "closed"), ...closed.slice(0, closedLimit)], closed_total: closed.length, now: world.now() };
     },
+    // Presenter mode is a static page: the version is the build's, and reloading is the update.
+    buildInfo: async () => ({ version: __NMESH_VERSION__, commit: __NMESH_COMMIT__, built_at: __NMESH_BUILT_AT__, acn: acn<string>("version"), dev: false }),
+    updateCheck: async () => null,
+    restartToUpdate: async () => window.location.reload(),
     resetDemo: async () => {
       world.reset();
       for (const pk of [world.cast.performer, world.cast.rogue]) {

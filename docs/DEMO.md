@@ -85,6 +85,15 @@ cargo build --workspace
 cd apps/desktop && pnpm tauri dev                           # desktop app
 ```
 
+The relay is in memory: after restarting it, restart `nmesh-acn-sim` too, so the cast publishes its
+profiles and `K_SVC` again.
+
+**Version and updates.** The sidebar footer shows `nmesh v<version> · <commit> · acn/<version>`. A dev
+build compares its commit with the checkout's `HEAD` every two minutes; when the checkout is
+ahead it shows **Update available** with the new commits, and **Restart** makes `pnpm tauri dev`
+rebuild from the current sources and relaunch. (`tauri dev` only watches `src-tauri/`, so edits to
+the workspace crates are not picked up without this.) Release builds have no update channel yet.
+
 Paste Atlas's npub into "Start a chat", accept, and open **🎬 Director**. `--pace 0.5` doubles
 the speed. The cast keeps its keys in `.nmesh/sim/`, so npubs stay the same across runs.
 

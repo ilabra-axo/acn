@@ -43,6 +43,8 @@ use nmesh_core::Keys;
 use nmesh_proto::command::{bind_args, parse_invocation, SlashCommandDefinition};
 
 pub use acn_sim::{Hint as AcnHint, HintAction as AcnHintAction};
+/// The ACN wire version this app speaks (shown in the UI).
+pub const ACN_VERSION: &str = acn_core::kinds::VERSION;
 pub use acn_wallet::WalletView;
 pub use commitments::{BindingView, CommitmentView};
 use nmesh_wallet::CashuWallet;

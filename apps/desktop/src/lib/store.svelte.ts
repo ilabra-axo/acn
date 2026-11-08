@@ -1,6 +1,6 @@
 import type { Backend } from "./api";
 import { createBackend } from "./api";
-import type { AppEvent, BoardView, CastWallet, Clock, Commitment, Contact, Hint, Identity, Message, Wallet } from "./types";
+import type { AppEvent, BoardView, BuildInfo, CastWallet, Clock, Commitment, Contact, Hint, Identity, Message, UpdateStatus, Wallet } from "./types";
 
 function upsertSorted(list: Message[], m: Message): Message[] {
   if (list.some((x) => x.id === m.id)) return list;
@@ -18,6 +18,9 @@ function sortContacts(list: Contact[]): Contact[] {
 export class AppStore {
   backend: Backend | null = null;
   me = $state<Identity | null>(null);
+  build = $state<BuildInfo | null>(null);
+  update = $state<UpdateStatus | null>(null);
+  restarting = $state(false);
   contacts = $state<Contact[]>([]);
   active = $state<string | null>(null);
   messages = $state<Message[]>([]);
@@ -37,7 +40,31 @@ export class AppStore {
       this.ready = true;
       this.loadWallet();
       this.loadBoard();
+      this.build = await this.backend.buildInfo();
+      this.checkUpdate();
+      window.setInterval(() => this.checkUpdate(), 120_000);
     } catch (e) {
+      this.fail(e);
+    }
+  }
+
+  async checkUpdate() {
+    if (!this.backend || this.restarting) return;
+    try {
+      this.update = await this.backend.updateCheck();
+    } catch {
+      this.update = null;
+    }
+  }
+
+  /** Dev: `pnpm tauri dev` rebuilds from the current sources and relaunches the app. */
+  async restartToUpdate() {
+    if (!this.backend) return;
+    this.restarting = true;
+    try {
+      await this.backend.restartToUpdate();
+    } catch (e) {
+      this.restarting = false;
       this.fail(e);
     }
   }

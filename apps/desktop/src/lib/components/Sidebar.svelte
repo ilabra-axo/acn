@@ -84,10 +84,31 @@
     {/each}
   </nav>
 
+  {#if store.update?.available}
+    <div class="update" role="status">
+      <div class="u-text">
+        <b>Update available</b>
+        <span class="mono" title={store.update.changes.join("\n")}>{store.update.current} → {store.update.latest}</span>
+        {#if store.update.changes.length}<span class="muted">{store.update.changes.length}{store.update.changes.length === 10 ? "+" : ""} commit{store.update.changes.length === 1 ? "" : "s"}: {store.update.changes[0].slice(10)}</span>{/if}
+      </div>
+      <button class="btn primary" disabled={store.restarting} onclick={() => store.restartToUpdate()}
+        title="Rebuilds the app from the current sources and relaunches it (pnpm tauri dev)">
+        {store.restarting ? "Rebuilding…" : "Restart"}
+      </button>
+    </div>
+  {/if}
+
   {#if store.me}
     <footer class="muted">
-      {store.me.relays.length} relay{store.me.relays.length === 1 ? "" : "s"} ·
-      <span class="mono" title={store.me.relays.join("\n")}>{store.me.relays[0]}</span>
+      <div class="line">
+        {store.me.relays.length} relay{store.me.relays.length === 1 ? "" : "s"} ·
+        <span class="mono" title={store.me.relays.join("\n")}>{store.me.relays[0]}</span>
+      </div>
+      {#if store.build}
+        <div class="line mono" title={`Built ${new Date(store.build.built_at * 1000).toLocaleString()}${store.build.dev ? " (debug build)" : ""}`}>
+          nmesh v{store.build.version} · {store.build.commit} · {store.build.acn}{store.build.dev ? " · dev" : ""}
+        </div>
+      {/if}
     </footer>
   {/if}
 </aside>
@@ -262,6 +283,24 @@
     padding: 24px 12px;
     font-size: 13px;
     text-align: center;
+  }
+  .update {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    font-size: 12px;
+  }
+  .update .u-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+  .update .u-text > * { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .update .btn { font-size: 12px; padding: 4px 10px; }
+  footer .line {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   footer {
     font-size: 11px;

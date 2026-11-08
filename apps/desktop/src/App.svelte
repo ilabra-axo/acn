@@ -44,17 +44,6 @@
 </div>
 
 <style>
-  .shell {
-    display: grid;
-    grid-template-columns: 300px 1fr;
-    height: 100%;
-  }
-  main {
-    min-width: 0;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
   .placeholder {
     margin: auto;
     text-align: center;
