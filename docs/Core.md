@@ -1,8 +1,8 @@
-# Agent Commitments over Nostr — Logical Design Spec v0.3
+# Agent Commitments over Nostr — Logical Design Spec v0.4
 
-Nov 8, 2026 · @ivan Labra · v0.3 = v0.2 (aligned with current NIPs/NUTs and the nmesh prototype)
-plus CR-001, the `judged` condition class ([Appendix B](#appendix-b-change-requests-after-v02)).
-Wire versions: `acn/0.3`, `acn-terms/0.3`.
+Nov 8, 2026 · @ivan Labra · v0.4 = v0.2 (aligned with current NIPs/NUTs and the nmesh prototype)
+plus CR-001, the `judged` condition class (v0.3), and CR-002 Phase A, settlement triggers
+([Appendix B](#appendix-b-change-requests-after-v02)). Wire versions: `acn/0.4`, `acn-terms/0.4`.
 v0.1 is preserved at [Core-v0.1.md](Core-v0.1.md); see the [change log](#appendix-a-change-log-v01--v02).
 
 ## 1. Purpose and scope
@@ -973,3 +973,4 @@ invent patterns. Kind numbers and tag letters are symbolic until D-1 closes.
 | CR | Date | Sections | Change | Status |
 |---|---|---|---|---|
 | CR-001 `judged` condition class | 2026-11-08 | INV-8, §3, §5.1, §6.2, §7, §8.2, §9, §10 (V-11, V-17, vectors), §12, §13, §14 (D-14…D-19), §15 | New condition class `judged` with derived assurance labels; `K_ATTEST_JUDGED` (7725); V-11 amended; new V-17 with codes `self_judged`, `judge_mismatch`, `rubric_mismatch`, `injection_detected`, `below_threshold`; INV-8 clarified (judged attestations are evidence about an opinion and satisfy only `judged`); client display of assurance; auto-satisfy by the requester's binding; five threat rows; open decisions D-14…D-19; worked example in [binding-api.md](binding-api.md) | Applied, with wire versions bumped to `acn/0.3` and `acn-terms/0.3` (`judged` requires terms 0.3; 0.2 terms still parse). **Dropped by decision:** the §2.4 holdback and the `audit` / `holdback` fields (vectors J-9, J-10; OD-2 → D-15 closed). The holdback would have changed INV-6 and the §6.2 state machine, and let a requester keep the held part by inaction. Instead an audit is an ordinary condition of satisfaction of a stronger class (§7); a `judged` condition alone is the minimum floor. Added vectors J-13 (judged + audit condition) and J-14 (unknown judged field) |
+| CR-002 settlement triggers, Phase A | 2026-11-08 | §1, INV-5, INV-6, §3, §4, §5.1, §5.4, §6.1, §6.2, §6.5, §7, §8.2, §8.4, §8.6, §10 (V-18…V-20, vectors), §13, §14 (D-20…D-27), §15 | `settlement_trigger` / `settlement_verifier` / `fund_window`; valid combinations; verifier trigger with `K_ESCROW_ACK` (7726) and `RELEASE` (7713), state `Settled`, verifier lapse; INV-5 and INV-6 replaced as authorized, with `RULING` added; rail capabilities per mint, checked by bindings; policy filters in the bindings; three threat rows; wire versions `acn/0.4`, `acn-terms/0.4` | Phase A applied. **Changed from CR-002 by decision:** commitments are atomic, so the `delivery` field and `staged` delivery are dropped (S-2, S-3 retired; staging composes above the protocol), and `fulfillment_proof` and `rail` wait until a second value exists (zk, Lightning); `VERIFIER_ACK` is the shared `K_ESCROW_ACK` and its code `missing_escrow_ack`; `rail_incapable` is a binding check; the verifier trigger excludes `human`/`interpretive` conditions and arbiters; `RELEASE` needs every condition passing, whoever attested. Phase B (spike) and Phase C (contingent) pending |

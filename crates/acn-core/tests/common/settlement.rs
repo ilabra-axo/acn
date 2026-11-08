@@ -72,7 +72,7 @@ impl V {
         self.w.add(d, by, at)
     }
     /// ACK → PROMISE → REPORT; returns the REPORT.
-    pub fn to_report(&mut self) -> Event {
+    pub fn promised_report(&mut self) -> Event {
         self.ack(&VER, 1010);
         let p = self.promise(1100);
         self.report(&p, 1200)
@@ -98,7 +98,7 @@ pub fn s4() -> W {
 /// S-5: happy path; the requester's later SATISFY is a recorded judgement.
 pub fn s5() -> W {
     let mut v = setup(3005, |_| {});
-    let rep = v.to_report();
+    let rep = v.promised_report();
     v.attest(&rep, "pass", 1250);
     let rel = v.release(&rep, &preimage(), &VER, 1300);
     let r = v.r.clone();
@@ -109,7 +109,7 @@ pub fn s5() -> W {
 /// S-6: RELEASE whose secret doesn't hash to H.
 pub fn s6() -> W {
     let mut v = setup(3006, |_| {});
-    let rep = v.to_report();
+    let rep = v.promised_report();
     v.attest(&rep, "pass", 1250);
     v.release(&rep, &"00".repeat(32), &VER, 1300);
     v.w
@@ -118,7 +118,7 @@ pub fn s6() -> W {
 /// S-7: RELEASE signed by a key other than the settlement verifier.
 pub fn s7() -> W {
     let mut v = setup(3007, |_| {});
-    let rep = v.to_report();
+    let rep = v.promised_report();
     v.attest(&rep, "pass", 1250);
     v.release(&rep, &preimage(), &STRANGER, 1300);
     v.w
@@ -127,7 +127,7 @@ pub fn s7() -> W {
 /// S-7b: RELEASE before every condition has passed.
 pub fn s7b() -> W {
     let mut v = setup(3017, |_| {});
-    let rep = v.to_report();
+    let rep = v.promised_report();
     v.release(&rep, &preimage(), &VER, 1300);
     v.w
 }
@@ -135,7 +135,7 @@ pub fn s7b() -> W {
 /// S-8: the verifier stays silent after the REPORT (lapse checked with `status_at`).
 pub fn s8() -> W {
     let mut v = setup(3008, |_| {});
-    v.to_report();
+    v.promised_report();
     v.w
 }
 
@@ -143,7 +143,7 @@ pub fn s8() -> W {
 /// fails; after a failing attestation, REJECT sends it back for rework.
 pub fn s8b() -> W {
     let mut v = setup(3018, |_| {});
-    let rep = v.to_report();
+    let rep = v.promised_report();
     let r = v.r.clone();
     v.w.add(d_satisfy(&r, &rep, Some(&preimage())), &REQ, 1210); // illegal: RELEASE settles
     v.w.add(d_reject(&r, &rep, "tests"), &REQ, 1220); // illegal: nothing fails yet
@@ -152,7 +152,7 @@ pub fn s8b() -> W {
 
 pub fn s8c() -> W {
     let mut v = setup(3028, |_| {});
-    let rep = v.to_report();
+    let rep = v.promised_report();
     v.attest(&rep, "fail", 1250);
     let r = v.r.clone();
     v.w.add(d_reject(&r, &rep, "tests"), &REQ, 1300);

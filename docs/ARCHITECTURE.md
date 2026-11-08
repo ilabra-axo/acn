@@ -138,7 +138,8 @@ C toolchain.
 | 24930 | agent status (reserved) | `nmesh_proto::kinds` | not used yet |
 | 34930–34932 | contract / renderer / agent manifest | `nmesh_proto::kinds` | addressable; agent manifest is published |
 | 7700–7712 | ACN acts (REQUEST … RULING) | `acn_core::kinds` | regular events, provisional (D-1) |
-| 7720–7725 | attestations, interpretive report, endorse, score, judged attestation | `acn_core::kinds` | annotating; `K_SCORE` reserved; `K_ATTEST_JUDGED` = 7725 (CR-001) |
+| 7713 | `K_RELEASE` (CR-002) | `acn_core::kinds` | advancing, closing |
+| 7720–7726 | attestations, interpretive report, endorse, score, judged attestation, escrow ack | `acn_core::kinds` | annotating; `K_SCORE` reserved; `K_ATTEST_JUDGED` = 7725 (CR-001); `K_ESCROW_ACK` = 7726 (CR-002) |
 | 7730–7732 | bind, bind ack, bind revoke | `acn_core::kinds` | published publicly |
 | 7739 | `K_PRIVATE_ACT` | `acn_core::kinds` | rumor whose content is one signed act |
 | 37700 | `K_SVC` service advertisement | `acn_core::kinds` | addressable; tools, terms templates, data handling |
@@ -388,6 +389,8 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | Contradicted rejection | V-16 | `fold` post-pass | `evidence`, playthrough | ✅ |
 | `judged` condition class, assurance labels | §7, INV-8, CR-001 | `terms::{Judged, Assurance}`, `Terms::assurance`; `Commitment.assurance`; card / tile labels | J-11 | ✅ |
 | Judged evidence | V-11, V-17, CR-001 | `act::judged_content` (V-3), `Ctx::judged_evidence` | `cr001_judged_vectors_under_every_arrival_order` (J-1…J-8, J-3b, J-11…J-14) | ✅ |
+| Settlement triggers: requester (default) and verifier | §7, §8.2, V-18…V-20, CR-002 Phase A | `Terms::settlement_combo`; `Ctx::{require_escrow, conditions_at}`, `K_ESCROW_ACK`, `K_RELEASE`, `Phase::Settled`; `Party::Verifier` lapse; app escrow + `SettlementPolicy`; shim `trigger_unsupported` | `cr002_verifier_trigger_vectors_under_every_arrival_order` (S-2, S-4…S-8c), `cr002_settlement_combinations`, `performer_redeems_after_release` | ✅ |
+| Contingent settlement (encrypted until paid) | CR-002 Phase C | specified, rejected as `invalid_settlement_combo` | — | ⬜ after the Phase B spike |
 | Audit as a condition (no holdback) | §7, CR-001 §2.4 (holdback dropped) | ordinary conditions; `Judged` rejects unknown fields | J-13, J-14 | ✅ |
 | Governance endorsements | V-14 | `needs_endorsement` / `endorsed` | `governance` | ✅ |
 | Causal monotonicity, late flags | V-15, §6.5 | `step` | `time_regress`, `late` | ✅ |
