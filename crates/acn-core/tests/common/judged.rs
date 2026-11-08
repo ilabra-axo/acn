@@ -35,8 +35,7 @@ pub fn judged_terms(f: impl FnOnce(&mut Value)) -> Value {
              "judges": [judge("claude", "2026-09-01"), judge("gpt", "2026-08-15")],
              "rubric_hash": rubric_hash(), "rubric_disclosure": "commit_reveal",
              "scale": {"min": 0, "max": 10}, "threshold": 7, "aggregation": "all",
-             "repeats": 3, "runners": [pk(&REQ)],
-             "audit": null, "holdback": null}
+             "repeats": 3, "runners": [pk(&REQ)]}
         ]);
         t["verifiers"] = json!([{"pubkey": pk(&VER), "classes": ["mechanical"]}]);
         f(t);
@@ -238,6 +237,37 @@ pub fn j8() -> W {
 /// J-11: one mechanical and one judged condition (no evidence needed).
 pub fn j11() -> W {
     setup(2111, |_| {}).w
+}
+
+/// J-13: the judged floor plus an audit condition (here mechanical, by a listed auditor). The
+/// judges pass, the audit fails: not every condition is met.
+pub fn j13() -> W {
+    let mut s = setup(2114, |t| {
+        let conds = t["conditions"].as_array_mut().unwrap();
+        conds.push(json!({"id": "c3", "class": "mechanical", "description": "audit: every claim traces to the source"}));
+    });
+    s.judged(attestation(PASSING, false), &REQ, 1260);
+    let (r, rep) = (s.r.clone(), s.rep.clone());
+    s.w.add(
+        Draft::attest(
+            K_ATTEST_MECH,
+            &r.id,
+            &rep.id,
+            "c3",
+            json!({"result": "fail", "method": "claim tracing"}),
+        ),
+        &VER,
+        1270,
+    );
+    s.w
+}
+
+/// J-14: a dropped field (`holdback`) in a judged condition makes the terms unparseable.
+pub fn j14() -> W {
+    setup(2115, |t| {
+        t["conditions"][1]["holdback"] = json!({"fraction": 0.2})
+    })
+    .w
 }
 
 /// Extra: declared aggregate/result disagree with the recomputation; an unlisted runner.

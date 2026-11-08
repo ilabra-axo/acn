@@ -143,8 +143,6 @@ export interface JudgedView {
   repeats: number;
   rubric_disclosure: "public" | "commit_reveal";
   runners: string[];
-  audit_rate: number | null;
-  holdback_fraction: number | null;
 }
 
 export interface ConditionView {

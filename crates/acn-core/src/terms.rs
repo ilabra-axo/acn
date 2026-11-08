@@ -123,23 +123,11 @@ pub struct Scale {
     pub max: f64,
 }
 
+/// Class-specific fields of a `judged` condition (spec §7). Unknown fields are an error, so a
+/// field the parties believe binds (e.g. a dropped `holdback`) can't be silently ignored. Audits
+/// are separate conditions of satisfaction, not fields here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Audit {
-    /// 0..1
-    pub rate: f64,
-    pub auditors: Vec<String>,
-    /// Seconds.
-    pub window: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Holdback {
-    /// 0..1 of the price, released only after the audit window.
-    pub fraction: f64,
-}
-
-/// Class-specific fields of a `judged` condition (spec §7).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Judged {
     pub judges: Vec<JudgeFingerprint>,
     pub rubric_hash: String,
@@ -150,10 +138,6 @@ pub struct Judged {
     pub repeats: u32,
     /// Keys allowed to run the judges and sign `K_ATTEST_JUDGED`. MUST NOT include the performer.
     pub runners: Vec<String>,
-    #[serde(default)]
-    pub audit: Option<Audit>,
-    #[serde(default)]
-    pub holdback: Option<Holdback>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -192,12 +176,7 @@ impl Condition {
         if !is_sha256(&j.rubric_hash) {
             return bad("rubric_hash must be a lowercase sha256 hex");
         }
-        let frac = |x: f64| (0.0..=1.0).contains(&x);
-        if j.audit.as_ref().is_some_and(|a| !frac(a.rate))
-            || j.holdback.as_ref().is_some_and(|h| !frac(h.fraction))
-        {
-            return bad("audit rate and holdback fraction must be within 0..1");
-        }
+
         Ok(j)
     }
 }

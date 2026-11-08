@@ -64,7 +64,6 @@
     const agg = j.aggregation === "all" ? "each judge" : j.aggregation;
     const parts = [`judged by ${who}`, `threshold ${j.threshold}/${j.scale_max} (${agg}, ×${j.repeats})`];
     if (j.rubric_disclosure === "commit_reveal") parts.push("rubric revealed at judging");
-    if (j.holdback_fraction) parts.push(`${Math.round(j.holdback_fraction * 100)}% held for audit`);
     return parts.join("; ");
   }
 

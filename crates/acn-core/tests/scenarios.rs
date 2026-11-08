@@ -530,6 +530,8 @@ const ALL: &[Scenario] = &[
     ("J-8", common::judged::j8),
     ("J-11", common::judged::j11),
     ("J-12", common::judged::j_declared_and_unlisted),
+    ("J-13", common::judged::j13),
+    ("J-14", common::judged::j14),
 ];
 
 // ---------- CR-001 vectors (spec §10 conformance table) ----------
@@ -539,6 +541,16 @@ fn check_judged(name: &str, w: &W, out: &acn_core::Output) {
     use acn_core::Assurance;
     let e = &w.events;
     let (req, rep) = (&e[0], &e[2]);
+    if name == "J-14" {
+        // Unparseable terms: the REQUEST is retained but never becomes a commitment.
+        assert!(
+            out.has(&req.id, Code::Malformed),
+            "{name}: {:?}",
+            out.anomalies
+        );
+        assert!(!out.commitments.contains_key(&req.id));
+        return;
+    }
     let c = &out.commitments[&req.id];
     let c2 = c.conditions.get("c2");
     let has = |i: usize, code: Code| out.has(&e[i].id, code);
@@ -548,6 +560,7 @@ fn check_judged(name: &str, w: &W, out: &acn_core::Output) {
             .collect::<Vec<_>>()
     };
     let ctx = format!("{name}: {:?}", out.anomalies);
+
     assert_eq!(c.assurance, Some(Assurance::Opinion), "{ctx}");
     match name {
         "J-1" => {
@@ -590,6 +603,14 @@ fn check_judged(name: &str, w: &W, out: &acn_core::Output) {
             assert_eq!(c2, Some(&ConditionStatus::Fail), "{ctx}");
             assert_eq!(codes(3), [Code::BelowThreshold], "{ctx}");
         }
+        "J-13" => {
+            assert_eq!(c2, Some(&ConditionStatus::Pass), "{ctx}");
+            assert_eq!(
+                c.conditions.get("c3"),
+                Some(&ConditionStatus::Fail),
+                "{ctx}"
+            );
+        }
         "J-11" => {
             let t = c.terms.as_ref().unwrap();
             let classes: Vec<_> = t.conditions.iter().map(|c| c.class.assurance()).collect();
@@ -620,6 +641,8 @@ const JUDGED: &[Scenario] = &[
     ("J-8", common::judged::j8),
     ("J-11", common::judged::j11),
     ("J-12", common::judged::j_declared_and_unlisted),
+    ("J-13", common::judged::j13),
+    ("J-14", common::judged::j14),
 ];
 
 /// CR-001 §3.2: every vector's expected outcome, under every arrival-order permutation.

@@ -13,8 +13,9 @@ validator as everyone else. The reference binding today is `acn-mcp-shim` (T0, f
 
 A requester commissions a 500-word technical summary of a document and pays only if two
 independent judges rate it at least 7 out of 10. It is presented as rung one of an assurance
-ladder (judged → judged plus audit → mechanical → grounded): its limitation, that the result is
-an opinion, is part of the argument, and every client labels it so.
+ladder: the judged floor, then the floor plus an audit condition, then mechanical, then grounded.
+Its limitation, that the result is an opinion, is part of the argument, and every client labels
+it so.
 
 ### Terms (abridged)
 
@@ -36,9 +37,7 @@ Price 2,000 sat; deadline 1 hour; review window 30 minutes. Overall assurance: *
      ],
      "rubric_hash": "<sha256 of the rubric text>", "rubric_disclosure": "commit_reveal",
      "scale": {"min": 0, "max": 10}, "threshold": 7, "aggregation": "all", "repeats": 3,
-     "runners": ["<requester key>"],
-     "audit": {"rate": 0.1, "auditors": ["<auditor key>"], "window": 86400},
-     "holdback": {"fraction": 0.2}}
+     "runners": ["<requester key>"]}
   ],
   "deadline": "<now + 3600>", "review_window": 1800, "rework_limit": 0,
   "price": {"amount": 2000, "unit": "sat"},
@@ -55,14 +54,13 @@ performer (V-17.1). The requester also lists itself as the mechanical verifier f
 
 | # | Who | Act / event | What the validator and clients do |
 |---|---|---|---|
-| 1 | Requester binding (Terms Author) | fills a judged template | Clients show "assurance: opinion; judged by J1 and J2, threshold 7/10, 20% held for audit" (§12) |
-| 2 | Requester | `REQUEST` (profile `N`) with the locked token(s) in `content.token`, NIP-44 to the performer | V-9 parses the terms, including the judged fields (§7). *Two tokens (1,600 + 400 sat): held with CR-001 §2.4* |
+| 1 | Requester binding (Terms Author) | fills a judged template | Clients show "assurance: opinion; judged by J1 and J2, threshold 7/10 (each judge, ×3)" (§12) |
+| 2 | Requester | `REQUEST` (profile `N`) with the 2,000 sat token hash-locked to the performer in `content.token`, NIP-44 to the performer | V-9 parses the terms, including the judged fields (§7) |
 | 3 | Performer | `PROMISE` | Its client shows the same label before signing (§12); V-9 binds the terms hash |
 | 4 | Performer | `REPORT` with the summary's hash in `x` | |
 | 5a | Requester binding | `K_ATTEST_MECH` on `c1` (`{"result": "pass", "method": "word count"}`) | V-11: counted (listed verifier, right class) |
 | 5b | Requester binding | runs both judges three times each, then `K_ATTEST_JUDGED` on `c2`, revealing the rubric | V-17 checks runner, fingerprints, run counts, the rubric reveal, injection and θ; `c2` = pass |
-| 6 | Requester binding | auto-issues `SATISFY` with `s` | Closure stays the requester's act (INV-5): the binding signs with the requester key under a policy the requester set in advance. The performer redeems |
-| 7 | Requester binding | after the audit window, the holdback release | *Held with CR-001 §2.4 (holdback, milestones; INV-6)* |
+| 6 | Requester binding | auto-issues `SATISFY` with `s`, because every condition is met | Closure stays the requester's act (INV-5): the binding signs with the requester key under a policy the requester set in advance. The performer redeems the 2,000 sat |
 
 The judged attestation of step 5b (abridged; every field is required, Core.md §9):
 
@@ -97,6 +95,19 @@ a fail, so `c2` fails, and records `injection_detected` on the performer's `REPO
 conformance vector J-6). The requester's binding does not auto-satisfy; the requester rejects,
 naming `c2`.
 
+### Rung two: the floor plus an audit
+
+To ask for more than an opinion, the requester adds an audit as another condition, for example
+`{"id": "c3", "class": "mechanical", "description": "audit: every claim traces to the source"}`
+with an auditor key listed in `verifiers`. The auditor checks the delivery and signs
+`K_ATTEST_MECH` on `c3`. Every condition must be met, so the auto-satisfy policy fires only when
+the judges **and** the audit pass; a passing judged score with a failed audit leaves the
+commitment open for the requester to reject (conformance vector J-13). The overall assurance
+stays `opinion`, because it reports the weakest condition.
+
+There is no post-settlement audit or holdback: whatever must be checked is a condition, checked
+before closure.
+
 ### What the validator rejects
 
 Covered by the conformance vectors (Core.md §10):
@@ -107,4 +118,6 @@ Covered by the conformance vectors (Core.md §10):
 - a judge whose `model_version` differs from the terms, or the wrong number of runs:
   `judge_mismatch` (J-4, J-8);
 - a revealed rubric that doesn't hash to `rubric_hash`: `rubric_mismatch` (J-5);
-- one judge below θ under `all`: `below_threshold`, condition failed (J-7).
+- one judge below θ under `all`: `below_threshold`, condition failed (J-7);
+- a judged condition with a field the spec doesn't define (e.g. `holdback`): the terms don't
+  parse and the `REQUEST` is `malformed` (J-14).

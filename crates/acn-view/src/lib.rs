@@ -97,8 +97,6 @@ pub struct JudgedView {
     pub repeats: u32,
     pub rubric_disclosure: RubricDisclosure,
     pub runners: Vec<String>,
-    pub audit_rate: Option<f64>,
-    pub holdback_fraction: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -556,8 +554,6 @@ fn one(
                             repeats: j.repeats,
                             rubric_disclosure: j.rubric_disclosure,
                             runners: j.runners.clone(),
-                            audit_rate: j.audit.as_ref().map(|a| a.rate),
-                            holdback_fraction: j.holdback.as_ref().map(|h| h.fraction),
                         }),
                     }
                 })

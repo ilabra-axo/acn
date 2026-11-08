@@ -379,11 +379,17 @@ INV-8 is enforced.
   | `aggregation` | enum | `all` (every judge ≥ θ), `mean`, or `median` (across judges) |
   | `repeats` | integer, ≥ 1 | Runs per judge; the per-judge score is the median of its runs (non-determinism control) |
   | `runners` | pubkeys, ≥ 1 | Keys allowed to run the judges and sign the attestation: the requester (its binding) or a third party. MUST NOT include the performer |
-  | `audit` | object or null | `rate` (0–1), `auditors[]` pubkeys, `window` seconds |
-  | `holdback` | object or null | `fraction` (0–1) of the price released only after the audit window. *Parsed and displayed; its settlement (§8.5) is pending, see Appendix B* |
 
-  Terms whose `judged` conditions lack these fields, or are inconsistent (no judges, `repeats` 0,
-  θ outside the scale, a malformed `rubric_hash`), do not parse (`terms_mismatch`, V-9).
+  Terms whose `judged` conditions lack these fields, carry any other field, or are inconsistent
+  (no judges, `repeats` 0, no runners, θ outside the scale, a malformed `rubric_hash`) do not
+  parse; inline terms are then `malformed` (V-3, V-9). `judged` requires `acn-terms/0.3`.
+
+  **A `judged` condition is a minimum floor.** Terms that want more assurance add an audit as a
+  further condition of satisfaction, of a stronger class (for example `mechanical` tests, a
+  `grounding` check, or the requester's own `human` review), with its own verifiers. Every
+  condition must be met, so the judges and the audit both have to pass before a `SATISFY` is
+  warranted, including an automatic one (§8.2). There is no post-settlement audit, sampling or
+  holdback.
 - **`interpretive`:** quality judgement (rubric). Interpretive reports MAY inform it, but the
   requester always judges it in the end.
 - **`human`:** the requester's own judgement, expressed by `SATISFY` or `REJECT`.
@@ -468,12 +474,6 @@ keys like any other. Rulings MUST land before `L - redeem_margin`.
 The terms MAY split payment into several tokens, each with its own hashlock, released by
 `SATISFY` events scoped to milestone condition ids (D-8). An optional unconditional up-front
 portion reduces performer risk on larger jobs.
-
-**Holdback (CR-001 §2.4): pending.** CR-001 releases a `holdback` fraction by a second,
-condition-scoped `SATISFY` after the audit window. That needs the milestone mechanism (D-8),
-which this spec does not yet define in the state machine, and it touches INV-6. Until resolved
-(Appendix B), a `holdback` is parsed and shown to both parties but settles nothing: the whole
-price is under the single hashlock.
 
 ### 8.6 Mint risk
 
@@ -637,10 +637,11 @@ order (INV-2).
 | J-6 | `injection_detected` true | Condition failed; `injection_detected` on the performer's `REPORT` |
 | J-7 | Aggregation `all`; one judge below θ | Condition failed; `below_threshold` |
 | J-8 | `repeats` 3; attestation carries 2 runs | Not counted; `judge_mismatch` |
-| J-9 | Holdback; not sampled; requester withholds past the window | *Held with §8.5 holdback (CR-001 §2.4, pending confirmation)* |
-| J-10 | Holdback; sampled; audit fails | *Held with §8.5 holdback (CR-001 §2.4, pending confirmation)* |
+| J-9, J-10 | *(holdback vectors)* | Dropped with the holdback (Appendix B) |
 | J-11 | One `mechanical` and one `judged` condition | Overall assurance `opinion` |
 | J-12 | Declared aggregate/result disagree; an unlisted runner | `malformed`; `unlisted_verifier`; not counted |
+| J-13 | Judged floor plus a `mechanical` audit condition; judges pass, audit fails | `c2` pass, audit fail: not every condition is met; assurance `opinion` |
+| J-14 | A judged condition carries an unknown field (e.g. `holdback`) | Terms don't parse; the `REQUEST` is `malformed`, no commitment |
 
 ## 11. Bindings, governance and reputation
 
@@ -714,10 +715,10 @@ row needs a scenario test in the conformance suite.
 | Forged token | Bogus proof that shows "unspent" | DLEQ (NUT-12) verification before promising |
 | Arbiter collusion | Arbiter + performer use the escrowed `s` | Arbiters are scored keys; arbiter choice is in the terms; high-value work splits into milestones |
 | Judge gaming | Optimizing for a judge model | Interpretive reports are never sufficient (INV-8, V-11); a `judged` condition is explicitly an opinion and labelled so (§7), with the safeguards below |
-| Judge hill-climbing | Performer runs the known judge and rubric locally and iterates until it passes | `commit_reveal` rubrics; judge ensembles across model families; audits with holdback (§8.5) |
+| Judge hill-climbing | Performer runs the known judge and rubric locally and iterates until it passes | `commit_reveal` rubrics; judge ensembles across model families; an audit condition of a stronger class in the terms (§7) |
 | Judge prompt injection | Deliverable contains text addressed to the judge | The harness isolates and sanitizes the artifact; detection fails the condition and is recorded on the performer (V-17.5, vector J-6) |
 | Self-judging | Performer runs the judge or signs as runner | The runner must not be the performer (`self_judged`, V-17.1, vectors J-3, J-3b) |
-| Judge drift or collusion | A judge passes poor work systematically | Audits on the record; runners and judge fingerprints scored on audit outcomes |
+| Judge drift or collusion | A judge passes poor work systematically | Audit conditions alongside the judges (§7); outcomes on the record, so runners and judge fingerprints can be scored |
 | Non-determinism disputes | Same input, different scores | `repeats` with the median per judge; every run's score in the attestation (V-17.3, vector J-8) |
 | Timestamp lies | Backdated `created_at` | Causal order from hashes (INV-3); V-15 monotonicity bounds backdating to the predecessor |
 | Metadata leakage | A public commitment graph reveals business relationships | Private mode (§5.5); encrypted tokens. Reputation then needs a disclosure mechanism (D-13) |
@@ -785,9 +786,8 @@ From CR-001 (the `judged` condition class; its OD-1…OD-6):
 
 - [ ] **D-14 Assurance ordering (CR-001 OD-1).** Whether `human` ranks above `opinion`, and whether
   `check` and `grounded` are comparable at all or should be reported side by side (§7).
-- [ ] **D-15 Verifiable audit sampling (CR-001 OD-2).** Proposal: the terms commit to an audit salt
-  by hash; a commitment is sampled when `hash(commitment id ‖ salt)` falls below the audit rate,
-  so the requester can't choose which deliveries to audit after the fact.
+- [x] **D-15 Verifiable audit sampling (CR-001 OD-2).** Closed, not needed: audits are conditions
+  of satisfaction, applied to every commitment that names them (§7), so nothing is sampled.
 - [ ] **D-16 Rubric reveal timing (CR-001 OD-3).** Reveal inside the attestation (current text) or
   in a separate event before judging.
 - [ ] **D-17 Model deprecation (CR-001 OD-4).** What happens when a pinned judge model is withdrawn
@@ -849,4 +849,4 @@ invent patterns. Kind numbers and tag letters are symbolic until D-1 closes.
 
 | CR | Date | Sections | Change | Status |
 |---|---|---|---|---|
-| CR-001 `judged` condition class | 2026-11-08 | INV-8, §3, §5.1, §6.2, §7, §8.2, §8.5, §9, §10 (V-11, V-17, vectors), §12, §13, §14 (D-14…D-19), §15 | New condition class `judged` with derived assurance labels; `K_ATTEST_JUDGED` (7725); V-11 amended; new V-17 with codes `self_judged`, `judge_mismatch`, `rubric_mismatch`, `injection_detected`, `below_threshold`; INV-8 clarified (judged attestations are evidence about an opinion and satisfy only `judged`); client display of assurance; auto-satisfy by the requester's binding; five threat rows; open decisions D-14…D-19; worked example in [binding-api.md](binding-api.md) | Applied (wire versions bumped to `acn/0.3` and `acn-terms/0.3`; `judged` requires terms 0.3; 0.2 terms still parse), except the §2.4 **holdback** (two tokens, condition-scoped `SATISFY` after closure, audit attestation; vectors J-9, J-10): held for confirmation because it changes INV-6 ("closing and paying are one signed act") and the §6.2 state machine (`SATISFY` is legal only from `Reported`) |
+| CR-001 `judged` condition class | 2026-11-08 | INV-8, §3, §5.1, §6.2, §7, §8.2, §9, §10 (V-11, V-17, vectors), §12, §13, §14 (D-14…D-19), §15 | New condition class `judged` with derived assurance labels; `K_ATTEST_JUDGED` (7725); V-11 amended; new V-17 with codes `self_judged`, `judge_mismatch`, `rubric_mismatch`, `injection_detected`, `below_threshold`; INV-8 clarified (judged attestations are evidence about an opinion and satisfy only `judged`); client display of assurance; auto-satisfy by the requester's binding; five threat rows; open decisions D-14…D-19; worked example in [binding-api.md](binding-api.md) | Applied, with wire versions bumped to `acn/0.3` and `acn-terms/0.3` (`judged` requires terms 0.3; 0.2 terms still parse). **Dropped by decision:** the §2.4 holdback and the `audit` / `holdback` fields (vectors J-9, J-10; OD-2 → D-15 closed). The holdback would have changed INV-6 and the §6.2 state machine, and let a requester keep the held part by inaction. Instead an audit is an ordinary condition of satisfaction of a stronger class (§7); a `judged` condition alone is the minimum floor. Added vectors J-13 (judged + audit condition) and J-14 (unknown judged field) |

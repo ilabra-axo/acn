@@ -387,8 +387,8 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | Evidence classes, verifiers | INV-8, V-11 | `Ctx::attestation`, `ConditionStatus` | `evidence` | ✅ |
 | Contradicted rejection | V-16 | `fold` post-pass | `evidence`, playthrough | ✅ |
 | `judged` condition class, assurance labels | §7, INV-8, CR-001 | `terms::{Judged, Assurance}`, `Terms::assurance`; `Commitment.assurance`; card / tile labels | J-11 | ✅ |
-| Judged evidence | V-11, V-17, CR-001 | `act::judged_content` (V-3), `Ctx::judged_evidence` | `cr001_judged_vectors_under_every_arrival_order` (J-1…J-8, J-3b, J-11, J-12) | ✅ |
-| Holdback and audit settlement | §8.5, CR-001 §2.4 | parsed and shown only | — (J-9, J-10 held) | ⬜ held: conflicts with INV-6 |
+| Judged evidence | V-11, V-17, CR-001 | `act::judged_content` (V-3), `Ctx::judged_evidence` | `cr001_judged_vectors_under_every_arrival_order` (J-1…J-8, J-3b, J-11…J-14) | ✅ |
+| Audit as a condition (no holdback) | §7, CR-001 §2.4 (holdback dropped) | ordinary conditions; `Judged` rejects unknown fields | J-13, J-14 | ✅ |
 | Governance endorsements | V-14 | `needs_endorsement` / `endorsed` | `governance` | ✅ |
 | Causal monotonicity, late flags | V-15, §6.5 | `step` | `time_regress`, `late` | ✅ |
 | Time-derived status (lapse) | §6.5 | `acn_core::status_at` | `time_status`, *silent* scenario | ✅ |
