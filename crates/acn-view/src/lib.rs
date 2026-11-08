@@ -6,8 +6,13 @@
 
 use std::collections::BTreeMap;
 
+mod terms_card;
+pub use terms_card::{
+    CheckedBy, DiffKind, DiffLine, DisqualifierItem, DoneItem, PayIf, TermsCard, TermsVersionView,
+};
+
 use acn_core::kinds::*;
-use acn_core::terms::{Aggregation, Assurance, ConditionClass, RubricDisclosure};
+use acn_core::terms::{Aggregation, Assurance, ConditionClass};
 use acn_core::{
     fold, status_at, BindingStatus, Commitment, ConditionStatus, Event, Output, Party, Phase,
     Profile, Severity,
@@ -77,13 +82,24 @@ pub struct Evidence {
 pub struct ConditionView {
     pub id: String,
     pub class: ConditionClass,
-    /// Derived assurance label (spec §7).
-    pub assurance: Assurance,
+    /// Derived assurance label (spec §7); `None` for an `open` condition.
+    pub assurance: Option<Assurance>,
     pub description: String,
     pub status: Option<ConditionStatus>,
     pub evidence: Vec<Evidence>,
     /// For `judged` conditions: who judges and against what (clients MUST show it, §12).
     pub judged: Option<JudgedView>,
+}
+
+/// A disqualifier against the current REPORT (CR-003 §2.2), with its own assurance label.
+#[derive(Debug, Clone, Serialize)]
+pub struct DisqualifierView {
+    pub id: String,
+    pub class: ConditionClass,
+    pub assurance: Option<Assurance>,
+    pub description: String,
+    pub status: Option<acn_core::DisqualifierStatus>,
+    pub evidence: Vec<Evidence>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -95,7 +111,9 @@ pub struct JudgedView {
     pub scale_max: f64,
     pub aggregation: Aggregation,
     pub repeats: u32,
-    pub rubric_disclosure: RubricDisclosure,
+    /// Where the performer reads the rubric (INV-14), and the text when it is inline.
+    pub rubric_ref: Option<String>,
+    pub rubric_text: Option<String>,
     pub runners: Vec<String>,
 }
 
@@ -227,6 +245,17 @@ pub struct Projection {
     pub timeline: Vec<Entry>,
     pub report: Option<ReportView>,
     pub conditions: Vec<ConditionView>,
+    /// CR-003: disqualifiers of the terms in force, with their status against the REPORT.
+    pub disqualifiers: Vec<DisqualifierView>,
+    /// CR-003: every terms version along the chain (REQUEST, then each COUNTER).
+    pub versions: Vec<TermsVersionView>,
+    /// The terms card for the version in force (spec §12, CR-003 §2.7).
+    pub terms_card: Option<TermsCard>,
+    /// The card for a counter awaiting ACCEPT.
+    pub pending_card: Option<TermsCard>,
+    /// The pending counter against the version in force; otherwise the version in force against
+    /// the one before it.
+    pub terms_diff: Vec<DiffLine>,
     pub counter: Option<CounterView>,
     pub settlement: Option<SettlementView>,
     pub binding: BindingStatus,
@@ -556,34 +585,121 @@ fn one(
                 version: c.chain_kinds.iter().filter(|k| **k == K_REPORT).count() as u32,
             }
         });
+    let evidence_for = |id: &str| -> Vec<Evidence> {
+        members
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.kind,
+                    K_ATTEST_MECH | K_ATTEST_GROUND | K_ATTEST_JUDGED | K_INTERP_REPORT
+                )
+            })
+            .filter(|e| tag(e, "cond") == Some(id))
+            .filter(|e| {
+                report
+                    .as_ref()
+                    .is_some_and(|r| e_marked(e, "report") == Some(r.id.as_str()))
+            })
+            .map(|e| {
+                let notes = anomalies_of(&e.id);
+                let v = content(e);
+                let verdict = v
+                    .get("result")
+                    .or_else(|| v.get("verdict"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                Evidence {
+                    id: e.id.clone(),
+                    act: name(e.kind),
+                    by: e.pubkey.clone(),
+                    role: role(&e.pubkey, c),
+                    verdict,
+                    // A below-threshold judged attestation still counts, as a fail.
+                    counted: notes.iter().all(|n| n.code == "below_threshold")
+                        && e.kind != K_INTERP_REPORT,
+                    why: notes.first().map(|n| n.detail.clone()).or_else(|| {
+                        (e.kind == K_INTERP_REPORT).then(|| {
+                            "opinion: informs the requester, never satisfies a condition"
+                                .to_string()
+                        })
+                    }),
+                }
+            })
+            .collect()
+    };
+    let disqualifiers = terms
+        .map(|t| {
+            t.disqualifiers
+                .iter()
+                .map(|d| DisqualifierView {
+                    id: d.id.clone(),
+                    class: d.class,
+                    assurance: d.class.assurance(),
+                    description: d.description.clone(),
+                    status: c.disqualifiers.get(&d.id).copied(),
+                    evidence: evidence_for(&d.id),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Terms versions (CR-003 §2.4): each REQUEST / COUNTER on the chain that carried terms.
+    let mut versions: Vec<TermsVersionView> = Vec::new();
+    let mut docs: BTreeMap<String, acn_core::Terms> = BTreeMap::new();
+    for (id, kind) in c.chain.iter().zip(&c.chain_kinds) {
+        if !matches!(*kind, K_REQUEST | K_COUNTER) {
+            continue;
+        }
+        let Some(e) = by_id.get(id.as_str()) else {
+            continue;
+        };
+        let Some(hash) = tag(e, "terms") else {
+            continue;
+        };
+        if let Ok(t) = acn_core::Terms::parse(&content(e)["terms"]) {
+            docs.insert(hash.to_string(), t);
+        }
+        versions.push(TermsVersionView {
+            version: versions.len() as u32 + 1,
+            hash: hash.to_string(),
+            act: name(*kind),
+            drafted_by: e.pubkey.clone(),
+            drafted_by_role: role(&e.pubkey, c),
+            drafted_by_me: e.pubkey == me,
+            prev: versions.last().map(|v| v.hash.clone()),
+            in_force: st.is_some_and(|s| s.terms == hash),
+            pending: st
+                .and_then(|s| s.pending.as_ref())
+                .is_some_and(|p| p.terms == hash),
+        });
+    }
+    // The version in force: the last one carrying that hash (an ACCEPTed counter, or the request).
+    let in_force = versions.iter().rev().find(|v| v.in_force);
+    let pending_v = versions.iter().rev().find(|v| v.pending);
+    let terms_card = in_force.and_then(|v| Some(terms_card::card(docs.get(&v.hash).or(terms)?, v)));
+    let pending_card = pending_v.and_then(|v| Some(terms_card::card(docs.get(&v.hash)?, v)));
+    let terms_diff = match (pending_v, in_force) {
+        (Some(p), Some(f)) => docs
+            .get(&f.hash)
+            .zip(docs.get(&p.hash))
+            .map(|(a, b)| terms_card::diff(a, b)),
+        (None, Some(f)) => f
+            .prev
+            .as_ref()
+            .and_then(|prev| docs.get(prev))
+            .zip(docs.get(&f.hash))
+            .map(|(a, b)| terms_card::diff(a, b)),
+        _ => None,
+    }
+    .unwrap_or_default();
+
     let conditions = terms
         .map(|t| {
             t.conditions
                 .iter()
                 .map(|cond| {
-                    let evidence = members
-                        .iter()
-                        .filter(|e| matches!(e.kind, K_ATTEST_MECH | K_ATTEST_GROUND | K_ATTEST_JUDGED | K_INTERP_REPORT))
-                        .filter(|e| tag(e, "cond") == Some(cond.id.as_str()))
-                        .filter(|e| report.as_ref().is_some_and(|r| e_marked(e, "report") == Some(r.id.as_str())))
-                        .map(|e| {
-                            let notes = anomalies_of(&e.id);
-                            let v = content(e);
-                            let verdict = v.get("result").or_else(|| v.get("verdict")).and_then(Value::as_str).unwrap_or_default().to_string();
-                            Evidence {
-                                id: e.id.clone(),
-                                act: name(e.kind),
-                                by: e.pubkey.clone(),
-                                role: role(&e.pubkey, c),
-                                verdict,
-                                // A below-threshold judged attestation still counts, as a fail.
-                                counted: notes.iter().all(|n| n.code == "below_threshold") && e.kind != K_INTERP_REPORT,
-                                why: notes.first().map(|n| n.detail.clone()).or_else(|| {
-                                    (e.kind == K_INTERP_REPORT).then(|| "opinion: informs the requester, never satisfies a condition".to_string())
-                                }),
-                            }
-                        })
-                        .collect();
+                    let evidence = evidence_for(&cond.id);
                     ConditionView {
                         id: cond.id.clone(),
                         class: cond.class,
@@ -592,13 +708,18 @@ fn one(
                         status: c.conditions.get(&cond.id).cloned(),
                         evidence,
                         judged: cond.judged().ok().map(|j| JudgedView {
-                            judges: j.judges.iter().map(|f| format!("{} {}", f.model_id, f.model_version)).collect(),
+                            judges: j
+                                .judges
+                                .iter()
+                                .map(|f| format!("{} {}", f.model_id, f.model_version))
+                                .collect(),
                             threshold: j.threshold,
                             scale_min: j.scale.min,
                             scale_max: j.scale.max,
                             aggregation: j.aggregation,
                             repeats: j.repeats,
-                            rubric_disclosure: j.rubric_disclosure,
+                            rubric_ref: j.rubric_ref.clone(),
+                            rubric_text: j.rubric_text.clone(),
                             runners: j.runners.clone(),
                         }),
                     }
@@ -695,7 +816,8 @@ fn one(
         Phase::Reported
     };
     let judged = st.is_some_and(|s| s.judged);
-    let failing = c.conditions.values().any(|s| *s == ConditionStatus::Fail);
+    // A disqualifier hit counts as failing; clients MUST NOT offer SATISFY then (CR-003 §2.2).
+    let failing = c.disqualified() || c.conditions.values().any(|s| *s == ConditionStatus::Fail);
     let after_release = phase == Some(Phase::Settled) && !judged;
     let allowed = Allowed {
         // Verifier trigger: RELEASE settles; SATISFY / REJECT after it are recorded judgements,
@@ -704,7 +826,7 @@ fn one(
             && if verifier_trigger {
                 after_release
             } else {
-                phase == Some(Phase::Reported)
+                phase == Some(Phase::Reported) && !c.disqualified()
             },
         reject: mine
             && if verifier_trigger {
@@ -815,6 +937,11 @@ fn one(
         timeline,
         report,
         conditions,
+        disqualifiers,
+        versions,
+        terms_card,
+        pending_card,
+        terms_diff,
         counter,
         settlement,
         binding: c.performer_binding.clone(),

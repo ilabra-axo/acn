@@ -20,12 +20,14 @@ const EXPECT = {
   quick: "Satisfied", paid: "Satisfied", negotiate: "Satisfied", rework: "Satisfied", verified: "Satisfied",
   dispute: "Satisfied", governed: "Satisfied", silent: "Withdrawn", rogue: "Declined",
   judged: "Settled", injected: "Rejected", "judged-auto": "Satisfied", contingent: "Settled",
+  drafted: "Satisfied", disqualified: "Rejected",
 };
 const TITLES = {
   quick: "Quick tool call", paid: "Paid call (Cashu)", negotiate: "Negotiation", rework: "Rework loop",
   verified: "Verified work", dispute: "Dispute & ruling", governed: "Governance gate", silent: "Silent performer", rogue: "Rogue agent",
   judged: "Judged, verifier releases", injected: "Judge prompt injection", "judged-auto": "Judged, you settle",
   contingent: "Contingent (encrypted until paid)",
+  drafted: "Drafted conditions", disqualified: "Disqualified",
 };
 
 await page.goto(url);
@@ -140,6 +142,18 @@ await shot("p14-contingent-opened");
 await walletBtn.filter({ hasText: "10 sat" }).waitFor({ timeout: 10000 });
 await page.locator(".director .bal", { hasText: "Atlas" }).filter({ hasText: "130 sat" }).waitFor({ timeout: 10000 });
 console.log("ok   judged MVP: you 10 sat (60 locked), Atlas 130 sat");
+
+// CR-003: drafting in the negotiation cycle, and a disqualifier hit.
+await run("drafted", {
+  manual: [{ waitFor: ".commitment .terms-card >> text=drafted by Atlas", shot: "p15-drafted-counter", click: true }],
+});
+await run("disqualified", {
+  manual: [
+    { waitFor: ".director >> text=Accept counter-offer", shot: null, click: true },
+    { waitFor: ".director >> text=Reject: d2 hit", shot: "p16-disqualified" },
+  ],
+});
+await page.locator(".commitment").last().locator("text=disqualified").first().waitFor({ timeout: 10000 });
 
 await browser.close();
 if (errors.length) {

@@ -24,8 +24,12 @@ pub fn judge(model: &str, version: &str) -> Value {
     })
 }
 
+pub fn rubric_ref() -> String {
+    format!("https://blossom.example/{}", rubric_hash())
+}
+
 /// Terms of the CR-001 demo: `c1` mechanical, `c2` judged (two judges from different families,
-/// commit-reveal rubric, 0-10, θ = 7, all, 3 repeats, runner = the requester).
+/// public rubric by reference (CR-003), 0-10, θ = 7, all, 3 repeats, runner = the requester).
 pub fn judged_terms(f: impl FnOnce(&mut Value)) -> Value {
     terms(|t| {
         t["deliverable"] = json!({"description": "500-word technical summary"});
@@ -33,7 +37,7 @@ pub fn judged_terms(f: impl FnOnce(&mut Value)) -> Value {
             {"id": "c1", "class": "mechanical", "description": "plain text, at most 500 words"},
             {"id": "c2", "class": "judged", "description": "two judges rate it at least 7/10",
              "judges": [judge("claude", "2026-09-01"), judge("gpt", "2026-08-15")],
-             "rubric_hash": rubric_hash(), "rubric_disclosure": "commit_reveal",
+             "rubric_hash": rubric_hash(), "rubric_ref": rubric_ref(),
              "scale": {"min": 0, "max": 10}, "threshold": 7, "aggregation": "all",
              "repeats": 3, "runners": [pk(&REQ)]}
         ]);
@@ -75,7 +79,7 @@ pub fn attestation(scores: &[(&str, &str, &[f64])], injection: bool) -> Value {
         "aggregate_score": agg,
         "result": if pass { "pass" } else { "fail" },
         "rubric_text_hash": rubric_hash(),
-        "rubric_ref": "https://blossom.example/".to_string() + &rubric_hash(),
+        "rubric_ref": rubric_ref(),
         "rubric_text": RUBRIC,
         "injection_detected": injection
     });
@@ -186,9 +190,20 @@ pub fn j4() -> W {
     s.w
 }
 
-/// J-5: commit-reveal; the revealed rubric hash differs.
+/// J-5 (as amended by CR-003 §2.1): the terms declare `commit_reveal`. The REQUEST is rejected
+/// (`hidden_criteria`), so no commitment forms.
 pub fn j5() -> W {
-    let mut s = setup(2105, |_| {});
+    setup(2105, |t| {
+        let c = &mut t["conditions"][1];
+        c.as_object_mut().unwrap().remove("rubric_ref");
+        c["rubric_disclosure"] = json!("commit_reveal");
+    })
+    .w
+}
+
+/// J-18: the attestation used a rubric other than the committed one.
+pub fn j18() -> W {
+    let mut s = setup(2119, |_| {});
     let mut a = attestation(PASSING, false);
     a["rubric_text_hash"] = json!("55".repeat(32));
     a["rubric_text"] = json!("a different, easier rubric");

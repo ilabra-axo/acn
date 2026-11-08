@@ -535,6 +535,7 @@ const ALL: &[Scenario] = &[
     ("J-15", common::judged::j15),
     ("J-16", common::judged::j16),
     ("J-17", common::judged::j17),
+    ("J-18", common::judged::j18),
     // CR-002 Phase A: verifier settlement trigger.
     ("S-2", common::settlement::s2),
     ("S-4", common::settlement::s4),
@@ -555,7 +556,230 @@ const ALL: &[Scenario] = &[
     ("S-16", common::settlement::s16),
     ("S-17", common::settlement::s17),
     ("S-18", common::settlement::s18),
+    // CR-003 Phase A: conditions-of-satisfaction authorship.
+    ("C-1", common::cos::c1),
+    ("C-2", common::cos::c2),
+    ("C-2b", common::cos::c2b),
+    ("C-2c", common::cos::c2c),
+    ("C-6", common::cos::c6),
+    ("C-6b", common::cos::c6b),
+    ("C-6c", common::cos::c6c),
+    ("C-7", common::cos::c7),
+    ("C-7b", common::cos::c7b),
+    ("C-8", common::cos::c8),
+    ("C-6j", common::cos::c_judged_hit),
+    ("C-3", common::cos::c3),
+    ("C-4", common::cos::c4),
+    ("C-5", common::cos::c5),
+    ("C-5b", common::cos::c5b),
+    ("C-5c", common::cos::c5c),
+    ("C-9", common::cos::c9),
 ];
+
+// ---------- CR-003 vectors (spec §10 conformance table) ----------
+
+fn check_cos(name: &str, w: &W, out: &acn_core::Output) {
+    let e = &w.events;
+    let req = &e[0];
+    let ctx = format!("{name}: {:?}", out.anomalies);
+    let has = |i: usize, code: Code| out.has(&e[i].id, code);
+    match name {
+        // Hidden criteria: the terms version is rejected, so no commitment forms.
+        "C-1" | "C-2" | "C-2b" => {
+            assert!(has(0, Code::HiddenCriteria), "{ctx}");
+            assert!(!out.commitments.contains_key(&req.id), "{ctx}");
+        }
+        "C-2c" | "C-8" => {
+            assert!(has(0, Code::Malformed), "{ctx}");
+            assert!(!has(0, Code::HiddenCriteria), "{ctx}");
+            assert!(!out.commitments.contains_key(&req.id), "{ctx}");
+        }
+        // e: REQUEST, PROMISE, REPORT, ATTEST c1 pass, ...
+        "C-6" => {
+            let c = &out.commitments[&req.id];
+            assert!(has(2, Code::Disqualified), "{ctx}");
+            assert!(c.disqualified(), "{ctx}");
+            // One rework was allowed, but a disqualified commitment fails outright.
+            assert_eq!(c.state.as_ref().unwrap().phase, Phase::Rejected, "{ctx}");
+            assert!(out.anomalies_for(&e[5].id).next().is_none(), "{ctx}");
+        }
+        // e: REQUEST, ESCROW_ACK, PROMISE, REPORT, c1 pass, d1 hit, RELEASE, REJECT
+        "C-6b" => {
+            assert!(has(6, Code::BadRelease), "{ctx}");
+            assert!(has(3, Code::Disqualified), "{ctx}");
+            let st = out.commitments[&req.id].state.clone().unwrap();
+            assert_eq!(st.phase, Phase::Rejected, "{ctx}");
+        }
+        // e: ..., SATISFY, d1 hit (late)
+        "C-6c" => {
+            let c = &out.commitments[&req.id];
+            assert!(has(5, Code::Late), "{ctx}");
+            assert!(!has(2, Code::Disqualified) && !c.disqualified(), "{ctx}");
+            assert_eq!(c.state.as_ref().unwrap().phase, Phase::Satisfied, "{ctx}");
+        }
+        "C-7" => {
+            let c = &out.commitments[&req.id];
+            assert!(has(4, Code::UnsupportedDisqualification), "{ctx}");
+            assert!(!c.disqualified() && !has(2, Code::Disqualified), "{ctx}");
+            // Withholding on an unsupported hit is the requester's fault once review lapses.
+            let late = c.state.as_ref().unwrap().report_at.unwrap() + 501;
+            assert_eq!(status_at(c, late).lapsed, Some(Party::Requester), "{ctx}");
+        }
+        "C-7b" => {
+            let c = &out.commitments[&req.id];
+            assert!(has(5, Code::UnsupportedDisqualification), "{ctx}");
+            assert_eq!(c.state.as_ref().unwrap().phase, Phase::Reworking, "{ctx}");
+        }
+        // Underspecified requests are allowed; underspecified promises are not.
+        "C-3" | "C-4" | "C-5c" => {
+            let c = &out.commitments[&req.id];
+            assert!(has(1, Code::UnclosedCondition), "{ctx}");
+            assert_eq!(c.state.as_ref().unwrap().phase, Phase::Requested, "{ctx}");
+            if name == "C-3" {
+                assert_eq!(
+                    c.assurance, None,
+                    "an open condition has no label yet: {ctx}"
+                );
+            }
+        }
+        // e: REQUEST (v1, open c2), COUNTER by the performer (v2, closed), ACCEPT by the requester
+        "C-5" => {
+            let c = &out.commitments[&req.id];
+            let st = c.state.as_ref().unwrap();
+            assert_eq!(st.phase, Phase::Promised, "{ctx}");
+            assert_eq!(
+                Some(&st.terms),
+                e[1].tags.iter().find(|t| t[0] == "terms").map(|t| &t[1]),
+                "{ctx}"
+            );
+            // drafted_by: the signer of the act that carried the version in force.
+            assert_eq!(e[1].pubkey, pk(&PERF));
+            let t = c.terms.as_ref().unwrap();
+            assert!(
+                t.unclosed().is_none() && t.disqualifier("d1").is_some(),
+                "{ctx}"
+            );
+            assert_eq!(c.assurance, Some(acn_core::Assurance::Check), "{ctx}");
+            assert!(
+                out.anomalies.iter().all(|a| a.code == Code::Unbound),
+                "{ctx}"
+            );
+        }
+        // e: REQUEST, COUNTER by the requester (open c2), ACCEPT by the performer
+        "C-5b" => {
+            assert!(has(2, Code::UnclosedCondition), "{ctx}");
+            let st = out.commitments[&req.id].state.clone().unwrap();
+            assert_eq!(st.phase, Phase::Countered, "{ctx}");
+        }
+        "C-9" => {
+            let st = out.commitments[&req.id].state.clone().unwrap();
+            assert_eq!(st.phase, Phase::Satisfied, "{ctx}");
+            assert!(
+                out.anomalies.iter().all(|a| a.code == Code::Unbound),
+                "{ctx}"
+            );
+        }
+        // e: REQUEST, PROMISE, REPORT(Offered), tests pass, d1 hit, REJECT
+        "C-6d" => {
+            let c = &out.commitments[&req.id];
+            assert!(has(2, Code::Disqualified), "{ctx}");
+            // Before the REJECT: no funding deadline, so no requester lapse.
+            assert_eq!(c.state.as_ref().unwrap().phase, Phase::Rejected, "{ctx}");
+            assert_eq!(c.state.as_ref().unwrap().rework_count, 0, "{ctx}");
+        }
+        // A hit stands; the REJECT names `c1`, not the disqualifier: still breach.
+        "C-6e" => {
+            let c = &out.commitments[&req.id];
+            assert_eq!(c.state.as_ref().unwrap().phase, Phase::Rejected, "{ctx}");
+            assert!(out.anomalies_for(&e[5].id).next().is_none(), "{ctx}");
+        }
+        "C-6f" => {
+            let c = &out.commitments[&req.id];
+            let st = c.state.as_ref().unwrap();
+            assert_eq!(st.phase, Phase::Reported, "{ctx}");
+            let s = status_at(c, st.report_at.unwrap() + 501);
+            assert_eq!(
+                s.lapsed, None,
+                "breach: the requester's silence is no fault: {ctx}"
+            );
+            assert_eq!(s.awaiting, Some(Party::Requester), "{ctx}");
+            assert!(!c.disqualifiers.is_empty() && c.disqualified());
+        }
+        "C-6j" => {
+            let c = &out.commitments[&req.id];
+            assert!(has(2, Code::Disqualified), "{ctx}");
+            assert_eq!(
+                c.disqualifiers.get("d2"),
+                Some(&acn_core::DisqualifierStatus::Hit),
+                "{ctx}"
+            );
+            assert!(out.anomalies_for(&e[4].id).next().is_none(), "{ctx}");
+        }
+        other => panic!("no expectation for {other}"),
+    }
+}
+
+const COS: &[Scenario] = &[
+    ("C-1", common::cos::c1),
+    ("C-2", common::cos::c2),
+    ("C-2b", common::cos::c2b),
+    ("C-2c", common::cos::c2c),
+    ("C-6", common::cos::c6),
+    ("C-6b", common::cos::c6b),
+    ("C-6c", common::cos::c6c),
+    ("C-7", common::cos::c7),
+    ("C-7b", common::cos::c7b),
+    ("C-8", common::cos::c8),
+    ("C-6j", common::cos::c_judged_hit),
+    ("C-3", common::cos::c3),
+    ("C-4", common::cos::c4),
+    ("C-5", common::cos::c5),
+    ("C-5b", common::cos::c5b),
+    ("C-5c", common::cos::c5c),
+    ("C-9", common::cos::c9),
+];
+
+/// CR-003 §5.2: every Phase A vector, under every arrival-order permutation.
+#[test]
+fn cr003_cos_vectors_under_every_arrival_order() {
+    for (name, build) in COS {
+        let w = build();
+        for order in orders(w.events.len()) {
+            let shuffled: Vec<_> = order.iter().map(|&i| w.events[i].clone()).collect();
+            check_cos(name, &w, &acn_core::fold(&shuffled, &w.docs));
+        }
+    }
+}
+
+/// One terms version, no older meanings: anything else is malformed, and so is any field the
+/// schema doesn't define (a `holdback` or `audit` that would silently not bind).
+#[test]
+fn cr003_one_coherent_terms_version() {
+    use acn_core::Terms;
+    let code = |t: serde_json::Value| Terms::check(&t).err().map(|e| e.0);
+    assert_eq!(code(terms(|_| {})), None);
+    for old in ["acn-terms/0.2", "acn-terms/0.3", "acn-terms/0.4"] {
+        assert_eq!(
+            code(terms(|t| t["v"] = json!(old))),
+            Some(Code::Malformed),
+            "{old}"
+        );
+    }
+    // rubric_disclosure no longer exists; commit_reveal is singled out as a hidden criterion.
+    let disclosed = |v: &str| {
+        common::judged::judged_terms(|t| t["conditions"][1]["rubric_disclosure"] = json!(v))
+    };
+    assert_eq!(code(disclosed("public")), Some(Code::Malformed));
+    assert_eq!(code(disclosed("commit_reveal")), Some(Code::HiddenCriteria));
+    // Commitments are atomic: no holdback or audit window anywhere in the terms.
+    for f in ["holdback", "audit"] {
+        assert_eq!(
+            code(terms(|t| t[f] = json!({"fraction": 0.2}))),
+            Some(Code::Malformed),
+            "{f}"
+        );
+    }
+}
 
 // ---------- CR-001 vectors (spec §10 conformance table) ----------
 
@@ -564,6 +788,16 @@ fn check_judged(name: &str, w: &W, out: &acn_core::Output) {
     use acn_core::Assurance;
     let e = &w.events;
     let (req, rep) = (&e[0], &e[2]);
+    if name == "J-5" {
+        // CR-003 §2.1: commit_reveal is a hidden criterion; the REQUEST never makes a commitment.
+        assert!(
+            out.has(&req.id, Code::HiddenCriteria),
+            "{name}: {:?}",
+            out.anomalies
+        );
+        assert!(!out.commitments.contains_key(&req.id));
+        return;
+    }
     if name == "J-14" {
         // Unparseable terms: the REQUEST is retained but never becomes a commitment.
         assert!(
@@ -613,7 +847,7 @@ fn check_judged(name: &str, w: &W, out: &acn_core::Output) {
             assert_eq!(codes(3), [Code::JudgeMismatch], "{ctx}");
             assert_eq!(c2, Some(&ConditionStatus::Unverified), "{ctx}");
         }
-        "J-5" => {
+        "J-18" => {
             assert_eq!(codes(3), [Code::RubricMismatch], "{ctx}");
             assert_eq!(c2, Some(&ConditionStatus::Unverified), "{ctx}");
         }
@@ -637,7 +871,7 @@ fn check_judged(name: &str, w: &W, out: &acn_core::Output) {
         "J-11" => {
             let t = c.terms.as_ref().unwrap();
             let classes: Vec<_> = t.conditions.iter().map(|c| c.class.assurance()).collect();
-            assert_eq!(classes, [Assurance::Check, Assurance::Opinion]);
+            assert_eq!(classes, [Some(Assurance::Check), Some(Assurance::Opinion)]);
             assert!(
                 out.anomalies.iter().all(|a| a.code == Code::Unbound),
                 "{ctx}"
@@ -680,6 +914,7 @@ const JUDGED: &[Scenario] = &[
     ("J-15", common::judged::j15),
     ("J-16", common::judged::j16),
     ("J-17", common::judged::j17),
+    ("J-18", common::judged::j18),
 ];
 
 /// CR-001 §3.2: every vector's expected outcome, under every arrival-order permutation.
@@ -694,15 +929,6 @@ fn cr001_judged_vectors_under_every_arrival_order() {
             check_judged(name, &w, &acn_core::fold(&shuffled, &w.docs));
         }
     }
-}
-
-/// `judged` needs acn-terms/0.3; 0.2 documents without it still parse.
-#[test]
-fn cr001_judged_requires_terms_0_3() {
-    let judged = common::judged::judged_terms(|t| t["v"] = json!("acn-terms/0.2"));
-    assert!(acn_core::Terms::parse(&judged).is_err());
-    assert!(acn_core::Terms::parse(&terms(|t| t["v"] = json!("acn-terms/0.2"))).is_ok());
-    assert!(acn_core::Terms::parse(&terms(|t| t["v"] = json!("acn-terms/9.9"))).is_err());
 }
 
 /// The validator rejects a judged condition satisfied by an interpretive report, by a
@@ -957,11 +1183,8 @@ fn cr002_settlement_combinations() {
     ] {
         assert!(parse(t).settlement_combo().is_err(), "{why}");
     }
-    // New fields need acn-terms/0.4; plain 0.3 terms still parse and default to requester.
-    assert!(
-        acn_core::Terms::parse(&verifier_terms(1, |t| t["v"] = json!("acn-terms/0.3"))).is_err()
-    );
-    let old = parse(terms(|t| t["v"] = json!("acn-terms/0.3")));
+    // Terms without the settlement fields default to the requester trigger.
+    let old = parse(terms(|_| {}));
     assert_eq!(
         old.settlement_trigger,
         acn_core::terms::SettlementTrigger::Requester

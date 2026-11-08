@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub mod cos;
 pub mod judged;
 pub mod settlement;
 
@@ -66,7 +67,7 @@ pub fn parties() -> [String; 2] {
 /// Base terms; `f` customises them.
 pub fn terms(f: impl FnOnce(&mut Value)) -> Value {
     let mut t = json!({
-        "v": "acn-terms/0.4",
+        "v": "acn-terms/0.5",
         "deliverable": { "description": "do the thing" },
         "conditions": [],
         "deadline": 2000,

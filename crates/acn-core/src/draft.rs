@@ -303,6 +303,7 @@ pub fn tool_call_terms(
         settlement_trigger: Default::default(),
         settlement_verifier: None,
         fund_window: None,
+        disqualifiers: vec![],
     })
     .expect("terms serialize")
 }
