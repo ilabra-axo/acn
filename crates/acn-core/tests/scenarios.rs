@@ -518,6 +518,21 @@ const ALL: &[Scenario] = &[
     ("evidence", evidence),
     ("governance", governance),
     ("late", late),
+    // CR-001 conformance vectors (judged condition class).
+    ("J-1", common::judged::j1),
+    ("J-2", common::judged::j2),
+    ("J-3", common::judged::j3),
+    ("J-3b", common::judged::j3b),
+    ("J-4", common::judged::j4),
+    ("J-5", common::judged::j5),
+    ("J-6", common::judged::j6),
+    ("J-7", common::judged::j7),
+    ("J-8", common::judged::j8),
+    ("J-11", common::judged::j11),
+    (
+        "J-declared-unlisted",
+        common::judged::j_declared_and_unlisted,
+    ),
 ];
 
 // ---------- gates ----------

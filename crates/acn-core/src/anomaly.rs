@@ -39,6 +39,12 @@ pub enum Code {
     TimeRegress,
     ContradictedRejection,
     Late,
+    // V-17 judged evidence (CR-001).
+    SelfJudged,
+    JudgeMismatch,
+    RubricMismatch,
+    InjectionDetected,
+    BelowThreshold,
 }
 
 impl Code {
@@ -66,6 +72,11 @@ impl Code {
         Code::TimeRegress,
         Code::ContradictedRejection,
         Code::Late,
+        Code::SelfJudged,
+        Code::JudgeMismatch,
+        Code::RubricMismatch,
+        Code::InjectionDetected,
+        Code::BelowThreshold,
     ];
 
     pub fn severity(self) -> Severity {
@@ -77,7 +88,12 @@ impl Code {
             | UnlistedVerifier
             | Equivocation
             | ContradictedRejection
-            | Late => Severity::Flag,
+            | Late
+            | SelfJudged
+            | JudgeMismatch
+            | RubricMismatch
+            | InjectionDetected
+            | BelowThreshold => Severity::Flag,
             _ => Severity::Reject,
         }
     }
@@ -108,6 +124,11 @@ impl Code {
             TimeRegress => "time_regress",
             ContradictedRejection => "contradicted_rejection",
             Late => "late",
+            SelfJudged => "self_judged",
+            JudgeMismatch => "judge_mismatch",
+            RubricMismatch => "rubric_mismatch",
+            InjectionDetected => "injection_detected",
+            BelowThreshold => "below_threshold",
         }
     }
 }

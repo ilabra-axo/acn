@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod judged;
+
 use std::collections::BTreeMap;
 
 use acn_core::draft::{public_key, Draft};

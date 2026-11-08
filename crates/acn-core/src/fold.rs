@@ -355,6 +355,31 @@ impl<'a, 'e> Ctx<'a, 'e> {
         let price = root.price.amount;
         let mint = root.payment.as_ref().map(|p| p.mint.clone());
 
+        // V-17.1: terms that list the performer as a runner of a judged condition.
+        for p in std::iter::once(req).chain(
+            self.members
+                .iter()
+                .copied()
+                .filter(|p| p.kind() == K_COUNTER),
+        ) {
+            let Some(t) = p.terms.as_ref().and_then(|h| run.terms.get(h)) else {
+                continue;
+            };
+            for c in t
+                .conditions
+                .iter()
+                .filter(|c| c.class == ConditionClass::Judged)
+            {
+                if c.judged().is_ok_and(|j| j.runners.contains(&run.performer)) {
+                    acc.push(
+                        p.id(),
+                        Code::SelfJudged,
+                        format!("terms list the performer as a runner of `{}`", c.id),
+                    );
+                }
+            }
+        }
+
         // Linkage (V-4) for advancing acts; build the children index.
         let mut children: BTreeMap<&str, Vec<&Parsed<'e>>> = BTreeMap::new();
         let mut assigned: BTreeSet<&str> = BTreeSet::new();
@@ -546,8 +571,9 @@ impl<'a, 'e> Ctx<'a, 'e> {
             for cond in &terms_now.conditions {
                 let ev = evidence.get(&(report.clone(), cond.id.clone()));
                 let status = match cond.class {
-                    ConditionClass::Judged => ConditionStatus::Unverified,
-                    ConditionClass::Mechanical | ConditionClass::Grounding => match ev {
+                    ConditionClass::Mechanical
+                    | ConditionClass::Grounding
+                    | ConditionClass::Judged => match ev {
                         Some(v) if v.iter().any(|(r, _)| r == "fail") => ConditionStatus::Fail,
                         Some(v) if v.iter().any(|(r, _)| r == "pass") => ConditionStatus::Pass,
                         _ => ConditionStatus::Unverified,
@@ -698,6 +724,17 @@ impl<'a, 'e> Ctx<'a, 'e> {
             );
             return;
         }
+        if condition.class == ConditionClass::Judged {
+            let Some(verdict) = self.judged_evidence(acc, run, condition, report, p) else {
+                return;
+            };
+            let list = evidence
+                .entry((report.to_string(), cond.to_string()))
+                .or_default();
+            list.push((verdict.to_string(), p.id().to_string()));
+            list.sort();
+            return;
+        }
         if !t.verifier_counts(&p.ev.pubkey, condition.class) {
             acc.push(
                 p.id(),
@@ -716,6 +753,146 @@ impl<'a, 'e> Ctx<'a, 'e> {
             .or_default();
         list.push((verdict, p.id().to_string()));
         list.sort();
+    }
+
+    /// V-17 for one `K_ATTEST_JUDGED`. Returns the verdict it counts as (`pass` / `fail`), or
+    /// `None` if it doesn't count. Every failed check records its own anomaly.
+    fn judged_evidence(
+        &self,
+        acc: &mut Acc,
+        run: &Run,
+        condition: &crate::terms::Condition,
+        report: &str,
+        p: &Parsed,
+    ) -> Option<&'static str> {
+        // Terms parse only with consistent judged fields (Terms::parse).
+        let j = condition.judged().ok()?;
+        let signer = p.ev.pubkey.as_str();
+        let mut counts = true;
+
+        // 1. A listed runner, never the performer.
+        if signer == run.performer {
+            acc.push(
+                p.id(),
+                Code::SelfJudged,
+                "the performer cannot run its own judges",
+            );
+            counts = false;
+        } else if !j.runners.iter().any(|r| r == signer) {
+            acc.push(
+                p.id(),
+                Code::UnlistedVerifier,
+                "signer is not a listed runner of this judged condition",
+            );
+            counts = false;
+        }
+
+        // 2-3. Fingerprints match the terms exactly (as a multiset); run count = repeats.
+        let fp = |v: &Value| -> Option<String> {
+            let o: serde_json::Map<String, Value> = [
+                "model_id",
+                "model_version",
+                "prompt_template_hash",
+                "harness_hash",
+                "sampling",
+            ]
+            .iter()
+            .map(|k| Some((k.to_string(), v.get(*k)?.clone())))
+            .collect::<Option<_>>()?;
+            jcs::hash(&Value::Object(o)).ok()
+        };
+        let mut want: Vec<String> = j
+            .judges
+            .iter()
+            .filter_map(|f| serde_json::to_value(f).ok().as_ref().and_then(fp))
+            .collect();
+        let entries = p.content["judges"].as_array().cloned().unwrap_or_default();
+        let mut got: Vec<String> = entries.iter().filter_map(fp).collect();
+        want.sort();
+        got.sort();
+        if want != got {
+            acc.push(
+                p.id(),
+                Code::JudgeMismatch,
+                "judge fingerprints differ from the terms",
+            );
+            counts = false;
+        }
+        if entries
+            .iter()
+            .any(|e| e["runs"].as_array().map_or(0, Vec::len) != j.repeats as usize)
+        {
+            acc.push(
+                p.id(),
+                Code::JudgeMismatch,
+                format!("every judge must run exactly {} time(s)", j.repeats),
+            );
+            counts = false;
+        }
+
+        // 4. The revealed rubric is the committed one.
+        let rubric = p.str_field("rubric_text_hash").unwrap_or_default();
+        let inline_ok = p
+            .str_field("rubric_text")
+            .is_none_or(|text| jcs::sha256_hex(text.as_bytes()) == j.rubric_hash);
+        let reveal_ok = j.rubric_disclosure != crate::terms::RubricDisclosure::CommitReveal
+            || p.str_field("rubric_ref").is_some_and(|r| !r.is_empty());
+        if rubric != j.rubric_hash || !inline_ok || !reveal_ok {
+            acc.push(
+                p.id(),
+                Code::RubricMismatch,
+                "revealed rubric does not match rubric_hash",
+            );
+            counts = false;
+        }
+        if !counts {
+            return None;
+        }
+
+        // Recompute the aggregate; the attestation's own numbers must agree.
+        let medians: Vec<f64> = entries
+            .iter()
+            .filter_map(|e| e["median"].as_f64())
+            .collect();
+        let aggregate = match j.aggregation {
+            crate::terms::Aggregation::All => medians.iter().copied().fold(f64::INFINITY, f64::min),
+            crate::terms::Aggregation::Mean => medians.iter().sum::<f64>() / medians.len() as f64,
+            crate::terms::Aggregation::Median => act::median(&medians),
+        };
+        let injected = p.content["injection_detected"] == true;
+        let pass = aggregate >= j.threshold && !injected;
+        let declared = p.content["aggregate_score"].as_f64().unwrap_or(f64::NAN);
+        if (declared - aggregate).abs() > 1e-9
+            || p.str_field("result") != Some(if pass { "pass" } else { "fail" })
+        {
+            acc.push(
+                p.id(),
+                Code::Malformed,
+                format!("declared aggregate/result disagree with the recomputed {aggregate}"),
+            );
+            return None;
+        }
+
+        // 5. Injection fails the condition and is recorded on the performer (its REPORT).
+        if injected {
+            acc.push(
+                report,
+                Code::InjectionDetected,
+                format!(
+                    "judge runner {} detected text addressed to the judge",
+                    &signer[..8.min(signer.len())]
+                ),
+            );
+        }
+        // 6. Threshold under the declared aggregation.
+        if aggregate < j.threshold {
+            acc.push(
+                p.id(),
+                Code::BelowThreshold,
+                format!("aggregate {aggregate} < threshold {}", j.threshold),
+            );
+        }
+        Some(if pass { "pass" } else { "fail" })
     }
 
     /// V-15, V-5, V-6, V-9, V-10, V-8 for one candidate act at the current head.

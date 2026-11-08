@@ -556,8 +556,10 @@ list). Every rule failure produces an anomaly with a code and a severity:
     `RULING`. `bad_preimage` (reject). A missing preimage when the terms carry a hashlock is
     `malformed`.
 11. **V-11 Evidence class.** A condition counts as satisfied only with evidence of its class from a
-    listed verifier. Interpretive reports never satisfy mechanical or grounding conditions.
-    `wrong_evidence_class` (flag on the attestation; not counted), `unlisted_verifier` (flag).
+    listed verifier (for `judged`: a listed runner, V-17). A `judged` condition is satisfied only by
+    `K_ATTEST_JUDGED`. `K_INTERP_REPORT` never satisfies `mechanical`, `grounding` or `judged`
+    conditions. `wrong_evidence_class` (flag on the attestation; not counted),
+    `unlisted_verifier` (flag; not counted).
 12. **V-12 Availability.** *Moved out of the validator* (it needs network I/O). Availability is a
     liveness annotation computed by clients and bindings, alongside `status_at`. It never changes
     the fold.
@@ -573,6 +575,30 @@ list). Every rule failure produces an anomaly with a code and a severity:
     passing attestation from a listed verifier, and no failing one, is flagged
     `contradicted_rejection` (flag). The rejection still applies (INV-5); the contradiction is
     visible.
+
+17. **V-17 Judged evidence (new, CR-001).** A `K_ATTEST_JUDGED` counts toward its `judged`
+    condition only if every check below passes. Each failure records its own anomaly; all are
+    `flag` severity (the attestation is retained, INV-11).
+    1. The signer is in `runners` and is not the performer. A performer signer is
+       `self_judged` (not counted); an unlisted signer is `unlisted_verifier` (not counted).
+       Terms (on `REQUEST` or `COUNTER`) that list the performer as a runner are flagged
+       `self_judged` on that act.
+    2. Every judge fingerprint matches the terms exactly, as a set. `judge_mismatch` (not
+       counted).
+    3. Every judge's run count equals `repeats`. `judge_mismatch` (not counted).
+    4. `rubric_text_hash` equals `rubric_hash`; under `commit_reveal`, `rubric_ref` is present;
+       an inline `rubric_text` hashes to `rubric_hash`. `rubric_mismatch` (not counted).
+       Fetching `rubric_ref` is I/O and is left to clients and bindings, like V-12.
+    5. `injection_detected` is false. If true, the attestation counts as a **fail** and
+       `injection_detected` is recorded on the performer's `REPORT`.
+    6. The aggregate score meets θ under the declared aggregation: per judge, the median of its
+       runs; then `all` (the minimum per-judge score), `mean` or `median` across judges. Below θ it
+       counts as a **fail**, flagged `below_threshold`.
+
+    The validator recomputes the aggregate and the result. An attestation whose declared
+    `aggregate_score` or `result` disagrees is `malformed` (reject). Checks 5–6 apply only to an
+    attestation that passes 1–4, so an uncounted attestation can't record anything on the
+    performer. The condition is `fail` if any counted attestation fails, `pass` if one passes.
 
 Deadline-related flags: `late` (flag) for a `REPORT` after the deadline or a `SATISFY`/`REJECT`
 after the review window.
@@ -717,7 +743,7 @@ silence is handled by scoring only. Above it, performers SHOULD require an arbit
 Each phase is gated by acceptance criteria that a coding agent can test mechanically.
 
 1. **P0 Grammar and validator crate (`acn-core`).** Act schemas, terms schema, JCS hashing, the
-   fold, sibling resolution, V-1…V-11 and V-13…V-16, anomaly codes, `status_at`.
+   fold, sibling resolution, V-1…V-11 and V-13…V-17, anomaly codes, `status_at`.
    - Gate: scenario tests for every act and every anomaly code pass.
    - Gate: a property test shows identical state and anomalies under arrival-order permutations
      of each scenario (INV-2).
