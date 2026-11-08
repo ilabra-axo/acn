@@ -138,7 +138,7 @@ C toolchain.
 | 24930 | agent status (reserved) | `nmesh_proto::kinds` | not used yet |
 | 34930–34932 | contract / renderer / agent manifest | `nmesh_proto::kinds` | addressable; agent manifest is published |
 | 7700–7712 | ACN acts (REQUEST … RULING) | `acn_core::kinds` | regular events, provisional (D-1) |
-| 7720–7724 | attestations, interpretive report, endorse, score | `acn_core::kinds` | annotating; `K_SCORE` reserved |
+| 7720–7725 | attestations, interpretive report, endorse, score, judged attestation | `acn_core::kinds` | annotating; `K_SCORE` reserved; `K_ATTEST_JUDGED` = 7725 (CR-001) |
 | 7730–7732 | bind, bind ack, bind revoke | `acn_core::kinds` | published publicly |
 | 7739 | `K_PRIVATE_ACT` | `acn_core::kinds` | rumor whose content is one signed act |
 | 37700 | `K_SVC` service advertisement | `acn_core::kinds` | addressable; tools, terms templates, data handling |
@@ -386,6 +386,9 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | Operator bindings, scope, revocation | §4, V-8 | `acn_core::binding`; `shim::ensure_binding` | `bindings`, `revoked_binding`, `app_flow` | ✅ |
 | Evidence classes, verifiers | INV-8, V-11 | `Ctx::attestation`, `ConditionStatus` | `evidence` | ✅ |
 | Contradicted rejection | V-16 | `fold` post-pass | `evidence`, playthrough | ✅ |
+| `judged` condition class, assurance labels | §7, INV-8, CR-001 | `terms::{Judged, Assurance}`, `Terms::assurance`; `Commitment.assurance`; card / tile labels | J-11 | ✅ |
+| Judged evidence | V-11, V-17, CR-001 | `act::judged_content` (V-3), `Ctx::judged_evidence` | `cr001_judged_vectors_under_every_arrival_order` (J-1…J-8, J-3b, J-11, J-12) | ✅ |
+| Holdback and audit settlement | §8.5, CR-001 §2.4 | parsed and shown only | — (J-9, J-10 held) | ⬜ held: conflicts with INV-6 |
 | Governance endorsements | V-14 | `needs_endorsement` / `endorsed` | `governance` | ✅ |
 | Causal monotonicity, late flags | V-15, §6.5 | `step` | `time_regress`, `late` | ✅ |
 | Time-derived status (lapse) | §6.5 | `acn_core::status_at` | `time_status`, *silent* scenario | ✅ |
