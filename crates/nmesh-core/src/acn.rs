@@ -88,18 +88,21 @@ impl Session {
         Ok(out.into_iter().map(|(_, pk)| pk).collect())
     }
 
-    /// Fetch an agent's public ACN metadata: its `K_SVC` and operator binding events.
+    /// Fetch an agent's public ACN metadata: its `K_SVC`, operator binding events and the terms
+    /// templates it published (the fold checks `template_ref` against them, V-28).
     pub async fn acn_public(
         &self,
         agent: PublicKey,
         timeout: std::time::Duration,
     ) -> Result<(Option<serde_json::Value>, Vec<acn_core::Event>), CoreError> {
-        use acn_core::kinds::{K_BIND, K_BIND_ACK, K_BIND_REVOKE, K_SVC};
+        use acn_core::kinds::{K_BIND, K_BIND_ACK, K_BIND_REVOKE, K_SVC, K_TERMS_TEMPLATE};
         let k = |n: u16| Kind::from_u16(n);
         let first = self
             .client()
             .fetch_events(
-                Filter::new().author(agent).kinds([k(K_SVC), k(K_BIND_ACK)]),
+                Filter::new()
+                    .author(agent)
+                    .kinds([k(K_SVC), k(K_BIND_ACK), k(K_TERMS_TEMPLATE)]),
                 timeout,
             )
             .await?;
@@ -127,7 +130,7 @@ impl Session {
         let to_acn = |e: &Event| acn_core::Event::from_json(&e.as_json()).ok();
         let bindings = first
             .iter()
-            .filter(|e| e.kind == k(K_BIND_ACK))
+            .filter(|e| e.kind == k(K_BIND_ACK) || e.kind == k(K_TERMS_TEMPLATE))
             .chain(binds.iter())
             .chain(revokes.iter())
             .filter_map(to_acn)

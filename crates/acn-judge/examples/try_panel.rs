@@ -39,6 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         gatekeeper: pk(15),
         mint: SIM_MINT.into(),
         judge_panel: Some(serde_json::to_value(panel.fingerprints())?),
+        templates: Default::default(),
     };
     let t = template("judged", &cast).ok_or("no template")?;
     let cond: acn_core::terms::Condition =

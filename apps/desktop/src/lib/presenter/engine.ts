@@ -66,6 +66,8 @@ export class AcnWorld {
   private escrow: Record<string, string> = {};
   /** Requester seeds the runner holds (held-out instances); every role is local here. */
   private seeds: Record<string, string> = {};
+  /** Event ids of the cast's published terms templates, by name (acn-sim `Cast.templates`). */
+  private templateIds: Record<string, string> = {};
   private preimages: Record<string, string> = {};
   private scheduled = new Set<string>();
   private timers: number[] = [];
@@ -94,7 +96,13 @@ export class AcnWorld {
     const t = this.realNow() - 3600;
     const bind = this.sign(op, acn<Draft>("bind", { agent: this.cast.performer, expires: t + 30 * 86_400 }), t);
     const ack = this.sign(this.secrets.performer, acn<Draft>("bind_ack", { binding: bind.id }), t + 1);
-    this.extra = [bind, ack];
+    // The cast's public terms templates (CR-003 §2.5), signed as the live cast signs them.
+    const templates = acn<{ name: string; actor: Actor; draft: Draft }[]>("templates").map((x) => {
+      const e = this.sign(this.secrets[x.actor], x.draft, t + 2);
+      this.templateIds[x.name] = e.id;
+      return e;
+    });
+    this.extra = [bind, ack, ...templates];
     this.resetMint();
   }
 
@@ -133,8 +141,13 @@ export class AcnWorld {
     return acn("scenarios");
   }
 
+  /** The cast as acn-sim takes it: the keys plus the published template ids. */
+  private castArg() {
+    return { ...this.cast, templates: this.templateIds };
+  }
+
   template(scenario: string): any {
-    return acn("template", { scenario, cast: this.cast });
+    return acn("template", { scenario, cast: this.castArg() });
   }
 
   private sign(secret: string, draft: Draft, at: number): AcnEvent {
@@ -284,7 +297,7 @@ export class AcnWorld {
   private react() {
     this.checkPayments();
     this.redeem();
-    const moves = acn<Move[]>("react", { cast: this.cast, events: this.events, escrow: this.escrow, payments: this.payments, keys: this.keys, seeds: this.seeds });
+    const moves = acn<Move[]>("react", { cast: this.castArg(), events: this.events, escrow: this.escrow, payments: this.payments, keys: this.keys, seeds: this.seeds });
     for (const m of moves) {
       if (this.scheduled.has(m.key)) continue;
       this.scheduled.add(m.key);
