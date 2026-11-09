@@ -586,6 +586,13 @@ const ALL: &[Scenario] = &[
     ("C-12b", common::held_out::c12b),
     ("C-13", common::held_out::c13),
     ("C-14", common::held_out::c14),
+    // CR-003 Phase C: terms templates.
+    ("C-15", common::templates::c15),
+    ("C-16", common::templates::c16),
+    ("C-16b", common::templates::c16b),
+    ("C-16c", common::templates::c16c),
+    ("C-16d", common::templates::c16d),
+    ("C-16e", common::templates::c16e),
 ];
 
 // ---------- CR-003 vectors (spec §10 conformance table) ----------
@@ -991,6 +998,59 @@ fn cr003_instance_terms() {
         acn_core::instances::sample(&common::held_out::RS, &common::held_out::PS, &cid, 20, 5);
     s.sort();
     assert_ne!(s, vec![0, 1, 2, 3, 4]);
+}
+
+// ---------- CR-003 Phase C vectors (terms templates) ----------
+
+fn check_template(name: &str, w: &W, out: &acn_core::Output) {
+    use acn_core::template::TemplateStatus;
+    let e = &w.events;
+    let ctx = format!("{name}: {:?}", out.anomalies);
+    if name == "C-16e" {
+        assert!(out.has(&e[0].id, Code::Malformed), "{ctx}");
+        return;
+    }
+    // e: [TEMPLATE,] REQUEST, PROMISE
+    let req = e.iter().find(|x| x.kind == K_REQUEST).unwrap();
+    let c = &out.commitments[&req.id];
+    // The reference is provenance only: the commitment binds either way.
+    assert_eq!(c.state.as_ref().unwrap().phase, Phase::Promised, "{ctx}");
+    match name {
+        "C-15" => {
+            assert_eq!(c.template, Some(TemplateStatus::Counted), "{ctx}");
+            assert!(out.anomalies.iter().all(|a| a.code == Code::Unbound), "{ctx}");
+        }
+        "C-16" | "C-16b" | "C-16c" => {
+            assert!(matches!(c.template, Some(TemplateStatus::Mismatch { .. })), "{ctx}");
+            assert!(out.has(&req.id, Code::TemplateMismatch), "{ctx}");
+        }
+        "C-16d" => {
+            assert_eq!(c.template, Some(TemplateStatus::Unavailable), "{ctx}");
+            assert!(!out.has(&req.id, Code::TemplateMismatch), "{ctx}");
+        }
+        other => panic!("no expectation for {other}"),
+    }
+}
+
+const TEMPLATES: &[Scenario] = &[
+    ("C-15", common::templates::c15),
+    ("C-16", common::templates::c16),
+    ("C-16b", common::templates::c16b),
+    ("C-16c", common::templates::c16c),
+    ("C-16d", common::templates::c16d),
+    ("C-16e", common::templates::c16e),
+];
+
+/// CR-003 §5.2 Phase C: every vector, under every arrival-order permutation.
+#[test]
+fn cr003_template_vectors_under_every_arrival_order() {
+    for (name, build) in TEMPLATES {
+        let w = build();
+        for order in orders(w.events.len()) {
+            let shuffled: Vec<_> = order.iter().map(|&i| w.events[i].clone()).collect();
+            check_template(name, &w, &acn_core::fold(&shuffled, &w.docs));
+        }
+    }
 }
 
 // ---------- CR-001 vectors (spec §10 conformance table) ----------

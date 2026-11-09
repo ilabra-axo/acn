@@ -51,6 +51,13 @@ impl Draft {
         self
     }
 
+    /// A terms template (`K_TERMS_TEMPLATE`, CR-003 §2.5). Publish it signed; its event id and
+    /// content hash are what `template_ref` names.
+    pub fn template(content: &Value) -> Self {
+        let name = content["name"].as_str().unwrap_or_default().to_string();
+        Self::new(K_TERMS_TEMPLATE).tag(vec!["name".into(), name]).content(content.clone())
+    }
+
     /// Set one field of the JSON content (e.g. `performer_seed_hash` on a binding act).
     pub fn field(mut self, key: &str, v: Value) -> Self {
         let mut c: Value = serde_json::from_str(&self.content).unwrap_or_else(|_| json!({}));
@@ -314,6 +321,7 @@ pub fn tool_call_terms(
         settlement_verifier: None,
         fund_window: None,
         disqualifiers: vec![],
+        template_ref: None,
     })
     .expect("terms serialize")
 }

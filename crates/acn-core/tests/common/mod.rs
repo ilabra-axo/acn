@@ -3,6 +3,7 @@
 pub mod cos;
 pub mod held_out;
 pub mod judged;
+pub mod templates;
 pub mod settlement;
 
 use std::collections::BTreeMap;

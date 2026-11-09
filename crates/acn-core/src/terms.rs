@@ -49,6 +49,10 @@ pub struct Terms {
     /// Public predicates whose attested hit fails the commitment (CR-003 §2.2).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disqualifiers: Vec<Disqualifier>,
+    /// Provenance: the terms template these conditions and disqualifiers were drafted from
+    /// (CR-003 §2.5). The validator checks it (V-28) but never evaluates terms through it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_ref: Option<crate::template::TemplateRef>,
 }
 
 /// A disqualifier (spec §7, CR-003 §2.2): an act the performer agreed not to commit. An attested
@@ -535,6 +539,11 @@ impl Terms {
 
     fn check_inner(&self) -> Result<(), String> {
         let t = self;
+        if let Some(r) = &t.template_ref {
+            if !is_sha256(&r.event) || !is_sha256(&r.hash) {
+                return Err("template_ref: `event` and `hash` must be lowercase sha256 hex".into());
+            }
+        }
         if t.v != TERMS_VERSION {
             return Err(format!(
                 "unsupported terms version `{}` (this prototype accepts {TERMS_VERSION} only)",

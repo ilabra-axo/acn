@@ -133,6 +133,8 @@ pub struct Commitment {
     pub passed_at: Option<u64>,
     /// Status of each disqualifier against the current REPORT (CR-003 §2.2).
     pub disqualifiers: BTreeMap<String, DisqualifierStatus>,
+    /// The terms in force came from a template: whether the reference checks out (V-28).
+    pub template: Option<crate::template::TemplateStatus>,
 }
 
 impl Commitment {
@@ -210,6 +212,12 @@ pub fn fold(events: &[Event], documents: &BTreeMap<String, Value>) -> Output {
     }
 
     let bindings = Bindings::build(&parsed);
+    // Terms templates (CR-003 §2.5): standalone events, looked up by id for V-28.
+    let templates: BTreeMap<&str, &Value> = parsed
+        .iter()
+        .filter(|p| p.kind() == K_TERMS_TEMPLATE)
+        .map(|p| (p.id(), &p.content))
+        .collect();
 
     // Ownership: event id -> commitment id.
     let mut owner: BTreeMap<&str, &str> = BTreeMap::new();
@@ -245,6 +253,7 @@ pub fn fold(events: &[Event], documents: &BTreeMap<String, Value>) -> Output {
             documents,
             bindings: &bindings,
             owner: &owner,
+            templates: &templates,
         };
         if let Some(c) = ctx.run(&mut acc) {
             commitments.insert(cid.to_string(), c);
@@ -263,6 +272,7 @@ struct Ctx<'a, 'e> {
     documents: &'a BTreeMap<String, Value>,
     bindings: &'a Bindings,
     owner: &'a BTreeMap<&'a str, &'a str>,
+    templates: &'a BTreeMap<&'a str, &'a Value>,
 }
 
 struct Run<'a> {
@@ -392,6 +402,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
             assurance: None,
             passed_at: None,
             disqualifiers: BTreeMap::new(),
+            template: None,
             performer_binding: BindingStatus::Unbound,
             report: None,
         };
@@ -431,6 +442,25 @@ impl<'a, 'e> Ctx<'a, 'e> {
         }
         let price = root.price.amount;
         let mint = root.payment.as_ref().map(|p| p.mint.clone());
+
+        // V-28: a terms version's `template_ref` re-instantiates to exactly its conditions and
+        // disqualifiers. Provenance only: a mismatch flags the act, the terms still apply.
+        for p in std::iter::once(req).chain(
+            self.members
+                .iter()
+                .copied()
+                .filter(|p| p.kind() == K_COUNTER),
+        ) {
+            let Some(t) = p.terms.as_ref().and_then(|h| run.terms.get(h)) else {
+                continue;
+            };
+            if let Some(r) = &t.template_ref {
+                let st = crate::template::check(t, r, self.templates.get(r.event.as_str()).copied());
+                if let crate::template::TemplateStatus::Mismatch { reason } = st {
+                    acc.push(p.id(), Code::TemplateMismatch, reason);
+                }
+            }
+        }
 
         // V-17.1: terms that list the performer as a runner of a judged condition or
         // disqualifier (V-25: never the performer).
@@ -763,6 +793,9 @@ impl<'a, 'e> Ctx<'a, 'e> {
         }
 
         commitment.assurance = terms_now.assurance();
+        commitment.template = terms_now.template_ref.as_ref().map(|r| {
+            crate::template::check(&terms_now, r, self.templates.get(r.event.as_str()).copied())
+        });
         commitment.terms = Some(terms_now);
         commitment.state = Some(st);
         Some(commitment)
