@@ -574,6 +574,9 @@ const ALL: &[Scenario] = &[
     ("C-5b", common::cos::c5b),
     ("C-5c", common::cos::c5c),
     ("C-9", common::cos::c9),
+    ("C-6d", common::cos::c6d),
+    ("C-6e", common::cos::c6e),
+    ("C-6f", common::cos::c6f),
 ];
 
 // ---------- CR-003 vectors (spec §10 conformance table) ----------
@@ -687,11 +690,14 @@ fn check_cos(name: &str, w: &W, out: &acn_core::Output) {
             assert_eq!(c.state.as_ref().unwrap().phase, Phase::Rejected, "{ctx}");
             assert_eq!(c.state.as_ref().unwrap().rework_count, 0, "{ctx}");
         }
-        // A hit stands; the REJECT names `c1`, not the disqualifier: still breach.
+        // A hit stands; the REJECT names `c1`, not the disqualifier: still breach. Naming `c1`,
+        // which passed, is also a contradicted rejection (V-16), which is fair.
         "C-6e" => {
             let c = &out.commitments[&req.id];
             assert_eq!(c.state.as_ref().unwrap().phase, Phase::Rejected, "{ctx}");
-            assert!(out.anomalies_for(&e[5].id).next().is_none(), "{ctx}");
+            assert_eq!(c.state.as_ref().unwrap().rework_count, 0, "{ctx}");
+            let codes: Vec<_> = out.anomalies_for(&e[5].id).map(|a| a.code).collect();
+            assert_eq!(codes, [Code::ContradictedRejection], "{ctx}");
         }
         "C-6f" => {
             let c = &out.commitments[&req.id];
@@ -737,6 +743,9 @@ const COS: &[Scenario] = &[
     ("C-5b", common::cos::c5b),
     ("C-5c", common::cos::c5c),
     ("C-9", common::cos::c9),
+    ("C-6d", common::cos::c6d),
+    ("C-6e", common::cos::c6e),
+    ("C-6f", common::cos::c6f),
 ];
 
 /// CR-003 §5.2: every Phase A vector, under every arrival-order permutation.
