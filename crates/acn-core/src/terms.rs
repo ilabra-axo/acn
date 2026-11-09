@@ -592,7 +592,10 @@ impl Terms {
         for c in t.conditions.iter().chain(&disq) {
             // Class-specific fields are open (test ids, referents), but nothing that would hold
             // payment back after settlement: commitments are atomic (spec §1).
-            if let Some(f) = ["holdback", "audit", "window"].iter().find(|f| c.extra.contains_key(**f)) {
+            if let Some(f) = ["holdback", "audit", "window"]
+                .iter()
+                .find(|f| c.extra.contains_key(**f))
+            {
                 return Err(format!("`{}`: `{f}`: commitments are atomic, so nothing is held back or audited after settlement", c.id));
             }
             let declared = c.extra.contains_key("instances");

@@ -455,7 +455,8 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 continue;
             };
             if let Some(r) = &t.template_ref {
-                let st = crate::template::check(t, r, self.templates.get(r.event.as_str()).copied());
+                let st =
+                    crate::template::check(t, r, self.templates.get(r.event.as_str()).copied());
                 if let crate::template::TemplateStatus::Mismatch { reason } = st {
                     acc.push(p.id(), Code::TemplateMismatch, reason);
                 }
@@ -473,7 +474,11 @@ impl<'a, 'e> Ctx<'a, 'e> {
             let Some(t) = p.terms.as_ref().and_then(|h| run.terms.get(h)) else {
                 continue;
             };
-            let disq: Vec<_> = t.disqualifiers.iter().map(Disqualifier::as_condition).collect();
+            let disq: Vec<_> = t
+                .disqualifiers
+                .iter()
+                .map(Disqualifier::as_condition)
+                .collect();
             for c in t
                 .conditions
                 .iter()
@@ -680,7 +685,12 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 K_ESCROW_ACK => {
                     // Only the holders named in this commitment's own terms versions.
                     let versions: BTreeSet<&str> = std::iter::once(req)
-                        .chain(self.members.iter().copied().filter(|m| m.kind() == K_COUNTER))
+                        .chain(
+                            self.members
+                                .iter()
+                                .copied()
+                                .filter(|m| m.kind() == K_COUNTER),
+                        )
                         .filter_map(|m| m.terms.as_deref())
                         .collect();
                     let holder = versions.iter().filter_map(|h| run.terms.get(*h)).any(|t| {

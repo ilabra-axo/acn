@@ -1018,10 +1018,16 @@ fn check_template(name: &str, w: &W, out: &acn_core::Output) {
     match name {
         "C-15" => {
             assert_eq!(c.template, Some(TemplateStatus::Counted), "{ctx}");
-            assert!(out.anomalies.iter().all(|a| a.code == Code::Unbound), "{ctx}");
+            assert!(
+                out.anomalies.iter().all(|a| a.code == Code::Unbound),
+                "{ctx}"
+            );
         }
         "C-16" | "C-16b" | "C-16c" => {
-            assert!(matches!(c.template, Some(TemplateStatus::Mismatch { .. })), "{ctx}");
+            assert!(
+                matches!(c.template, Some(TemplateStatus::Mismatch { .. })),
+                "{ctx}"
+            );
             assert!(out.has(&req.id, Code::TemplateMismatch), "{ctx}");
         }
         "C-16d" => {

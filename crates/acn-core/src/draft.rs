@@ -55,7 +55,9 @@ impl Draft {
     /// content hash are what `template_ref` names.
     pub fn template(content: &Value) -> Self {
         let name = content["name"].as_str().unwrap_or_default().to_string();
-        Self::new(K_TERMS_TEMPLATE).tag(vec!["name".into(), name]).content(content.clone())
+        Self::new(K_TERMS_TEMPLATE)
+            .tag(vec!["name".into(), name])
+            .content(content.clone())
     }
 
     /// Set one field of the JSON content (e.g. `performer_seed_hash` on a binding act).

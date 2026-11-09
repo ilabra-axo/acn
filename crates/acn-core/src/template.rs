@@ -191,7 +191,11 @@ impl TermsTemplate {
                 Value::String(s) => {
                     let ph = placeholders(s);
                     let t = s.trim();
-                    if ph.len() == 1 && t.starts_with("{{") && t.ends_with("}}") && t[2..t.len() - 2].trim() == ph[0] {
+                    if ph.len() == 1
+                        && t.starts_with("{{")
+                        && t.ends_with("}}")
+                        && t[2..t.len() - 2].trim() == ph[0]
+                    {
                         return filled[ph[0].as_str()].clone();
                     }
                     let mut out = s.clone();

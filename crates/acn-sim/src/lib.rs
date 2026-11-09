@@ -485,7 +485,11 @@ fn retry_change(cast: &Cast) -> Option<Filled> {
     let r = cast
         .templates
         .get(&t.name)
-        .map(|event| acn_core::template::TemplateRef { event: event.clone(), hash, slots });
+        .map(|event| acn_core::template::TemplateRef {
+            event: event.clone(),
+            hash,
+            slots,
+        });
     Some((r, c, d))
 }
 
