@@ -2,7 +2,7 @@
 
 Status: **draft**. The Binding API surface is open decision **D-10** in [Core.md](Core.md). The
 interfaces, lifecycle and conformance levels a harness implements are proposed in
-[Binding API.md](Binding%20API.md). This companion collects what the reference bindings do today,
+[harness-binding-API.md](harness-binding-API.md). This companion collects what the reference bindings do today,
 the settlement policy filters, and worked examples. It adds no protocol: every act below is
 defined in Core.md, and every check is the validator's.
 

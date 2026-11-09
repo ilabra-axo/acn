@@ -148,7 +148,7 @@ Addressable is allowed here because it is metadata, not commitment state (INV-1)
 - profiles supported (`T0`, `T1`, `N`);
 - price schedule and minimum price;
 - accepted mints, each as `{url, capabilities: [..]}` with its rail capabilities (§8.6);
-- terms templates by hash;
+- per tool, a terms offer (`terms_template`: partial terms with relative times, §7);
 - verifier requirements;
 - the MCP invocation transport (`nostr` or an HTTPS endpoint);
 - the silence threshold (D-3);
@@ -185,7 +185,7 @@ geocaching 7516–7517). Code MUST reference symbolic names.
 | 7710 | `K_REJECT` | 7725 | `K_ATTEST_JUDGED` (CR-001) |
 | 7711 | `K_DISPUTE` | 7726 | `K_ESCROW_ACK` (CR-002) |
 | 7712 | `K_RULING` | | |
-| 7713 | `K_RELEASE` (CR-002) | | |
+| 7713 | `K_RELEASE` (CR-002) | 7727 | `K_TERMS_TEMPLATE` (CR-003) |
 | 7714 | `K_FUND` (CR-002) | | |
 | 7715 | `K_CLAIM` (CR-002) | | |
 
@@ -585,8 +585,47 @@ The deliverable's exposure follows from the trigger: in the clear for `requester
 encrypted until paid for `contingent`. There is no separate delivery mode; staged delivery is a
 sequence of atomic commitments composed above the protocol (§1).
 
-**Templates.** Service advertisements publish terms templates by hash. A request that uses a
-template unchanged references the template hash directly, which keeps transactional calls cheap.
+**Terms templates (CR-003).** A `K_TERMS_TEMPLATE` (regular, standalone: no `c`, no `prev`; a
+`name` tag) is a signed, parameterized fragment of terms: conditions and disqualifiers with typed
+slots. Its event id pins it; a new version is a new event (by convention the name carries it,
+e.g. `code-change/v1`). Content (JSON, unknown fields `malformed`):
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `v` | string | `acn-template/1` |
+| `name` | string | Non-empty |
+| `description` | string | Optional prose |
+| `slots` | object | Slot name (lowercase letters, digits, `_`) → `{type, default?, guidance?}`. Types: `string`; `number`; `pubkey` and `sha256` (64 lowercase hex); `duration` (seconds) and `sats` (non-negative integers). A default MUST have its slot's type |
+| `conditions` | array | Conditions as in the terms, with placeholders |
+| `disqualifiers` | array | Disqualifiers as in the terms, with placeholders |
+
+- **Placeholders.** `{{name}}` in any string value, naming a slot (otherwise the template is
+  `malformed`). A string that is exactly one placeholder becomes the slot's typed value, so
+  `"runners": ["{{checker}}"]` yields a key and `"pool_size": "{{pool_size}}"` a number; anywhere
+  else the value is substituted as text.
+- **Instantiation.** Each slot takes the given value, else its default. A slot with neither, a
+  value of the wrong type, or a value for a slot the template doesn't have fails. The result
+  MUST parse as the terms' conditions and disqualifiers.
+- **Scope.** The fragment covers conditions and disqualifiers only. Price, deadline, review
+  window, verifiers, settlement and the deliverable are ordinary terms fields, set per request.
+- **Reference.** Terms MAY carry `template_ref: {event, hash, slots}`: the template's event id,
+  the JCS sha256 of its content, and the slot values used. It is provenance only: the validator
+  evaluates the terms as written, and V-28 checks that the reference reproduces them.
+- **Records.** A template's track record (commitments, paid, rejected, disqualified, disputed,
+  open) is a reader-computed projection over the commitments whose terms in force carry a
+  counted reference to it, never Core state. It attaches a record to a definition of done, not
+  only to a party (§12).
+
+Guidance for authors and two worked templates are in
+[acn/cos-templates.md](acn/cos-templates.md).
+
+**Service terms offers.** A `K_SVC` advertisement (§4) may give, per tool, a `terms_template`:
+partial terms with relative times (`deadline_secs`, `review_window_secs`, `profile`, whether a
+hashlock is required, an optional `requester_seed_to` runner for held-out seeds). A requester's
+client fills it in (absolute deadline, tool input, hashlock and locktime, seed hash) and the
+`REQUEST` carries the resulting terms in full; the validator never sees the offer. Reference:
+`acn_core::draft::{Template, instantiate}`. Its conditions MAY themselves come from a
+`K_TERMS_TEMPLATE`, with `template_ref`.
 
 ## 8. Cashu conditional settlement
 
@@ -911,6 +950,14 @@ list). Every rule failure produces an anomaly with a code and a severity:
     (`seed_mismatch`, reject, on the runner's attestation), its indices are exactly the sample
     derived from both seeds, and every item proves against `pool_root` (`instance_mismatch`,
     reject).
+28. **V-28 Template reference (new, CR-003).** A `K_TERMS_TEMPLATE` whose content doesn't parse
+    as a template (§7) is `malformed`. For each `REQUEST` or `COUNTER` whose terms carry
+    `template_ref`, when the template event is in the event set: if `hash` isn't the JCS sha256
+    of its content, or instantiating it with `slots` fails or doesn't reproduce the terms'
+    `conditions` and `disqualifiers` exactly, the act gets `template_mismatch` (flag): the
+    reference isn't counted, the terms still apply. When the template event isn't available the
+    reference is simply not counted, with no anomaly (fetching it is I/O, like V-12). The
+    commitment's template status (counted, mismatch, unavailable) is that of its terms in force.
 
 V-18 also covers the contingent constraint that every condition is `mechanical`:
 `contingent_nondeterministic` (reject; on a `REQUEST`, no commitment).
@@ -979,7 +1026,7 @@ is reused for the remaining invalid combination.
 | S-17 | Funded; no `CLAIM` before the `FUND` locktime | Lapsed; performer fault |
 | S-18 | Offered; requester `SATISFY`, then `REJECT` of passing work | Neither applied; `illegal_transition` |
 
-**Conditions-of-satisfaction vectors (CR-003; C-10…C-14 are Phase B).** Each also runs under every arrival-order
+**Conditions-of-satisfaction vectors (CR-003; C-10…C-14 are Phase B, C-15…C-16e Phase C).** Each also runs under every arrival-order
 permutation.
 
 | Id | Setup | Expected |
@@ -1011,6 +1058,12 @@ permutation.
 | C-12b | `REPORT` reveals a seed other than the committed one | Not applied; `seed_mismatch` |
 | C-13 | Sampled indices don't follow the derivation | Not counted; `instance_mismatch` |
 | C-14 | A sampled item fails its proof against `pool_root` | Not counted; `instance_mismatch` |
+| C-15 | Terms drafted from a published template; `template_ref` re-instantiates exactly | Reference counted; Promised; no new anomalies |
+| C-16 | A disqualifier weaker than the slots produce (a wider scope) | `template_mismatch` on the `REQUEST`; the terms as written still bind (Promised) |
+| C-16b | A slot value of the wrong type | `template_mismatch`; Promised |
+| C-16c | `template_ref.hash` isn't the hash of the template's content | `template_mismatch`; Promised |
+| C-16d | The template event isn't in the event set | Reference not counted; no anomaly; Promised |
+| C-16e | A template whose placeholder names no slot | The template event is `malformed` |
 | C-8 | A disqualifier with an audit window (`window: until_audit_end`) | Replaced by decision: commitments are atomic, so there is no audit window or holdback; the terms don't parse (`malformed`). The CR's expectation (main settlement stands, holdback refunds) does not apply |
 
 ## 11. Bindings, governance and reputation
@@ -1019,7 +1072,7 @@ ACN Core defines what is signed and how it is judged. How an agent decides what 
 binding's concern. A **binding** is the adapter that lets an external harness's agents take part
 in the network and offer value-added terms of satisfaction (their own condition classes,
 verifiers and governance). Any harness participates by implementing the Binding API: the
-interfaces, lifecycle and conformance levels are proposed in [Binding API.md](Binding%20API.md)
+interfaces, lifecycle and conformance levels are proposed in [harness-binding-API.md](harness-binding-API.md)
 (D-10), and the reference bindings' behaviour, policy filters and worked examples are in
 [binding-api.md](binding-api.md).
 `acn-mcp-shim`, which wraps MCP tools, is the first reference binding.
@@ -1060,8 +1113,12 @@ runners and judges with their fingerprints, or the requester), **Pay if** (price
 trigger, deadline, review window, revisions), and **Disqualified if** (each disqualifier with its
 label). They MUST also show who drafted the version and a diff against the previous one, and say
 when a version can't be promised yet (V-26). For instance pools (§7) they show the
-description, rule and sample size, never the contents. Reference: `acn_view::TermsCard`
-(`Projection.terms_card`, `pending_card`, `versions`, `terms_diff`).
+description, rule and sample size, never the contents. When the version carries `template_ref`
+(§7) they show the template's name and author, the slot values, and whether the reference is counted, mismatched
+(with the reason) or unchecked because the template isn't available, and for a counted one the
+template's record as this reader computes it. Reference: `acn_view::TermsCard`
+(`Projection.terms_card`, `pending_card`, `versions`, `terms_diff`; `TermsCard.template`,
+`acn_view::template_records`).
 
 Free-text messages in a commitment thread are ordinary messages and carry no commitment meaning.
 
@@ -1116,11 +1173,11 @@ row needs a scenario test in the conformance suite.
 | Seed grinding (CR-003) | One party picks its seed to steer the sample | Two-party seed: the requester's committed in the terms, the performer's in its binding act, both before delivery (V-27) |
 | Runner picks the cases (CR-003) | The runner tests an easier subset or swaps items | The sample is derived, not chosen, and each item proves against `pool_root`; anyone can recheck the attestation (`instance_mismatch`, V-27) |
 | Seed leak (CR-003) | The runner passes the requester's seed to the performer before delivery | Residual: the runner is trusted with the seed until it attests, like a verifier with an escrowed secret; scored, and the requester can be its own runner |
-| Self-serving conditions (CR-003) | Performer drafts conditions it can trivially meet | The requester must `ACCEPT` that version; card and diff shown (§12); templates with records as defaults (Phase C) |
+| Self-serving conditions (CR-003) | Performer drafts conditions it can trivially meet | The requester must `ACCEPT` that version; card and diff shown (§12); templates with records as defaults (§7, shown on the card, §12) |
 | Pretextual disqualification (CR-003) | Requester alleges a hit to withhold payment | Only the disqualifier's runners attest (V-25); unsupported hits and `REJECT`s naming them flagged `unsupported_disqualification`; withholding without a counted hit is a requester lapse |
 | Vague disqualifiers (CR-003) | Statements about quality used as a catch-all | Guidance and lint in the bindings: disqualifiers name acts, quality goes in rubrics |
 | Pool leakage (CR-003) | Pool items become known across commitments | Pool rule published, contents never; burning revealed items (D-32) |
-| Template laundering (CR-003) | Reputable template instantiated with weak slot values | Slot values hashed into `template_ref`; records projected per template and slot range (Phase C) |
+| Template laundering (CR-003) | Reputable template instantiated with weak slot values, or terms that only claim the template | The slot values are carried in `template_ref` and shown; a claim that doesn't re-instantiate is `template_mismatch` (V-28) and gets no record; records are per template. Residual: records aren't yet split by slot range, so a reader compares the slot values itself |
 | Withheld satisfaction (requester trigger) | The requester reads a deliverable whose conditions all passed, then lets the review window lapse or rejects; the token refunds at `L` | Requester fault on lapse (§6.5); `contradicted_rejection` for rejecting a passed mechanical condition, `overruled_judgement` for a passed `judged` one (V-16); clients show what payment depends on (§12); a performer that won't rely on the requester takes the verifier or contingent trigger. Auto-satisfy is the requester's own pre-commitment and can't be enforced |
 | Unfunded offer (contingent) | The requester sees a passing attestation and never funds | The requester gains nothing (no `k`); requester fault recorded (§6.5); optional requester bond (D-21) |
 | Silent claim (contingent) | The performer takes the payment without publishing `k` | Contingent only on mints with `reveals_preimage_to_payer`: redeeming writes `k` into the spent proof's witness, which the payer reads with NUT-07 (§8.6) |
@@ -1153,7 +1210,7 @@ silence is handled by scoring only. Above it, performers SHOULD require an arbit
   no partial reports; milestones and an up-front portion are separate commitments (§8.5), as
   for staged delivery (D-23).
 - [ ] **D-9 Endorsement timing.**
-- [ ] **D-10 Binding API surface.** Proposal: [Binding API.md](Binding%20API.md) (eight interfaces, the secrets each party keeps, the lifecycle per settlement trigger, conformance levels L0–L3). Open: the `binding_level` field in `K_SVC` (§4), the conformance suites per level, and the `acn-binding` crate. The prototype binding is `acn-mcp-shim` inside the nmesh agent bridge.
+- [ ] **D-10 Binding API surface.** Proposal: [harness-binding-API.md](harness-binding-API.md) (eight interfaces, the secrets each party keeps, the lifecycle per settlement trigger, conformance levels L0–L3). Open: the `binding_level` field in `K_SVC` (§4), the conformance suites per level, and the `acn-binding` crate. The prototype binding is `acn-mcp-shim` inside the nmesh agent bridge.
 - [ ] **D-11 External timestamp anchors (new).** NIP-03 (OpenTimestamps) is now marked
   "unrecommended" upstream. Choose an anchoring mechanism, or rely on V-15 and disputes.
 - [ ] **D-12 Open requests (new).** A `REQUEST` addressed to several performers (RFP), with the
@@ -1283,7 +1340,7 @@ one from Phase B):
 Each phase is gated by acceptance criteria that a coding agent can test mechanically.
 
 1. **P0 Grammar and validator crate (`acn-core`).** Act schemas, terms schema, JCS hashing, the
-   fold, sibling resolution, V-1…V-11 and V-13…V-27, anomaly codes, `status_at`.
+   fold, sibling resolution, V-1…V-11 and V-13…V-28, anomaly codes, `status_at`.
    - Gate: scenario tests for every act and every anomaly code pass.
    - Gate: a property test shows identical state and anomalies under arrival-order permutations
      of each scenario (INV-2).
@@ -1337,7 +1394,8 @@ invent patterns. Kind numbers and tag letters are symbolic until D-1 closes.
 | Payment dependency, overruled judgement | 2026-11-08 | §12, §13, §14 (D-28) | Clients SHOULD show what payment depends on before the performer promises; new threat row "withheld satisfaction (requester trigger)"; open decision D-28 on flagging rejections of passed `judged` conditions | Clarification, no wire change. Reference: `acn_view::Projection.payment_depends_on`, shown on the card |
 | Reference judge harness | 2026-11-08 | §14 (D-18) | `acn-judge/1`: pinned judges on OpenAI-compatible endpoints, producing `K_ATTEST_JUDGED` that V-17 counts; noted as a D-18 candidate | No spec change; D-18 stays open |
 | D-28 closed: overruled judgement | 2026-11-08 | §10 (V-16, vectors J-15…J-17), §13, §14 | New flag `overruled_judgement` on a `REJECT` gap naming a `judged` condition with a counted passing attestation; per gap; no exemption for disagreeing judges | Applied, no wire change (flag only, INV-5 unchanged) |
-| CR-003 conditions-of-satisfaction authorship, Phase A | 2026-11-09 | INV-14, §6.2, §7, §8.2, §9, §10 (V-16, V-17, V-20, V-24…V-26, vectors), §12, §13, §14 (D-16, D-31, D-38 closed; D-29…D-37) | No hidden criteria (INV-14): `commit_reveal` rejected at every version, `rubric_ref` required and `check_ref` for hashed checks from `acn-terms/0.5`; `disqualifiers[]` with `hit`/`clear` attestations by named runners, `disqualified` on the `REPORT`, breach rejects without rework, `RELEASE` and auto-satisfy blocked; `open` conditions and the closure rule for `PROMISE`/`ACCEPT`/T-`REPORT`; terms versions derived from the chain; the terms card; codes `hidden_criteria`, `disqualified`, `unsupported_disqualification`, `unclosed_condition`; seven threat rows; J-5 amended, J-18 added (the old J-5 check); vectors C-1…C-9 | Phase A applied. Terms version `acn-terms/0.5`, the only one accepted: a prototype baseline with one set of rules, so the compatibility paths for 0.2–0.4 are removed and unknown terms fields are `malformed` (the wire stays `acn/0.4`). **CR-003 corrected:** it assumed CR-001's holdback and audit windows, which were dropped, and commitments are atomic (CR-002); the earlier decisions hold. So disqualifiers have no `window` (checked before settlement), `until_audit_end` and the audit-window effects of §2.2 don't exist, C-8 is replaced (an audit window is `malformed`), D-31 is closed, and §2.7's "split, holdback" are not on the card. **Also changed by decision:** `version` / `prev` / `drafted_by` are derived from the signed chain rather than added as terms fields (they can't then be misattributed); "evidence producer" means a listed verifier of the class, the runners, or the requester; `human`, `grounding` and `interpretive` disqualifiers are rejected at parse pending D-29, D-30; the spec has no separate breach path, so a hit makes `REJECT` legal under every trigger and, while it stands, any `REJECT` ends in Rejected without rework (C-6…C-6f), and the requester's silence after a hit is no lapse; the validator still applies a `SATISFY` or `FUND` after a hit (D-38); condition and disqualifier ids share one namespace. Demo: `/drafted`, `/disqualified`. Phase B applied (next row); C (templates) and D (authoring aids) pending; §4's template examples still carry `audit` / `holdback` / `window` and need the same correction in Phase C |
+| CR-003 conditions-of-satisfaction authorship, Phase A | 2026-11-09 | INV-14, §6.2, §7, §8.2, §9, §10 (V-16, V-17, V-20, V-24…V-26, vectors), §12, §13, §14 (D-16, D-31, D-38 closed; D-29…D-37) | No hidden criteria (INV-14): `commit_reveal` rejected at every version, `rubric_ref` required and `check_ref` for hashed checks from `acn-terms/0.5`; `disqualifiers[]` with `hit`/`clear` attestations by named runners, `disqualified` on the `REPORT`, breach rejects without rework, `RELEASE` and auto-satisfy blocked; `open` conditions and the closure rule for `PROMISE`/`ACCEPT`/T-`REPORT`; terms versions derived from the chain; the terms card; codes `hidden_criteria`, `disqualified`, `unsupported_disqualification`, `unclosed_condition`; seven threat rows; J-5 amended, J-18 added (the old J-5 check); vectors C-1…C-9 | Phase A applied. Terms version `acn-terms/0.5`, the only one accepted: a prototype baseline with one set of rules, so the compatibility paths for 0.2–0.4 are removed and unknown terms fields are `malformed` (the wire stays `acn/0.4`). **CR-003 corrected:** it assumed CR-001's holdback and audit windows, which were dropped, and commitments are atomic (CR-002); the earlier decisions hold. So disqualifiers have no `window` (checked before settlement), `until_audit_end` and the audit-window effects of §2.2 don't exist, C-8 is replaced (an audit window is `malformed`), D-31 is closed, and §2.7's "split, holdback" are not on the card. **Also changed by decision:** `version` / `prev` / `drafted_by` are derived from the signed chain rather than added as terms fields (they can't then be misattributed); "evidence producer" means a listed verifier of the class, the runners, or the requester; `human`, `grounding` and `interpretive` disqualifiers are rejected at parse pending D-29, D-30; the spec has no separate breach path, so a hit makes `REJECT` legal under every trigger and, while it stands, any `REJECT` ends in Rejected without rework (C-6…C-6f), and the requester's silence after a hit is no lapse; the validator still applies a `SATISFY` or `FUND` after a hit (D-38); condition and disqualifier ids share one namespace. Demo: `/drafted`, `/disqualified`. Phases B and C applied (next rows); D (authoring aids) pending. The CR's §4 template examples were corrected the same way (no `audit`, `holdback` or `window`) |
 | CR-003 Phase B, held-out instances | 2026-11-09 | INV-14, §6.2, §7, §9, §10 (V-27, vectors C-10…C-14), §12, §13, §14 (D-39) | `instances` on `mechanical` and `judged` conditions and disqualifiers (public description and rule, RFC 6962 `pool_root`, sizes, `requester_seed_hash`); `performer_seed_hash` in the binding act, `performer_seed` in `REPORT`; sample `sha256(rs ‖ ps ‖ commitment_id)` ranking indices; attestations reveal the requester seed and the sampled items with audit paths; codes `seed_mismatch`, `seed_withheld`, `instance_mismatch`; three threat rows | Applied, same terms version. **Changed from CR-003 by decision:** the CR left the encodings open, so the tree is RFC 6962 over JCS item bytes, indices rank by `sha256(seed ‖ u32_be(i))`, and seeds are 32 raw bytes; a missing seed commitment in a binding act is `malformed` (V-10's pattern); `seed_withheld` and `seed_mismatch` reject the `REPORT` rather than flag it, so the performer still owes a complete one; instances need `rework_limit` 0 (D-39) and are not allowed on `grounding`/`human`/`interpretive` items; the requester's seed travels to the runner in a NIP-44 `seed` tag. Judged instances parse and verify, but the reference judge harness (`acn-judge`) doesn't yet feed sampled items to the judges. Demo: `/held-out` |
+| CR-003 Phase C, terms templates | 2026-11-09 | §4, §5.1, §7, §10 (V-28, vectors C-15…C-16e), §12, §13, §15 | `K_TERMS_TEMPLATE` (7727): standalone, `acn-template/1` content with typed slots (`string`, `number`, `pubkey`, `sha256`, `duration`, `sats`), defaults and guidance, `{{slot}}` placeholders; `template_ref {event, hash, slots}` in terms; V-28 re-instantiation check, code `template_mismatch` (flag); the card shows the template, its slot values and its reader-computed record; [acn/cos-templates.md](acn/cos-templates.md) with `code-change/v1` and `research-brief/v1` | Applied, same terms version. **Changed from CR-003 by decision:** `template_ref` carries the slot values themselves, not only their hash, so any reader can re-instantiate and the card can show them; the fragment covers conditions and disqualifiers only (instances sit inside them; price and deadline are ordinary terms fields), so the §4 examples' `intent`, `price` and `deadline` slots aren't template content; an unavailable template is not flagged (not counted, as V-12 treats unfetched documents); records are reader-computed and per template, not yet split by slot range. The CR's older "templates by hash" in `K_SVC` is now the per-tool terms offer (§7), a separate, unvalidated client convenience. `research-brief/v1` drops the CR's deliverable-derived citation pool on `d1` (its `pool_root` would be fixed at `REPORT`, which §7 doesn't allow; D-35): the judges check every citation instead. Demo: Atlas publishes `retry-change/v1`; the `/drafted` and `/disqualified` counters instantiate it |
 | Contingent sealing format | 2026-11-08 | §6.2 (`REPORT`), §8.2 step 2 | The sealed deliverable `C` is a NIP-44 v2 payload keyed directly by `k`; inline as `content.sealed` or on Blossom; `ciphertext` = sha256 of the payload bytes. Reference: `acn-core::sealed`, interop-tested against rust-nostr | Clarification, no wire version change. Implemented end to end in the demo cast (`/contingent`), with `/judged`, `/injected` and `/judged-auto` for CR-001 |
 | Spec/reference audit | 2026-11-09 | §5.2, §5.4, §6.1, §6.2, §7, §8.5, §10 (V-24, V-25, vectors), §13, §14 (D-8 closed) | Aligned with `acn-core`: `v` tag `acn/0.4`; state record fields (`report_at`, `ruled`, `head_at`, `performer_seed_hash`, `performer_seed`, the counter's seed hash) and contingent/disqualifier transitions; `REJECT` from Offered and gaps naming disqualifiers or `artifact_unavailable`; `governance.party`, judged `instances`, mechanical disqualifier `instances`; V-24 and V-25 codes made explicit; advisory `PROMISE` fields and the `FUND` token marked as not validated; `rubric_ref` optional in judged attestations; permutation sampling stated; V-19 wording. Code fixed to match: unknown fields rejected at every level, supplied documents that fail to parse reported (not left pending), judged disqualifiers with the performer as runner flagged `self_judged`, escrow acks authorized only by this commitment's terms. §8.5 milestones contradicted atomic commitments (§1) and are now separate commitments (D-8 closed, as D-23) | Clarification, no wire change |

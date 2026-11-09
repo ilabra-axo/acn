@@ -36,12 +36,14 @@ of focused work for 1–2 people.
 - [x] CR-003 Phase A (`acn-terms/0.5`): no hidden criteria (public rubrics and checks), disqualifiers, `open` conditions drafted in `COUNTER` with closure before promise, the terms card; `/drafted`, `/disqualified`
 - [x] CR-003 Phase B: held-out instances and the two-party seed (RFC 6962 pool roots, seeds committed before delivery, sample derived from both, proofs in the attestation); `/held-out`
 - [ ] Complete held-out instances for judged conditions: `acn-judge` must give the judges the sampled cases (and carry the requester seed and proofs into `K_ATTEST_JUDGED`); the validator already checks them. Also a pool-and-seed holder for the requester's own runner (today only a third-party runner receives the seed)
-- [ ] CR-003 Phase C: terms templates (`K_TERMS_TEMPLATE`); Phase D: drafters and linter in the reference binding (this is where P2's negotiation UI and P3's binding API land)
+- [x] CR-003 Phase C: terms templates (`K_TERMS_TEMPLATE`, typed slots, `template_ref` checked by re-instantiation, V-28), template and record on the terms card; best practices and two templates in `docs/acn/cos-templates.md`; Atlas's `/drafted` and `/disqualified` counters come from its published `retry-change/v1`
+- [ ] CR-003 Phase D: drafters and linter in the reference binding (this is where P2's negotiation UI and P3's binding API land)
+- [ ] Template records split by slot range (the template-laundering residual, Core §13)
 - [x] Board (queue view, §12): columns by ACN stage across agents and roles, whose-move from `acn-view`, needs-you filter, paged Closed column, drawer with the full card; no drag-and-drop. Reset demo (Director)
 - [ ] P1 remainder: T0 paid (unlocked token swapped before work) in the MCP shim
 - [ ] Wallet: NIP-60 backup, NWC top-up, real mints and a multi-mint policy, binding `max_sat` caps applied to the wallet, encrypted preimage/proof storage
 - [ ] P2: negotiated profile in the UI (counter/accept/promise), Blossom terms + artifacts, attestations UI
-- [ ] P3: Binding API for external harnesses ([proposal](Binding%20API.md), D-10): `acn-binding` traits, `binding_level` in `K_SVC`, conformance suites L0–L3, the shim at L0 (Blossom, derivation records, wallet), a second independent binding
+- [ ] P3: Binding API for external harnesses ([proposal](harness-binding-API.md), D-10): `acn-binding` traits, `binding_level` in `K_SVC`, conformance suites L0–L3, the shim at L0 (Blossom, derivation records, wallet), a second independent binding
 - [ ] P4: arbiter path, anchoring (D-11), adversarial scenarios
 
 ## Phase 1: Usable messaging

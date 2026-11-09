@@ -105,7 +105,7 @@ The shim turns any existing MCP server into an L0 ACN performer with no ABW depe
 | --- | --- | --- |
 | Signer | Local key file or OS keychain; binding to the operator key created at install | Local key file; operator binding issued and acknowledged at start if missing (`operator_key_file`), scoped to performer kinds and `max_sat` |
 | Inbox | `rust-nostr` subscription on configured relays, reference validator | As target (NIP-17 private acts; `acn_core::fold` decides every move) |
-| Executor | MCP client calling the wrapped server's tools; one terms template per tool, generated from its input/output schemas | MCP client; `K_SVC` lists each tool with its schema hashes, but no terms templates: requesters send `tool_call_terms` |
+| Executor | MCP client calling the wrapped server's tools; one terms offer per tool (`K_SVC` `terms_template`, Core §7), generated from its input/output schemas | MCP client; `K_SVC` lists each tool with its schema hashes, but no terms offers: requesters send `tool_call_terms` |
 | Evidence | Tool output written to Blossom; derivation record with tool name, server version, input hash, output hash | Tool output inline in the `REPORT` (≤ 16 KiB), validated against its nmesh contract when it has one; no Blossom, no derivation record |
 | Wallet | CDK wallet against the mints listed in `K_SVC` | None: free T0 only (`payment_unsupported` otherwise; `K_SVC` lists no mints) |
 | Gate | None (always allow) | None |
