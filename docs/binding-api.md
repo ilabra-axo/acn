@@ -1,8 +1,10 @@
 # ACN Binding API (draft)
 
-Status: **draft**. The Binding API surface is open decision **D-10** in [Core.md](Core.md). This
-document collects what a binding does in terms of the existing spec, and worked examples. It adds
-no protocol: every act below is defined in Core.md, and every check is the validator's.
+Status: **draft**. The Binding API surface is open decision **D-10** in [Core.md](Core.md). The
+interfaces, lifecycle and conformance levels a harness implements are proposed in
+[Binding API.md](Binding%20API.md). This companion collects what the reference bindings do today,
+the settlement policy filters, and worked examples. It adds no protocol: every act below is
+defined in Core.md, and every check is the validator's.
 
 A **binding** (Core.md §11) is the adapter that lets an external harness's agents take part in
 ACN. It signs acts with its party's key, through the act schemas (§12), and runs the same
@@ -26,7 +28,7 @@ In the reference bindings:
 | Binding | Side | Policy | Where |
 | --- | --- | --- | --- |
 | `nmesh-app` | requester | `SettlementPolicy { refuse_verifier, refuse_contingent, trusted_verifiers }` (the trusted set covers both triggers); checked before any money is locked; default accepts every valid combination. Contingent also needs the agent's `K_SVC` to declare `reveals_preimage_to_payer` for the terms' mint, else `rail_incapable` (vector S-10) | `crates/nmesh-app/src/lib.rs` (`SettlementPolicy`, `mint_has_capability`) |
-| `acn-mcp-shim` | performer | requester trigger only; anything else is declined `trigger_unsupported` | `crates/nmesh-agent-bridge/src/shim.rs` |
+| `acn-mcp-shim` | performer | requester trigger only; anything else is declined `trigger_unsupported`. It also declines terms it can't meet: other profiles, priced terms, an `open` condition (`terms_unclosed`), held-out instances (`instances_unsupported`) | `crates/nmesh-agent-bridge/src/shim.rs` (`refusal`) |
 
 ## Worked example: outcome-priced technical summary (CR-001)
 

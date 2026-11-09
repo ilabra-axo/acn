@@ -180,22 +180,8 @@ impl Shim<'_> {
         };
 
         let now = Timestamp::now().as_secs();
-        // Performer-side settlement policy (Binding API policy filters): this binding only
-        // settles through the requester.
-        let draft = if !terms.settlement_trigger.is_requester() {
-            decline(
-                "trigger_unsupported",
-                "this agent accepts the requester settlement trigger only".into(),
-            )
-        } else if cm.profile != Profile::T0 {
-            decline("profile_unsupported", "this agent offers T0 only".into())
-        } else if terms.price.amount > 0 {
-            decline(
-                "payment_unsupported",
-                "paid calls need Cashu settlement (not yet supported)".into(),
-            )
-        } else if now > terms.deadline {
-            decline("expired", "request deadline already passed".into())
+        let draft = if let Some((reason, note)) = refusal(terms, cm.profile, now) {
+            decline(reason, note)
         } else if let Some(binding) = terms
             .deliverable
             .tool
@@ -236,6 +222,41 @@ impl Shim<'_> {
     }
 }
 
+/// What this binding declines before running anything (Binding API: `Executor.quote` declines
+/// terms it can't meet, so no act it signs is one the validator would refuse).
+fn refusal(terms: &acn_core::Terms, profile: Profile, now: u64) -> Option<(&'static str, String)> {
+    // Performer-side settlement policy: this binding only settles through the requester.
+    if !terms.settlement_trigger.is_requester() {
+        return Some((
+            "trigger_unsupported",
+            "this agent accepts the requester settlement trigger only".into(),
+        ));
+    }
+    if profile != Profile::T0 {
+        return Some(("profile_unsupported", "this agent offers T0 only".into()));
+    }
+    if terms.price.amount > 0 {
+        return Some((
+            "payment_unsupported",
+            "paid calls need Cashu settlement (not yet supported)".into(),
+        ));
+    }
+    // A T0 REPORT is an implicit promise, so it needs closed terms (V-26).
+    if let Some(why) = terms.unclosed() {
+        return Some(("terms_unclosed", why));
+    }
+    if terms.has_instances() {
+        return Some((
+            "instances_unsupported",
+            "held-out instances need a performer seed, which this agent doesn't keep".into(),
+        ));
+    }
+    if now > terms.deadline {
+        return Some(("expired", "request deadline already passed".into()));
+    }
+    None
+}
+
 /// REPORT content: structuredContent bound to its contract when it validates, else text.
 fn report_payload(
     registry: &ContractRegistry,
@@ -261,4 +282,41 @@ fn text_of(r: &CallToolResult) -> String {
         .filter_map(|c| c.as_text().map(|t| t.text.as_str()))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn terms(f: impl FnOnce(&mut Value)) -> acn_core::Terms {
+        let mut t = acn_core::draft::tool_call_terms("echo", json!({}), 2000, 600, 0);
+        f(&mut t);
+        acn_core::Terms::parse(&t).unwrap()
+    }
+
+    #[test]
+    fn declines_what_it_cannot_meet() {
+        let why = |t: &acn_core::Terms, p| refusal(t, p, 1000).map(|r| r.0);
+        assert_eq!(why(&terms(|_| {}), Profile::T0), None);
+        assert_eq!(why(&terms(|_| {}), Profile::N), Some("profile_unsupported"));
+        assert_eq!(
+            why(&terms(|t| t["price"]["amount"] = json!(5)), Profile::T0),
+            Some("payment_unsupported")
+        );
+        let open = terms(|t| {
+            t["conditions"] = json!([{"id": "c1", "class": "open", "description": "fast"}])
+        });
+        assert_eq!(why(&open, Profile::T0), Some("terms_unclosed"));
+        let held_out = terms(|t| {
+            t["verifiers"] = json!([{"pubkey": "ab".repeat(32), "classes": ["mechanical"]}]);
+            t["conditions"] = json!([{"id": "c1", "class": "mechanical", "description": "tests",
+                "instances": {"pool_description": "cases", "pool_rule": "curated", "pool_root": "cd".repeat(32),
+                    "pool_size": 4, "sample_size": 2, "requester_seed_hash": "ef".repeat(32)}}]);
+        });
+        assert_eq!(why(&held_out, Profile::T0), Some("instances_unsupported"));
+        assert_eq!(
+            refusal(&terms(|_| {}), Profile::T0, 3000).map(|r| r.0),
+            Some("expired")
+        );
+    }
 }

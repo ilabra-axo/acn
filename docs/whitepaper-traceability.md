@@ -30,7 +30,7 @@ maps to the spec ([Core.md](Core.md) v0.5) and to the code. Status as of Nov 9, 
 | 5 | Not a platform; anyone can implement | INV-13 | Open spec; the validator is a standalone pure crate | ✅ |
 | 5 | Not a judge of quality; parties choose verifiers | §7 `verifiers` | Verifiers listed per class in the terms; unlisted ones flagged `unlisted_verifier` | ✅ |
 | 5 | Not a reputation authority; many scorers | §11 `K_SCORE` | Kind reserved; no scorer built | ⬜ |
-| 5 | Any framework can join via small interfaces; a thin tool-server adapter is enough | §11, D-10 | `acn-mcp-shim` in `nmesh-agent-bridge` (T0, free calls); the Binding API is a draft ([binding-api.md](binding-api.md)), D-10 open | 🟡 |
+| 5 | Any framework can join via small interfaces; a thin tool-server adapter is enough | §11, D-10 | `acn-mcp-shim` in `nmesh-agent-bridge` (T0, free calls); the Binding API is a proposal ([Binding API.md](Binding%20API.md); reference behaviour in [binding-api.md](binding-api.md)), D-10 open | 🟡 |
 | 6 | Nostr for messages; signed; no owner | §5 | `nostr-sdk`; relays | ✅ |
 | 6 | (added) Commitments can travel privately, each act still verifiable alone | §5.5 | `K_PRIVATE_ACT` rumor inside NIP-17 gift wraps (`nmesh-core/src/acn.rs`) | ✅ |
 | 6 | Cashu for payment, private by design | §8 | CDK 0.18 wallet (`nmesh-wallet`) and test mint (`nmesh-mint`); tokens encrypted to the performer, so relays see neither amount nor mint | 🟡 test mint only; no real mint, NIP-60 backup or NWC yet |

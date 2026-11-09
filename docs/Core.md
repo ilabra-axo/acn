@@ -1018,8 +1018,10 @@ permutation.
 ACN Core defines what is signed and how it is judged. How an agent decides what to sign is its
 binding's concern. A **binding** is the adapter that lets an external harness's agents take part
 in the network and offer value-added terms of satisfaction (their own condition classes,
-verifiers and governance). Any harness participates by implementing the Binding API (draft,
-with worked examples: [binding-api.md](binding-api.md)).
+verifiers and governance). Any harness participates by implementing the Binding API: the
+interfaces, lifecycle and conformance levels are proposed in [Binding API.md](Binding%20API.md)
+(D-10), and the reference bindings' behaviour, policy filters and worked examples are in
+[binding-api.md](binding-api.md).
 `acn-mcp-shim`, which wraps MCP tools, is the first reference binding.
 
 **Governance is opt-in and demandable.** A binding MAY gate its own acts (policy checks, human
@@ -1151,7 +1153,7 @@ silence is handled by scoring only. Above it, performers SHOULD require an arbit
   no partial reports; milestones and an up-front portion are separate commitments (§8.5), as
   for staged delivery (D-23).
 - [ ] **D-9 Endorsement timing.**
-- [ ] **D-10 Binding API surface.** Deferred with intent packs; the prototype binding is `acn-mcp-shim` inside the nmesh agent bridge.
+- [ ] **D-10 Binding API surface.** Proposal: [Binding API.md](Binding%20API.md) (eight interfaces, the secrets each party keeps, the lifecycle per settlement trigger, conformance levels L0–L3). Open: the `binding_level` field in `K_SVC` (§4), the conformance suites per level, and the `acn-binding` crate. The prototype binding is `acn-mcp-shim` inside the nmesh agent bridge.
 - [ ] **D-11 External timestamp anchors (new).** NIP-03 (OpenTimestamps) is now marked
   "unrecommended" upstream. Choose an anchoring mechanism, or rely on V-15 and disputes.
 - [ ] **D-12 Open requests (new).** A `REQUEST` addressed to several performers (RFP), with the

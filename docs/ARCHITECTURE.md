@@ -442,7 +442,7 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | Wallet backup / NIP-60, NWC top-up, real mints | — | — | — | ⬜ |
 | Blossom artifacts, derivation records | §9 | `x` tags carried only | — | ⬜ |
 | `K_SCORE`, reputation (D-13) | §11 | kind reserved | — | ⬜ |
-| Binding API for external harnesses | §11, D-10 | — | — | ⬜ |
+| Binding API for external harnesses | §11, D-10; proposal in `Binding API.md` | interfaces implemented directly by the reference bindings; no `acn-binding` crate, no `binding_level`, no conformance suites | — | 🟡 proposal |
 | Projections (thread / evidence view) | §12 | `acn_view::project`; `CommitmentCard.svelte` | playthrough, presenter script | ✅ |
 | Board (queue view) across agents and roles | §12 | `acn_view::Lane`, `Projection.{lane, my_role, next, needs_me, pending_endorsement, updated_at}`; `App::board(closed_limit)`; `Board.svelte`, `BoardTile.svelte` | `board_lanes_follow_the_workflow`, `live` (paging, needs_me), `scripts/board.mjs` | ✅ (no drag-and-drop, by design) |
 | Ledger view | §12 | wallet panel history only | — | 🟡 |
@@ -534,9 +534,9 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 - **Test sats only.** The mint's Lightning backend is fake. Preimages and wallet proofs sit in
   plaintext on disk. No NIP-60 backup, no NWC, no real mint. The demo cast's operator binding
   has no scopes (no `max_sat`).
-- **The MCP shim doesn't speak CR-003 terms.** `nmesh-agent-bridge`'s T0 shim drafts its own
-  `tool_call_terms`; terms with disqualifiers or held-out instances sent to it would get a
-  `REPORT` without `performer_seed` (`seed_withheld`). It should decline such terms.
+- **The MCP shim is free T0 only.** It declines priced terms, other triggers and profiles, open
+  conditions and held-out instances (`refusal` in `shim.rs`); no Blossom, derivation records or
+  wallet yet (Binding API.md §3).
 - **Refund is a manual swap** (CDK's `receive` only tries the preimage path for HTLC proofs).
 - **Live refunds wait for the real locktime** (≈ 25 h in the demo templates); presenter mode can
   fast-forward it.
