@@ -201,6 +201,7 @@ export interface TermsCard {
     check_ref: string | null;
     rubric_ref: string | null;
     rubric_text: string | null;
+    instances: InstancesView | null;
   }[];
   checked_by: { item: string; keys: string[]; requester: boolean; judges: string[]; rule: string | null }[];
   pay_if: {
@@ -213,9 +214,18 @@ export interface TermsCard {
     rework_limit: number;
     fund_window: number | null;
   };
-  disqualified_if: { id: string; class: ConditionClass; assurance: Assurance | null; description: string }[];
+  disqualified_if: { id: string; class: ConditionClass; assurance: Assurance | null; description: string; instances: InstancesView | null }[];
   /** Why this version can't be promised or accepted yet. */
   unclosed: string | null;
+}
+
+/** Held-out instances: the public part of the pool (never its contents). */
+export interface InstancesView {
+  pool_description: string;
+  pool_rule: string;
+  pool_size: number;
+  sample_size: number;
+  pool_root: string;
 }
 
 export interface DiffLine {

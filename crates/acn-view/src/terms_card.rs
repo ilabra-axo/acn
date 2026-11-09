@@ -56,6 +56,28 @@ pub struct DoneItem {
     pub check_ref: Option<String>,
     pub rubric_ref: Option<String>,
     pub rubric_text: Option<String>,
+    /// Held-out instances: what the pool is and how many cases get drawn, never its contents.
+    pub instances: Option<InstancesView>,
+}
+
+/// The public part of an instance pool (spec §12: description, rule and sample size).
+#[derive(Debug, Clone, Serialize)]
+pub struct InstancesView {
+    pub pool_description: String,
+    pub pool_rule: String,
+    pub pool_size: u32,
+    pub sample_size: u32,
+    pub pool_root: String,
+}
+
+fn instances_view(c: &acn_core::terms::Condition) -> Option<InstancesView> {
+    acn_core::terms::instances_of(c).map(|i| InstancesView {
+        pool_description: i.pool_description,
+        pool_rule: i.pool_rule,
+        pool_size: i.pool_size,
+        sample_size: i.sample_size,
+        pool_root: i.pool_root,
+    })
 }
 
 /// Who produces the evidence for one condition or disqualifier.
@@ -90,6 +112,7 @@ pub struct DisqualifierItem {
     pub class: ConditionClass,
     pub assurance: Option<Assurance>,
     pub description: String,
+    pub instances: Option<InstancesView>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -130,6 +153,7 @@ pub fn card(t: &Terms, v: &TermsVersionView) -> TermsCard {
             check_ref: s(c, "check_ref"),
             rubric_ref: s(c, "rubric_ref"),
             rubric_text: s(c, "rubric_text"),
+            instances: instances_view(c),
         })
         .collect();
     let mut checked_by: Vec<CheckedBy> = t.conditions.iter().map(|c| checked(t, c, None)).collect();
@@ -165,6 +189,7 @@ pub fn card(t: &Terms, v: &TermsVersionView) -> TermsCard {
                 class: d.class,
                 assurance: d.class.assurance(),
                 description: d.description.clone(),
+                instances: instances_view(&d.as_condition()),
             })
             .collect(),
         unclosed: t.unclosed(),

@@ -64,6 +64,8 @@ export class AcnWorld {
   private events: AcnEvent[] = [];
   private extra: AcnEvent[] = [];
   private escrow: Record<string, string> = {};
+  /** Requester seeds the runner holds (held-out instances); every role is local here. */
+  private seeds: Record<string, string> = {};
   private preimages: Record<string, string> = {};
   private scheduled = new Set<string>();
   private timers: number[] = [];
@@ -163,7 +165,11 @@ export class AcnWorld {
     // The secret's holder: the arbiter (Core.md §8.4) or the settlement verifier (verifier trigger, §8.2).
     const terms = template.terms ?? {};
     const holder = terms.arbiter ?? (terms.settlement_trigger === "verifier" ? terms.settlement_verifier : undefined);
+    // Held-out instances (CR-003 §2.3): our seed's hash goes in the terms; the seed goes to the runner.
+    const seed = template.requester_seed_to ? randomHex32() : undefined;
     const draft = acn<Draft>("request", {
+      requester_seed_hash: seed ? acn<string>("sha256", { bytes: seed }) : null,
+      seed: seed ? "presenter-seed" : undefined,
       template,
       tool: scenario,
       now: this.now(),
@@ -195,7 +201,9 @@ export class AcnWorld {
       this.preimages[e.id] = s;
       if (holder) this.escrow[e.id] = s;
     }
-    if (terms.settlement_trigger === "contingent") this.keys[e.id] = randomHex32();
+    // Atlas's per-commitment secret (k when contingent; its performer seed is derived from it).
+    this.keys[e.id] = randomHex32();
+    if (seed) this.seeds[e.id] = seed;
     if (token) {
       this.tokens[e.id] = token;
       this.mint = acn<any>("mint_tag", { mint: this.mint, token, commitment: e.id }).mint;
@@ -276,7 +284,7 @@ export class AcnWorld {
   private react() {
     this.checkPayments();
     this.redeem();
-    const moves = acn<Move[]>("react", { cast: this.cast, events: this.events, escrow: this.escrow, payments: this.payments, keys: this.keys });
+    const moves = acn<Move[]>("react", { cast: this.cast, events: this.events, escrow: this.escrow, payments: this.payments, keys: this.keys, seeds: this.seeds });
     for (const m of moves) {
       if (this.scheduled.has(m.key)) continue;
       this.scheduled.add(m.key);
@@ -316,6 +324,7 @@ export class AcnWorld {
     this.timers = [];
     this.events = [];
     this.escrow = {};
+    this.seeds = {};
     this.preimages = {};
     this.scheduled.clear();
     this.narration = {};

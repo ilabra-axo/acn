@@ -604,6 +604,9 @@ impl App {
             .and_then(|t| serde_json::from_value(t["terms_template"].clone()).ok());
         let now = Timestamp::now().as_secs();
         let mut secret = None;
+        // Held-out instances (CR-003 §2.3): our seed's hash goes in the terms; the seed itself
+        // goes privately to the runner, who reveals it when it attests.
+        let mut seed: Option<(String, String)> = None;
         let (profile, terms) = match &template {
             Some(t) => {
                 let hashlock = t.hashlock.then(|| {
@@ -612,9 +615,20 @@ impl App {
                     secret = Some(hex32(&s));
                     h
                 });
-                let terms =
-                    acn_core::draft::instantiate(t, &def.command, input, now, hashlock.as_deref())
-                        .map_err(AppError::Invalid)?;
+                let seed_hash = t.requester_seed_to.as_ref().map(|to| {
+                    let s = Keys::generate().secret_key().secret_bytes();
+                    seed = Some((hex32(&s), to.clone()));
+                    acn_core::jcs::sha256_hex(&s)
+                });
+                let terms = acn_core::draft::instantiate(
+                    t,
+                    &def.command,
+                    input,
+                    now,
+                    hashlock.as_deref(),
+                    seed_hash.as_deref(),
+                )
+                .map_err(AppError::Invalid)?;
                 (t.profile.clone(), terms)
             }
             None => (
@@ -682,6 +696,11 @@ impl App {
             let holder = PublicKey::parse(holder).map_err(|e| AppError::BadKey(e.to_string()))?;
             let ct = self.inner.session.nip44_encrypt(&holder, s)?;
             draft = draft.tag(vec!["escrow".into(), ct, holder.to_hex()]);
+        }
+        if let Some((s, to)) = &seed {
+            let runner = PublicKey::parse(to).map_err(|e| AppError::BadKey(e.to_string()))?;
+            let ct = self.inner.session.nip44_encrypt(&runner, s)?;
+            draft = draft.tag(vec!["seed".into(), ct, runner.to_hex()]);
         }
         let act = self.inner.session.sign_act(&draft, None)?;
         let id = act.id.clone();

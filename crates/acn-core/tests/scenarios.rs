@@ -577,6 +577,15 @@ const ALL: &[Scenario] = &[
     ("C-6d", common::cos::c6d),
     ("C-6e", common::cos::c6e),
     ("C-6f", common::cos::c6f),
+    // CR-003 Phase B: held-out instances.
+    ("C-10", common::held_out::c10),
+    ("C-10b", common::held_out::c10b),
+    ("C-10c", common::held_out::c10c),
+    ("C-11", common::held_out::c11),
+    ("C-12", common::held_out::c12),
+    ("C-12b", common::held_out::c12b),
+    ("C-13", common::held_out::c13),
+    ("C-14", common::held_out::c14),
 ];
 
 // ---------- CR-003 vectors (spec §10 conformance table) ----------
@@ -788,6 +797,92 @@ fn cr003_one_coherent_terms_version() {
             "{f}"
         );
     }
+}
+
+// ---------- CR-003 Phase B vectors (held-out instances) ----------
+
+fn check_held_out(name: &str, w: &W, out: &acn_core::Output) {
+    let e = &w.events;
+    let req = &e[0];
+    let ctx = format!("{name}: {:?}", out.anomalies);
+    let has = |i: usize, code: Code| out.has(&e[i].id, code);
+    let c = &out.commitments[&req.id];
+    let st = c.state.as_ref().unwrap();
+    let c1 = c.conditions.get("c1");
+    match name {
+        // e: REQUEST, PROMISE, REPORT, ATTEST, SATISFY
+        "C-10" => {
+            assert_eq!(c1, Some(&ConditionStatus::Pass), "{ctx}");
+            assert_eq!(st.phase, Phase::Satisfied, "{ctx}");
+            assert!(out.anomalies.iter().all(|a| a.code == Code::Unbound), "{ctx}");
+        }
+        // e: REQUEST, COUNTER (performer, seed hash), ACCEPT (requester), REPORT, ATTEST
+        "C-10b" => {
+            assert_eq!(c1, Some(&ConditionStatus::Pass), "{ctx}");
+            let want = common::held_out::seed_hash(&common::held_out::PS);
+            assert_eq!(st.performer_seed_hash.as_deref(), Some(want.as_str()), "{ctx}");
+            assert!(out.anomalies.iter().all(|a| a.code == Code::Unbound), "{ctx}");
+        }
+        "C-10c" => {
+            assert!(has(1, Code::Malformed), "{ctx}");
+            assert_eq!(st.phase, Phase::Requested, "{ctx}");
+        }
+        // e: REQUEST, PROMISE, REPORT, ATTEST
+        "C-11" | "C-13" | "C-14" => {
+            let code = if name == "C-11" { Code::SeedMismatch } else { Code::InstanceMismatch };
+            assert!(has(3, code), "{ctx}");
+            assert_eq!(c1, Some(&ConditionStatus::Unverified), "not counted: {ctx}");
+        }
+        // e: REQUEST, PROMISE, REPORT (not applied)
+        "C-12" | "C-12b" => {
+            let code = if name == "C-12" { Code::SeedWithheld } else { Code::SeedMismatch };
+            assert!(has(2, code), "{ctx}");
+            assert_eq!(st.phase, Phase::Promised, "the REPORT is incomplete, not applied: {ctx}");
+        }
+        other => panic!("no expectation for {other}"),
+    }
+}
+
+const HELD_OUT: &[Scenario] = &[
+    ("C-10", common::held_out::c10),
+    ("C-10b", common::held_out::c10b),
+    ("C-10c", common::held_out::c10c),
+    ("C-11", common::held_out::c11),
+    ("C-12", common::held_out::c12),
+    ("C-12b", common::held_out::c12b),
+    ("C-13", common::held_out::c13),
+    ("C-14", common::held_out::c14),
+];
+
+/// CR-003 §5.2 Phase B: every vector, under every arrival-order permutation.
+#[test]
+fn cr003_held_out_vectors_under_every_arrival_order() {
+    for (name, build) in HELD_OUT {
+        let w = build();
+        for order in orders(w.events.len()) {
+            let shuffled: Vec<_> = order.iter().map(|&i| w.events[i].clone()).collect();
+            check_held_out(name, &w, &acn_core::fold(&shuffled, &w.docs));
+        }
+    }
+}
+
+/// Instance pools in the terms: well-formed, public, never reused across a rework round.
+#[test]
+fn cr003_instance_terms() {
+    use common::held_out::held_out_terms;
+    let code = |t: serde_json::Value| acn_core::Terms::check(&t).err().map(|e| e.0);
+    let set = |f: &'static str, v: serde_json::Value| held_out_terms(1, move |t| t["conditions"][0]["instances"][f] = v);
+    assert_eq!(code(held_out_terms(1, |_| {})), None);
+    assert_eq!(code(held_out_terms(1, |t| t["rework_limit"] = json!(1))), Some(Code::Malformed));
+    assert_eq!(code(set("sample_size", json!(21))), Some(Code::Malformed));
+    assert_eq!(code(set("pool_rule", json!(""))), Some(Code::HiddenCriteria));
+    assert_eq!(code(set("pool_items", json!([]))), Some(Code::Malformed));
+    // The derivation in C-13 really differs from the runner's pick.
+    let w = common::held_out::c13();
+    let cid = acn_core::instances::from_hex(&w.events[0].id).unwrap();
+    let mut s = acn_core::instances::sample(&common::held_out::RS, &common::held_out::PS, &cid, 20, 5);
+    s.sort();
+    assert_ne!(s, vec![0, 1, 2, 3, 4]);
 }
 
 // ---------- CR-001 vectors (spec §10 conformance table) ----------

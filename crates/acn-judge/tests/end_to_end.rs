@@ -122,6 +122,7 @@ impl<L: Llm> World<L> {
             json!({"brief": "the ACN spec"}),
             self.clock,
             Some(&h),
+            None,
         )
         .unwrap();
         let performer = self.cast.performer.clone();
@@ -142,6 +143,7 @@ impl<L: Llm> World<L> {
                 &self.events,
                 &self.escrow,
                 None,
+                &BTreeMap::new(),
                 &BTreeMap::new(),
             );
             if !moves.is_empty() {

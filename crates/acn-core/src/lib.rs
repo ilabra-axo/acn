@@ -16,6 +16,7 @@
 pub mod anomaly;
 pub mod draft;
 pub mod event;
+pub mod instances;
 pub mod jcs;
 pub mod kinds;
 pub mod sealed;

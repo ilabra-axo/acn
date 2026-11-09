@@ -51,6 +51,16 @@ impl Draft {
         self
     }
 
+    /// Set one field of the JSON content (e.g. `performer_seed_hash` on a binding act).
+    pub fn field(mut self, key: &str, v: Value) -> Self {
+        let mut c: Value = serde_json::from_str(&self.content).unwrap_or_else(|_| json!({}));
+        if let Some(o) = c.as_object_mut() {
+            o.insert(key.into(), v);
+        }
+        self.content = c.to_string();
+        self
+    }
+
     /// Commitment id, `prev` and counterparties: the envelope of every non-root act.
     pub fn act(kind: u16, commitment: &str, prev: &str, parties: &[&str]) -> Self {
         let mut d = Self::new(kind).tag(t("c", commitment)).tag(vec![
@@ -325,19 +335,25 @@ pub struct Template {
     /// Extra seconds after `deadline + review_window` before the refund path opens (§8.2).
     #[serde(default = "default_margin")]
     pub locktime_margin_secs: u64,
+    /// Held-out instances (CR-003 §2.3): the requester generates a seed, commits its hash in the
+    /// terms, and gives the seed privately (NIP-44, a `seed` tag) to this runner key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester_seed_to: Option<String>,
 }
 
 fn default_margin() -> u64 {
     24 * 60 * 60
 }
 
-/// Fill a template into concrete terms for one request.
+/// Fill a template into concrete terms for one request. `requester_seed_hash` fills every
+/// `instances.requester_seed_hash` (required when the template has `requester_seed_to`).
 pub fn instantiate(
     t: &Template,
     tool: &str,
     input: Value,
     now: u64,
     hashlock: Option<&str>,
+    requester_seed_hash: Option<&str>,
 ) -> Result<Value, String> {
     let mut terms = t.terms.clone();
     let obj = terms
@@ -361,6 +377,21 @@ pub fn instantiate(
             .ok_or("hashlock template needs `payment`")?;
         payment["hashlock"] = json!(h);
         payment["locktime"] = json!(deadline + t.review_window_secs + t.locktime_margin_secs);
+    }
+    if t.requester_seed_to.is_some() {
+        let h = requester_seed_hash.ok_or("this template requires a requester seed")?;
+        for list in ["conditions", "disqualifiers"] {
+            for c in obj
+                .get_mut(list)
+                .and_then(Value::as_array_mut)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(i) = c.get_mut("instances").and_then(Value::as_object_mut) {
+                    i.insert("requester_seed_hash".into(), json!(h));
+                }
+            }
+        }
     }
     Terms::parse(&terms)?;
     Ok(terms)

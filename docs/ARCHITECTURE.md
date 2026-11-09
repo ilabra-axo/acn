@@ -102,7 +102,7 @@ flowchart TB
 |---|---|---|---|---|---|
 | `nmesh-proto` | lib | nmesh wire format: kinds, structured messages, actions, manifests, NIP-CD slash commands | `StructuredMessage`, `Action`, `AgentManifest`, `SlashCommandDefinition`, `parse_invocation`, `bind_args` | none | 890 |
 | `nmesh-contracts` | lib | Data contracts: JSON Schema registry, hash pinning, renderer resolution, trust policy | `ContractRegistry`, `schema_hash`, `resolve_renderer`, `TrustPolicy`, `builtin::*` | none | 450 |
-| `acn-core` | lib | ACN grammar and validator: event model, BIP-340 verification, JCS, terms, bindings, the deterministic fold, `status_at`, act drafting, contingent sealing (NIP-44 v2 keyed by `k`) | `fold`, `status_at`, `Draft`, `Terms`, `Template`, `instantiate`, `binding_status`, `Code`, `sealed::{seal, open, ciphertext_hash}` | none, no C deps | 3,460 |
+| `acn-core` | lib | ACN grammar and validator: event model, BIP-340 verification, JCS, terms, bindings, the deterministic fold, `status_at`, act drafting, contingent sealing (NIP-44 v2 keyed by `k`), held-out instances (RFC 6962 pool proofs, two-seed sample) | `fold`, `status_at`, `Draft`, `Terms`, `Template`, `instantiate`, `binding_status`, `Code`, `sealed::{seal, open, ciphertext_hash}` | none, no C deps | 3,460 |
 | `acn-view` | lib | Projections of the fold for UIs: timeline, evidence, counter diff, settlement, allowed acts; the terms card, terms versions and diffs (CR-003) | `project`, `Projection`, `Entry`, `ConditionView`, `DisqualifierView`, `SettlementView`, `TermsCard`, `TermsVersionView`, `DiffLine` | none | 600 |
 | `acn-sim` | lib | Demo scenarios: the cast, terms templates, reactions (incl. scripted judges and the contingent seal), requester hints | `SCENARIOS`, `template`, `react`, `react_with` (escrow, payments, contingent keys), `Move.escrow`, `Move.judge` (real judges: the host fills the content), `Cast.judge_panel`, `requester_hint`, `requester_draft` | none | 1,400 |
 | `acn-judge` | lib + example | Judge harness for `judged` conditions: a panel of pinned judges on OpenAI-compatible endpoints (Ollama, OpenAI, OpenRouter, ...), repeats and medians, artifact delimiting, injection scan plus model vote, `K_ATTEST_JUDGED` content that V-17 counts; pinned by `harness_hash` | `Panel::{load, fingerprints, evaluate}`, `PanelConfig`, `Llm`, `HttpLlm`, `harness_hash`; example `try_panel` | HTTP to the judges | 600 |
@@ -422,11 +422,11 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 
 | Capability | Implementation | Verified by | Status |
 |---|---|---|---|
-| Fifteen scenarios, scripted cast | `acn_sim::SCENARIOS`, `react_with`, `template` | `playthrough` (outcomes and lanes) | ✅ |
+| Sixteen scenarios, scripted cast | `acn_sim::SCENARIOS`, `react_with`, `template` | `playthrough` (outcomes and lanes) | ✅ |
 | MVP: pay only if two judges score ≥ θ | `/judged` (verifier trigger, Verity runs the judges and `RELEASE`s), `/injected` (`injection_detected`, no release), `/judged-auto` (Muse runs, requester auto-satisfies); scripted judges by default and in presenter mode, real ones with `nmesh-acn-sim --judges judges.toml` (`acn-judge`) | `playthrough`, `live`, `presenter.mjs`; real judges: `acn-judge/tests/end_to_end.rs`, `live -- --ignored` with `NMESH_JUDGES` | ✅ |
-| Live cast on relays | `nmesh-acn-sim` | `live` (all fifteen via the app layer; balances 39 / 201 sat, 60 locked) | ✅ |
+| Live cast on relays | `nmesh-acn-sim` | `live` (all sixteen via the app layer; balances 39 / 201 sat, 60 locked) | ✅ |
 | Director: next step, autopilot, clock | `requester_hint` / `run_hint`; `Director.svelte`; `set_clock_offset` | `live`, `scripts/presenter.mjs` | ✅ |
-| Presenter mode in the browser | `acn-wasm` + `presenter/*` | `scripts/presenter.mjs` (all fifteen, no page errors) | ✅ |
+| Presenter mode in the browser | `acn-wasm` + `presenter/*` | `scripts/presenter.mjs` (all sixteen, no page errors) | ✅ |
 | Reset demo | `App::reset_demo` (epoch cutoff + cleared ids, persisted); presenter `AcnWorld::reset`; the cast ignores requests older than its start | `live` (incl. restart), `presenter.mjs`, `board.mjs` | ✅ |
 | Money in the demo | live: real ecash at the cast's test mint (`127.0.0.1:3338`); presenter: `SimMint`. Balances in the Director and wallet panel | `live`, `presenter.mjs` (29 / 71 sat, refund; then 10 / 130 sat after the judged and contingent runs) | ✅ |
 | Screencast | `scripts/screencast.mjs` → `docs/demo/acn-demo.mp4` | manual review | ✅ |

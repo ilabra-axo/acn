@@ -20,7 +20,7 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
 #[tokio::test]
 async fn every_scenario_plays_live() -> anyhow::Result<()> {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
-    // Fifteen scenarios in well under a minute: lift the default 60 notes/minute per connection.
+    // Sixteen scenarios in well under a minute: lift the default 60 notes/minute per connection.
     let relay = LocalRelay::new(RelayBuilder::default().rate_limit(RateLimit {
         max_reqs: 500,
         notes_per_minute: 6_000,

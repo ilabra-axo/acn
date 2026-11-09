@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod cos;
+pub mod held_out;
 pub mod judged;
 pub mod settlement;
 

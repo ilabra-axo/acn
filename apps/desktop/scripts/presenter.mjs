@@ -20,14 +20,14 @@ const EXPECT = {
   quick: "Satisfied", paid: "Satisfied", negotiate: "Satisfied", rework: "Satisfied", verified: "Satisfied",
   dispute: "Satisfied", governed: "Satisfied", silent: "Withdrawn", rogue: "Declined",
   judged: "Settled", injected: "Rejected", "judged-auto": "Satisfied", contingent: "Settled",
-  drafted: "Satisfied", disqualified: "Rejected",
+  drafted: "Satisfied", disqualified: "Rejected", "held-out": "Satisfied",
 };
 const TITLES = {
   quick: "Quick tool call", paid: "Paid call (Cashu)", negotiate: "Negotiation", rework: "Rework loop",
   verified: "Verified work", dispute: "Dispute & ruling", governed: "Governance gate", silent: "Silent performer", rogue: "Rogue agent",
   judged: "Judged, verifier releases", injected: "Judge prompt injection", "judged-auto": "Judged, you settle",
   contingent: "Contingent (encrypted until paid)",
-  drafted: "Drafted conditions", disqualified: "Disqualified",
+  drafted: "Drafted conditions", disqualified: "Disqualified", "held-out": "Held-out tests",
 };
 
 await page.goto(url);
@@ -154,6 +154,12 @@ await run("disqualified", {
   ],
 });
 await page.locator(".commitment").last().locator("text=disqualified").first().waitFor({ timeout: 10000 });
+// CR-003 Phase B: held-out cases drawn from both seeds, proved against the pool root.
+await run("held-out", { manual: [{ waitFor: ".commitment .terms-card >> text=Held-out: 5 of 20", shot: "p17-held-out-terms" }] });
+await page.locator(".commitment").last().getByRole("button", { name: /signed events/ }).click();
+await page.locator(".commitment").last().locator("text=held-out cases").first().waitFor({ timeout: 10000 });
+await shot("p18-held-out-attested");
+console.log("ok   held-out: sample attested with proofs");
 
 await browser.close();
 if (errors.length) {

@@ -181,6 +181,9 @@ pub const SCENARIOS: &[ScenarioInfo] = &[
     ScenarioInfo { id: "disqualified", title: "Disqualified", actor: Actor::Performer, profile: "N",
         summary: "Same terms, but Atlas loosens an existing test. Every condition passes, yet Verity attests d2 as hit: auto-satisfy is blocked and your reject fails the commitment for breach, with no rework.",
         shows: &["disqualified (CR-003)", "breach, not a low score", "auto-satisfy blocked", "no rework"] },
+    ScenarioInfo { id: "held-out", title: "Held-out tests", actor: Actor::Performer, profile: "N",
+        summary: "Verity keeps 20 integration tests Atlas never sees. Your seed (sent privately to Verity) and Atlas's seed (committed when it promises, revealed with the work) together pick 5 of them; Verity proves each against the pool's root.",
+        shows: &["held-out instances (CR-003)", "two-party seed", "Merkle proofs", "criteria public, cases not"] },
     ScenarioInfo { id: "rogue", title: "Rogue agent", actor: Actor::Rogue, profile: "N",
         summary: "An unbound agent sends PROMISE and DECLINE at once. The validator resolves it and flags both.",
         shows: &["unbound", "V-13 equivocation", "sibling resolution"] },
@@ -300,6 +303,23 @@ pub fn template(id: &str, cast: &Cast) -> Option<Template> {
             t["rework_limit"] = json!(1);
             ("N", 900, 3600, t, false)
         }
+        "held-out" => {
+            let mut t = base(json!([{
+                "id": "c1", "class": "mechanical",
+                "description": "5 of Verity's 20 held-out integration tests pass, drawn after delivery from both seeds",
+                "instances": {
+                    "pool_description": HELD_OUT_DESCRIPTION,
+                    "pool_rule": HELD_OUT_RULE,
+                    "pool_root": held_out_root(),
+                    "pool_size": HELD_OUT.len(), "sample_size": HELD_OUT_SAMPLE,
+                    // Filled in by the requester (instantiate) with sha256 of its own seed.
+                    "requester_seed_hash": "0".repeat(64)
+                }
+            }]));
+            t["deliverable"]["description"] = json!("Retry with backoff in the relay client");
+            t["verifiers"] = json!([{"pubkey": cast.verifier, "classes": ["mechanical"]}]);
+            ("N", 900, 3600, t, false)
+        }
         "rogue" => ("N", 600, 3600, base(json!([result])), false),
         _ => return None,
     };
@@ -310,7 +330,93 @@ pub fn template(id: &str, cast: &Cast) -> Option<Template> {
         terms,
         hashlock,
         locktime_margin_secs: 24 * 60 * 60,
+        requester_seed_to: (id == "held-out").then(|| cast.verifier.clone()),
     })
+}
+
+// ---------- held-out instances (CR-003 §2.3) ----------
+
+/// Verity's held-out pool: integration tests for relay clients, never shown to performers. Only
+/// the description, the rule and the Merkle root are public.
+pub const HELD_OUT: &[&str] = &[
+    "relay drops the socket mid-publish; client retries and the event lands once",
+    "relay answers OK false rate-limited; client backs off at least 1 s",
+    "three consecutive timeouts; delays grow 1 s, 2 s, 4 s (± jitter)",
+    "relay returns OK true on retry; no duplicate publish",
+    "backoff caps at 30 s however many failures",
+    "caller cancels during backoff; no further attempts",
+    "two relays, one down; publish succeeds on the other without waiting",
+    "DNS failure is retried like a connection failure",
+    "TLS handshake failure is not retried more than 5 times",
+    "relay sends NOTICE instead of OK; treated as a failure",
+    "jitter keeps 100 clients from retrying in lockstep",
+    "a successful publish resets the backoff",
+    "retry preserves the original event id and signature",
+    "auth-required relay; client authenticates once, then retries",
+    "relay closes with 'blocked'; client stops retrying",
+    "publish queue survives a reconnect in order",
+    "clock jump forward doesn't skip the backoff",
+    "max attempts reached; error surfaces to the caller",
+    "slow relay (5 s OK) is not treated as a timeout at 10 s budget",
+    "reconnect storm: 50 drops in a minute stays under the rate limit",
+];
+pub const HELD_OUT_SAMPLE: u32 = 5;
+const HELD_OUT_DESCRIPTION: &str =
+    "Integration tests of retry, backoff and reconnect behaviour against a flaky relay";
+const HELD_OUT_RULE: &str =
+    "Curated by Verity from real relay-client failures; never published; one test per failure mode";
+
+fn held_out_bytes() -> Vec<Vec<u8>> {
+    HELD_OUT
+        .iter()
+        .map(|s| acn_core::instances::item_bytes(&json!(s)))
+        .collect()
+}
+
+fn held_out_root() -> String {
+    hex::encode(acn_core::instances::root(&held_out_bytes()))
+}
+
+/// The performer's seed for a commitment, derived from the per-commitment secret its host keeps
+/// (`keys`; for contingent commitments the same secret is also `k`, so derive, don't reuse).
+fn performer_seed(secret: &str) -> Option<[u8; 32]> {
+    let k = hex::decode(secret).ok()?;
+    Some(
+        sha2::Sha256::new()
+            .chain_update(b"acn-sim performer seed")
+            .chain_update(&k)
+            .finalize()
+            .into(),
+    )
+}
+
+/// Verity's attestation on the held-out condition: run the sample both seeds select, with a
+/// proof for each case against the pool root.
+fn held_out_attestation(
+    commitment: &str,
+    requester_seed: &str,
+    performer_seed: &str,
+) -> Option<(Value, Vec<u32>)> {
+    use acn_core::instances as ins;
+    let (rs, ps, cid) = (
+        ins::from_hex(requester_seed)?,
+        ins::from_hex(performer_seed)?,
+        ins::from_hex(commitment)?,
+    );
+    let sample = ins::sample(&rs, &ps, &cid, HELD_OUT.len() as u32, HELD_OUT_SAMPLE);
+    let b = held_out_bytes();
+    let items: Vec<Value> = sample
+        .iter()
+        .map(|&i| {
+            let proof: Vec<String> = ins::proof(&b, i as usize).iter().map(hex::encode).collect();
+            json!({"index": i, "item": HELD_OUT[i as usize], "proof": proof})
+        })
+        .collect();
+    Some((
+        json!({"result": "pass", "method": format!("held-out suite: {} of {} cases, all passed", sample.len(), HELD_OUT.len()),
+               "requester_seed": requester_seed, "instances": items}),
+        sample,
+    ))
 }
 
 // ---------- judged conditions (CR-001): scripted judges ----------
@@ -583,20 +689,30 @@ fn mv(actor: Actor, delay_ms: u64, narration: impl Into<String>, draft: Draft, c
 /// What the simulated cast does next. `escrow` is the preimage the arbiter holds (if any).
 /// Payments are not checked; see [`react_paid`].
 pub fn react(cast: &Cast, events: &[Event], escrow: &BTreeMap<String, String>) -> Vec<Move> {
-    react_inner(cast, events, escrow, None, &BTreeMap::new())
+    react_inner(
+        cast,
+        events,
+        escrow,
+        None,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
 }
 
 /// Everything a host knows: the escrowed secrets the cast holds (`escrow`: commitment → the
-/// preimage or key a holder decrypted), the payment verdicts (if checked), and the contingent
-/// performer's own keys (`keys`: commitment → `k`, generated by the host).
+/// preimage or key a holder decrypted), the payment verdicts (if checked), the performer's own
+/// per-commitment secret (`keys`: commitment → 32-byte hex, generated by the host; it is `k`
+/// under contingent, and its performer seed is derived from it), and the requester seeds the
+/// runner received (`seeds`: commitment → the requester's seed for held-out instances).
 pub fn react_with(
     cast: &Cast,
     events: &[Event],
     escrow: &BTreeMap<String, String>,
     payments: Option<&BTreeMap<String, PaymentCheck>>,
     keys: &BTreeMap<String, String>,
+    seeds: &BTreeMap<String, String>,
 ) -> Vec<Move> {
-    react_inner(cast, events, escrow, payments, keys)
+    react_inner(cast, events, escrow, payments, keys, seeds)
 }
 
 /// Like [`react`], but the performer only works on a priced commitment once its token is
@@ -608,7 +724,14 @@ pub fn react_paid(
     escrow: &BTreeMap<String, String>,
     payments: &BTreeMap<String, PaymentCheck>,
 ) -> Vec<Move> {
-    react_inner(cast, events, escrow, Some(payments), &BTreeMap::new())
+    react_inner(
+        cast,
+        events,
+        escrow,
+        Some(payments),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
 }
 
 fn react_inner(
@@ -617,6 +740,7 @@ fn react_inner(
     escrow: &BTreeMap<String, String>,
     payments: Option<&BTreeMap<String, PaymentCheck>>,
     keys: &BTreeMap<String, String>,
+    seeds: &BTreeMap<String, String>,
 ) -> Vec<Move> {
     let out = fold(events, &BTreeMap::new());
     let mut moves = Vec::new();
@@ -678,6 +802,15 @@ fn react_inner(
                 Some(PaymentCheck::Ok) => {}
             }
         }
+        if ctx.scenario == "held-out" {
+            moves.extend(react_held_out(
+                cast,
+                &ctx,
+                keys.get(&c.id),
+                seeds.get(&c.id),
+            ));
+            continue;
+        }
         if let Some(m) = react_settlement(cast, &ctx, escrow.get(&c.id), keys.get(&c.id)) {
             moves.extend(m);
             continue;
@@ -691,6 +824,63 @@ fn react_inner(
         ));
     }
     moves
+}
+
+/// The held-out scenario (CR-003 §2.3): Atlas commits its seed when it promises and reveals it
+/// with the work; Verity, holding the requester's seed, runs the sample both seeds select.
+fn react_held_out(
+    cast: &Cast,
+    ctx: &Ctx,
+    key: Option<&String>,
+    seed: Option<&String>,
+) -> Vec<Move> {
+    let (c, st, p) = (ctx.c.id.as_str(), ctx.st, ctx.c.performer.as_str());
+    let head = st.head.as_str();
+    let parties = &ctx.parties[..];
+    let fresh = |kind: u16| !ctx.exists(kind, p, |e| Ctx::prev_is(e, head));
+    let Some(ps) = key.and_then(|k| performer_seed(k)) else {
+        return vec![];
+    };
+    let mut out = vec![];
+    match st.phase {
+        Phase::Requested if fresh(K_PROMISE) => {
+            let d = Draft::promise(c, head, parties, &st.terms, 0.9, false)
+                .field("performer_seed_hash", json!(acn_core::jcs::sha256_hex(&ps)));
+            out.push(mv(Actor::Performer, 1000, "Atlas promises and commits to its own seed by hash. It can't see which tests will run: that needs your seed too, which only Verity holds.", d, ctx));
+        }
+        Phase::Promised if fresh(K_REPORT) => {
+            let brief = ctx.brief();
+            let body = format!("Retry with exponential backoff and jitter for {brief}. Handles drops, rate limits, timeouts and cancellation.");
+            let d = Draft::report(
+                c,
+                head,
+                parties,
+                Some(json!({"title": "Relay client: retry with backoff", "body": body})),
+                Some("nmesh.card/v1"),
+                &[],
+            )
+            .field("performer_seed", json!(hex::encode(ps)));
+            out.push(mv(Actor::Performer, 1400, "Atlas reports the change and reveals its seed. Only now can the sample be computed.", d, ctx));
+        }
+        Phase::Reported => {
+            let report = st.report.as_deref().unwrap_or_default();
+            let done = ctx.exists(K_ATTEST_MECH, &cast.verifier, |e| {
+                Ctx::on_report(e, report, "c1")
+            });
+            let revealed = st.performer_seed.as_deref();
+            if let (false, Some(rs), Some(ps)) = (done, seed, revealed) {
+                if let Some((content, sample)) = held_out_attestation(c, rs, ps) {
+                    let mut m = mv(Actor::Verifier, 1600,
+                        format!("Verity combines your seed, Atlas's seed and the commitment id: cases {sample:?} of its 20. It runs them, attests the pass, and reveals your seed and each case with a proof against the pool root, so anyone can check the pick wasn't chosen."),
+                        Draft::attest(K_ATTEST_MECH, c, report, "c1", content), ctx);
+                    m.key = format!("Verifier:held-out:{report}");
+                    out.push(m);
+                }
+            }
+        }
+        _ => {}
+    }
+    out
 }
 
 /// The judged and contingent scenarios (CR-001, CR-002): Atlas, Verity (settlement verifier and
@@ -1374,6 +1564,16 @@ pub fn requester_hint(events: &[Event], commitment: &str, now: u64) -> Option<Hi
                 HintAction::Wait,
                 "Waiting…",
                 "Verity checks the length; Muse, a third-party runner, runs the judges.",
+            );
+        }
+        ("held-out", Phase::Reported) if pass("c1") => {
+            return hint(HintAction::Satisfy, "Satisfy: held-out tests passed", "Verity ran the 5 cases both seeds picked and proved each against the pool root. Satisfy closes the commitment.");
+        }
+        ("held-out", Phase::Reported) => {
+            return hint(
+                HintAction::Wait,
+                "Waiting…",
+                "Verity derives the sample from both seeds and runs those tests.",
             );
         }
         ("drafted" | "disqualified", Phase::Reported) => {
