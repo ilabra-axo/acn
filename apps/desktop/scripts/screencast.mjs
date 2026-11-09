@@ -124,7 +124,7 @@ await sleep(1500);
 await click(page.locator(".wallet .x"), 500);
 
 // 1. The MVP: judged, verifier releases
-await card("1 · Pay only if the judges agree", "A 500-word summary, 60 sat. Two judges from different model families must each score it at least 7/10 against a sealed rubric.", "CR-001 judged · CR-002 verifier trigger", 4200);
+await card("1 · Pay only if the judges agree", "A 500-word summary, 60 sat. Two judges from different model families must each score it at least 7/10 against a public rubric.", "CR-001 judged · CR-002 verifier trigger", 4200);
 await scenario("Judged, verifier releases");
 await lastCard().locator(".assurance, .pill", { hasText: "opinion" }).first().waitFor({ timeout: 20000 }).catch(() => {});
 await caption("Honest labels", "Before anything is signed the card says <b>assurance: opinion</b> and names the judges and the threshold. A judged pass certifies a score, not the work.", 5200);

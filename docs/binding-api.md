@@ -131,7 +131,7 @@ before closure.
 
 The demo runs this example in three variants (see [DEMO.md](DEMO.md#the-mvp-in-one-minute)), at
 demo prices and with scripted judges (fixed run scores, no LLM calls; the attestations and their
-validation are real):
+validation are real) unless `nmesh-acn-sim --judges` gives the cast a real `acn-judge` panel:
 
 | Demo | Runner | Trigger | Who closes | Differs from the example above |
 |---|---|---|---|---|
@@ -139,7 +139,8 @@ validation are real):
 | `/judged` | Verity, the settlement verifier | verifier (CR-002) | Verity's `RELEASE` after `ESCROW_ACK`; state Settled | the preimage is escrowed with the runner, so payment needs no requester act |
 | `/injected` | Verity | verifier | the requester's `REJECT` on `c2` | the second run above |
 
-Code: `acn_sim::{judged_condition, judged_attestation}` build the terms and attestations;
+Code: `judged_condition` and `judged_attestation` in `crates/acn-sim/src/lib.rs` build the terms
+and the scripted attestations (`acn_judge::Panel::evaluate` the real ones);
 `acn_core` validates them (V-17, V-20); `crates/acn-sim/tests/playthrough.rs` and
 `crates/nmesh-acn-sim/tests/live.rs` play them to the end.
 

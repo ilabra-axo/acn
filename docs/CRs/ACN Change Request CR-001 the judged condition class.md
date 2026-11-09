@@ -2,6 +2,24 @@
 
 Nov 7, 2026 · @ivan Labra
 
+> **Status (Nov 9, 2026): applied, with changes.** This is the change request as written; the
+> normative text is [Core.md](../Core.md) (v0.5), and where they differ, Core.md wins. Record:
+> Core.md Appendix B, rows "CR-001" and "CR-003".
+>
+> - **Dropped:** the `audit` and `holdback` fields and the holdback settlement of §2.4, with
+>   vectors J-9 and J-10 and the holdback steps of the §3.1 demo. Commitments are atomic: an audit
+>   is an ordinary condition of satisfaction of a stronger class (vector J-13).
+> - **Reversed by CR-003:** `rubric_disclosure` and `commit_reveal`. Rubrics are public
+>   (`rubric_ref` in the terms, INV-14); terms declaring `commit_reveal` are rejected
+>   (`hidden_criteria`). Vector J-5 now tests that; the old J-5 check is J-18.
+> - **Added later:** J-11…J-18 (assurance, unknown fields, audit condition, overruled judgement).
+> - **Versions:** the CR's `acn-terms/0.3` is superseded; the only terms version is
+>   `acn-terms/0.5`.
+> - **Open decisions:** OD-1 → D-14 (open), OD-2 → D-15 (closed), OD-3 → D-16 (closed by
+>   CR-003), OD-4 → D-17, OD-5 → D-18, OD-6 → D-19 (open; see also D-36).
+> - **Reference:** `acn-core` (V-17), judge harness `crates/acn-judge`, demo `/judged`,
+>   `/injected`, `/judged-auto`.
+
 CR-001 adds LLM-as-judge acceptance to ACN as a first-class, honestly labelled condition class, so a requester can write "accept if judge J with rubric R scores at least θ" and settle automatically. It also adds the safeguards that make the obvious gaming attacks visible and costly. This document holds the agent prompt and the change specification it applies.
 
 ## 1. Agent prompt

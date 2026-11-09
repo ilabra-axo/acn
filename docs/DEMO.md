@@ -137,8 +137,8 @@ the speed. The cast keeps its keys in `.nmesh/sim/`, so npubs stay the same acro
 **Wallet.** The cast hosts a Cashu test mint (CDK, fake Lightning) on `http://127.0.0.1:3338`,
 and the desktop app's wallet points there by default (`NMESH_MINT`; set it to `none` to disable).
 Click the **₿** chip in the sidebar, then **Top up 100 test sats** before running *Paid call*,
-*Dispute* or the judged scenarios (all sixteen scenarios cost 261 sat; 60 of it stays locked
-after the injection until its locktime). Without enough funds the request is refused before anything is signed. To use a
+*Dispute*, *Contingent* or the judged scenarios (all sixteen scenarios cost 261 sat, so top up
+three times; 60 of it stays locked after the injection until its locktime). Without enough funds the request is refused before anything is signed. To use a
 separately running mint: `./target/debug/nmesh-mint` and `nmesh-acn-sim --mint http://127.0.0.1:3338`.
 Atlas DMs you when it redeems; send it `wallet` to see its balance.
 
@@ -175,7 +175,7 @@ and in any role you play (requester, performer, verifier, arbiter, gate).
 | Requested | `Requested` |
 | Negotiating | `Countered`, or a counter pending while promised |
 | In progress | `Promised`, `Reworking`; overdue / lapsed shown in red |
-| Review | `Reported`; a report waiting for a governance sign-off stays in progress |
+| Review | `Reported`, and contingent `Offered` / `Funded`; a report waiting for a governance sign-off stays in progress |
 | Dispute | `Rejected` while still disputable, `Disputed` |
 | Closed | terminal; newest first, **Show older** pages back |
 
@@ -198,7 +198,7 @@ the silent promise turns red as overdue, without any act being sent.
 | Scenario | What you do | What to point at |
 |---|---|---|
 | **Quick tool call** (T0) | Accept | REQUEST → REPORT → SATISFY; *operator-bound ✓*; a REPORT is an assertion, closure is yours (INV-5) |
-| **Paid call** (T1, 21 sat) | Satisfy & pay | 21 sat leave your balance when you request (HTLC lock); Atlas checks the token with the mint before working (§8.2); SATISFY reveals the preimage and Atlas redeems: *your token: redeemed by Atlas*. **Closing is paying** (INV-6) |
+| **Paid call (Cashu)** (T1, 21 sat) | Satisfy & pay | 21 sat leave your balance when you request (HTLC lock); Atlas checks the token with the mint before working (§8.2); SATISFY reveals the preimage and Atlas redeems: *your token: redeemed by Atlas*. **Closing is paying** (INV-6) |
 | **Paid call, rejected** (presenter) | Reject… on the card, then fast-forward ≈ 26 h, then ↩ Refund | No preimage, no payment: *refundable*; the refund button stays disabled until the locktime; afterwards the 21 sat come back |
 | **Negotiation** (N) | Accept counter-offer | Counter diff (deadline, revisions) bound to a new terms hash (INV-4); PROGRESS is an annotation and never moves the head |
 | **Rework loop** | Reject "sections", then Accept | REJECT must name a condition; Reworking; report **v2**; rework limit |
@@ -212,7 +212,7 @@ the silent promise turns red as overdue, without any act being sent.
 | **Drafted conditions** | Accept counter-offer, then Satisfy (auto) | The `REQUEST`'s `c2` is `open` (an underspecified request is fine; a `PROMISE` against it would be `unclosed_condition`); the counter's terms card and diff; v2 drafted by Atlas binds after your `ACCEPT` |
 | **Disqualified** | Accept counter-offer, then Reject (`d2`) | `c1` and `c2` pass, `d2` hit; Satisfy not offered; Rejected with `rework_count` 0; `disqualified` on the REPORT |
 | **Held-out tests** | Satisfy | The terms card shows the pool's description, rule and "5 of 20", never the cases; `PROMISE` carries `performer_seed_hash`, `REPORT` reveals `performer_seed`; Verity's attestation lists the sampled cases with proofs (V-27) |
-| **Contingent** (30 sat) | Fund | *🔒 Encrypted delivery* until `CLAIM`; Verity's attestation names `ciphertext`, `hashlock`, `plaintext` (V-21); Review lane passes Verity → you → Atlas; the card decrypts after the claim |
+| **Contingent (encrypted until paid)** (30 sat) | Fund | *🔒 Encrypted delivery* until `CLAIM`; Verity's attestation names `ciphertext`, `hashlock`, `plaintext` (V-21); Review lane passes Verity → you → Atlas; the card decrypts after the claim |
 | **Rogue agent** | — | *unaccountable ⚠* (no binding); PROMISE and DECLINE at once → **equivocation** flagged on both; the closing act wins deterministically, the loser is `stale` and kept as evidence |
 
 ## What is simulated
@@ -230,7 +230,7 @@ the silent promise turns red as overdue, without any act being sent.
   fingerprints and scores (8, 7, 8 and 7, 9, 8), and injection detection is a substring match on
   "Note to the evaluator". With `--judges`, `acn-judge` runs the pinned models, scans for
   injection and lets the models vote on it. The validator checks both kinds the same way (V-17).
-- **Atlas's summary is still canned** (a fixed paragraph about the protocol, whatever the brief),
-  so real judges grade the same text every time.
+- **Atlas's summary is still canned** (a fixed paragraph about the protocol; only its first
+  sentence names your brief), so real judges grade essentially the same text every time.
 - **Contingent encryption is real:** the deliverable is sealed with NIP-44 v2 under `k`
   (`acn-core::sealed`) and only decrypts once `CLAIM` puts `k` on the record.

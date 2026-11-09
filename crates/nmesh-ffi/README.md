@@ -1,6 +1,6 @@
 # nmesh-ffi (placeholder)
 
-UniFFI bindings over `nmesh-core` for **Kotlin (Android / ARCore)** and Swift.
+UniFFI bindings over `nmesh-app` / `nmesh-core` for **Kotlin (Android / ARCore)** and Swift.
 
 Not a workspace member yet, so it doesn't slow down builds. It will be added in roadmap Phase 4
 (see `docs/ROADMAP.md`). Planned shape:

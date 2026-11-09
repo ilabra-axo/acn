@@ -2,6 +2,29 @@
 
 Nov 8, 2026 · @ivan Labra
 
+> **Status (Nov 9, 2026): Phases A and B applied, with changes; Phases C (templates) and D
+> (authoring aids) not started.** This is the change request as written; the normative text is
+> [Core.md](../Core.md) (v0.5), and where they differ, Core.md wins. Record: Core.md Appendix B,
+> rows "CR-003".
+>
+> - **Corrected:** this CR assumed CR-001's holdback and audit windows, which were dropped
+>   (commitments are atomic). So disqualifiers have no `window`: they are checked before
+>   settlement, and `until_audit_end` and "a hit during the audit window" (§2.2) don't exist.
+>   Vector C-8 is replaced (an audit window is `malformed`); §2.7's "split, holdback" are not on
+>   the card. The §4 template examples still carry `audit`, `holdback` and `window` and must be
+>   corrected in Phase C.
+> - **Changed by decision:** terms versions, `prev` and `drafted_by` are derived from the signed
+>   chain, not terms fields. A disqualifier hit makes `REJECT` legal under every trigger, and
+>   while it stands any `REJECT` ends Rejected without rework; the requester's silence after a
+>   hit is no lapse; the validator still applies a `SATISFY` or `FUND` signed after a hit (D-38).
+>   `human`, `grounding` and `interpretive` disqualifiers are not allowed yet (D-29, D-30).
+>   Held-out instances need `rework_limit` 0 (D-39); the encodings the CR left open are fixed
+>   in Core.md §7 (RFC 6962 pool, sample ranking). Only `acn-terms/0.5` is accepted.
+> - **Open decisions:** OD-1 → D-33, OD-2 → D-34, OD-3 → D-32, OD-4 → D-35, OD-5 → D-29,
+>   OD-6 → D-36, OD-7 → D-37 (all open); added D-30, D-31 (closed), D-38 (closed), D-39.
+> - **Reference:** `acn-core` (V-24…V-27, `instances`), `acn-view` (terms card), demo
+>   `/drafted`, `/disqualified`, `/held-out`. Not yet: judged held-out instances in `acn-judge`.
+
 CR-003 makes conditions of satisfaction (CoS) authorable inside the negotiation cycle. Either party may draft them, the performer typically in its counter-offer, and no commitment can form until every condition is closed and readable by the performer. It adds explicit disqualifiers, held-out evaluation instances with a two-party seed, and shareable terms templates. It assumes CR-001 and CR-002 are applied.
 
 CR-003 reverses one CR-001 choice: `commit_reveal` rubrics are removed. Grading against criteria the performer cannot read before promising is not a commitment, so anti-gaming moves from hiding the criteria to hiding which instances get tested. The rule is public criteria, unpredictable instances, explicit disqualifiers.

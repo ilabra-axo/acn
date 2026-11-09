@@ -271,6 +271,8 @@ struct Run<'a> {
     profile: Profile,
     /// hash -> terms (inline from REQUEST/COUNTER, or supplied documents).
     terms: BTreeMap<String, Terms>,
+    /// Supplied terms documents that hash correctly but don't parse.
+    bad_docs: BTreeMap<String, (Code, String)>,
     endorsements: BTreeMap<&'a str, Vec<(&'a str, u64)>>,
 }
 
@@ -324,15 +326,30 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 }
             }
         }
+        // Supplied documents: one that hashes to its key but doesn't parse is reported on the
+        // acts that use it (like inline terms), not left pending.
+        let mut bad_docs: BTreeMap<String, (Code, String)> = BTreeMap::new();
         for (h, doc) in self.documents {
             if terms.contains_key(h) {
                 continue;
             }
             if jcs::hash(doc).ok().as_deref() == Some(h.as_str()) {
-                if let Ok(t) = Terms::parse(doc) {
-                    terms.insert(h.clone(), t);
+                match Terms::check(doc) {
+                    Ok(t) => {
+                        terms.insert(h.clone(), t);
+                    }
+                    Err((code, e)) => {
+                        bad_docs.insert(h.clone(), (code, format!("terms {h}: {e}")));
+                    }
                 }
             }
+        }
+        if let Some((code, e)) = bad_docs.get(&root_terms) {
+            acc.push(req.id(), *code, e.clone());
+            for p in self.members {
+                acc.push(p.id(), Code::PendingRef, "commitment root is invalid");
+            }
+            return None;
         }
 
         if inline_bad.contains(req.id()) {
@@ -356,6 +373,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
             performer,
             profile,
             terms,
+            bad_docs,
             endorsements,
         };
 
@@ -414,7 +432,8 @@ impl<'a, 'e> Ctx<'a, 'e> {
         let price = root.price.amount;
         let mint = root.payment.as_ref().map(|p| p.mint.clone());
 
-        // V-17.1: terms that list the performer as a runner of a judged condition.
+        // V-17.1: terms that list the performer as a runner of a judged condition or
+        // disqualifier (V-25: never the performer).
         for p in std::iter::once(req).chain(
             self.members
                 .iter()
@@ -424,9 +443,11 @@ impl<'a, 'e> Ctx<'a, 'e> {
             let Some(t) = p.terms.as_ref().and_then(|h| run.terms.get(h)) else {
                 continue;
             };
+            let disq: Vec<_> = t.disqualifiers.iter().map(Disqualifier::as_condition).collect();
             for c in t
                 .conditions
                 .iter()
+                .chain(&disq)
                 .filter(|c| c.class == ConditionClass::Judged)
             {
                 if c.judged().is_ok_and(|j| j.runners.contains(&run.performer)) {
@@ -627,7 +648,12 @@ impl<'a, 'e> Ctx<'a, 'e> {
                     self.attestation(acc, &run, &snapshots, p, &mut evidence)
                 }
                 K_ESCROW_ACK => {
-                    let holder = run.terms.values().any(|t| {
+                    // Only the holders named in this commitment's own terms versions.
+                    let versions: BTreeSet<&str> = std::iter::once(req)
+                        .chain(self.members.iter().copied().filter(|m| m.kind() == K_COUNTER))
+                        .filter_map(|m| m.terms.as_deref())
+                        .collect();
+                    let holder = versions.iter().filter_map(|h| run.terms.get(*h)).any(|t| {
                         t.settlement_verifier.as_deref() == Some(p.ev.pubkey.as_str())
                             || t.arbiter.as_deref() == Some(p.ev.pubkey.as_str())
                     });
@@ -1321,6 +1347,9 @@ impl<'a, 'e> Ctx<'a, 'e> {
                     return illegal();
                 }
                 let h = k.terms.clone().unwrap_or_default();
+                if let Some((code, e)) = run.bad_docs.get(&h) {
+                    return Err((*code, e.clone()));
+                }
                 if !run.terms.contains_key(&h) {
                     return Err((
                         Code::PendingTerms,

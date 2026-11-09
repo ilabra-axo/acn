@@ -42,16 +42,19 @@ Environment variables:
 | `NMESH_RELAY` | `ws://127.0.0.1:7777` | comma-separated relay URLs |
 | `NMESH_DATA` | OS app-data dir | key (`me.nsec`) and contacts |
 | `NMESH_NAME` | none | display name to publish |
+| `NMESH_MINT` | `http://127.0.0.1:3338` | Cashu mint of the built-in wallet (the test mint `nmesh-acn-sim` hosts); empty or `none` disables the wallet |
 
 To try two humans on one machine, run a second instance with a different `NMESH_DATA`.
 
 ## Browser preview (no Tauri, no relay)
 
 ```sh
-pnpm dev        # http://localhost:5173 — uses src/lib/mock.ts
+pnpm dev        # http://localhost:5173 — uses src/lib/presenter/backend.ts
 ```
 
-The mock backend imitates `nmesh-app` and the echo agent, so UI work doesn't need the full stack.
+The presenter backend stands in for `nmesh-app`'s chat (an Echo agent and a human contact), so UI
+work doesn't need the full stack, and runs ACN for real (`acn-core` in WASM; see
+[docs/DEMO.md](../../docs/DEMO.md)). After changing the Rust ACN crates, rebuild it with `pnpm wasm`.
 `scripts/screenshots.mjs` drives it with Playwright and regenerates `docs/screenshots/`.
 
 ## Structure
@@ -60,7 +63,8 @@ The mock backend imitates `nmesh-app` and the echo agent, so UI work doesn't nee
 src/
   App.svelte                 layout
   lib/store.svelte.ts        reactive state (Svelte 5 runes); talks to a Backend
-  lib/api.ts                 Backend interface: Tauri (invoke/listen) or mock
+  lib/api.ts                 Backend interface: Tauri (invoke/listen) or presenter
+  lib/presenter/             in-browser backend: stand-in chat, ACN via WASM (acn-wasm)
   lib/types.ts               mirrors crates/nmesh-app/src/view.rs
   lib/components/            Sidebar, Conversation, Composer (slash autocomplete), AgentConsent, ...
   lib/renderers/             Tier 0 built-ins: Card, Table, Form, Location, Generic

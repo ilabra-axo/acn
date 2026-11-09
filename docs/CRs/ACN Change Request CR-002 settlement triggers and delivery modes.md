@@ -2,6 +2,28 @@
 
 Nov 8, 2026 · @ivan Labra
 
+> **Status (Nov 9, 2026): applied (Phases A, B, C), with changes.** This is the change request as
+> written; the normative text is [Core.md](../Core.md) (v0.5), and where they differ, Core.md
+> wins. Record: Core.md Appendix B, rows "CR-002".
+>
+> - **Dropped:** the `delivery` field (`staged`, `encrypted_until_paid`) and staged delivery.
+>   Commitments are atomic; a staged job is a sequence of commitments, and the exposure of the
+>   deliverable follows from the trigger (encrypted until paid only under `contingent`). Vectors
+>   S-2 (reused for another invalid combination) and S-3 (retired).
+> - **Deferred until a second value exists:** `fulfillment_proof` (`verifier_attested` is
+>   implied) and `rail` (Cashu is the only rail).
+> - **Renamed:** `VERIFIER_ACK` is the shared `K_ESCROW_ACK`, code `missing_escrow_ack`.
+>   `rail_incapable` is a requester-binding check, not a validator code.
+> - **Tightened:** the verifier trigger excludes `human`/`interpretive` conditions and arbiters;
+>   `RELEASE` needs every condition passing (and, since CR-003, no disqualifier hit).
+> - **Versions:** the CR's `acn-terms/0.4` is superseded; the only terms version is
+>   `acn-terms/0.5`.
+> - **Open decisions:** OD-1 → D-20, OD-2 → D-21, OD-3 → D-22, OD-5 → D-24, OD-6 → D-25 (open);
+>   OD-4 → D-23 (closed: atomic commitments), OD-7 → D-26 (closed by the
+>   [spike](../acn/spikes/cashu-preimage-visibility.md)).
+> - **Reference:** `acn-core` (V-18…V-23), `acn-wallet`, `nmesh-wallet`, demo `/judged`,
+>   `/contingent`.
+
 CR-002 separates what a commitment checks from who can trigger payment and when the deliverable is exposed. Two new terms fields, `settlement_trigger` and `delivery`, let a performer insist on zero-trust settlement as policy, without a separate protocol. The requester and verifier triggers and staged delivery can be built now; the contingent trigger is fully specified but gated on a rail capability that a short spike must confirm.
 
 ## 1. Agent prompt

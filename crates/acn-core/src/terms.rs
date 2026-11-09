@@ -215,6 +215,7 @@ impl SettlementTrigger {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Deliverable {
     #[serde(default)]
     pub description: String,
@@ -270,6 +271,7 @@ pub enum Assurance {
 
 /// One pinned judge (spec §7, `judged`). Compared exactly, field by field.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct JudgeFingerprint {
     pub model_id: String,
     /// Provider-pinned version.
@@ -290,6 +292,7 @@ pub enum Aggregation {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Scale {
     pub min: f64,
     pub max: f64,
@@ -369,6 +372,7 @@ fn is_sha256(s: &str) -> bool {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Price {
     pub amount: u64,
     #[serde(default = "sat")]
@@ -380,6 +384,7 @@ fn sat() -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Payment {
     pub mint: String,
     #[serde(default)]
@@ -394,6 +399,7 @@ pub struct Payment {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Verifier {
     pub pubkey: String,
     pub classes: Vec<ConditionClass>,
@@ -408,6 +414,7 @@ pub enum Disclosure {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Governance {
     pub keys: Vec<String>,
     /// Act kinds by the governed party that need an endorsement.
@@ -574,6 +581,11 @@ impl Terms {
             .map(Disqualifier::as_condition)
             .collect();
         for c in t.conditions.iter().chain(&disq) {
+            // Class-specific fields are open (test ids, referents), but nothing that would hold
+            // payment back after settlement: commitments are atomic (spec §1).
+            if let Some(f) = ["holdback", "audit", "window"].iter().find(|f| c.extra.contains_key(**f)) {
+                return Err(format!("`{}`: `{f}`: commitments are atomic, so nothing is held back or audited after settlement", c.id));
+            }
             let declared = c.extra.contains_key("instances");
             if declared && !matches!(c.class, ConditionClass::Mechanical | ConditionClass::Judged) {
                 return Err(format!(

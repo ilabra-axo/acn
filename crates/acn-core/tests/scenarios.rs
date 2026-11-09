@@ -695,6 +695,11 @@ fn check_cos(name: &str, w: &W, out: &acn_core::Output) {
         "C-6d" => {
             let c = &out.commitments[&req.id];
             assert!(has(2, Code::Disqualified), "{ctx}");
+            // Before the REJECT the requester owed no FUND: no requester lapse, however late.
+            let before: Vec<_> = e[..5].to_vec();
+            let o = acn_core::fold(&before, &w.docs);
+            let s = status_at(&o.commitments[&req.id], 1_000_000);
+            assert_ne!(s.lapsed, Some(Party::Requester), "{ctx}");
             // Before the REJECT: no funding deadline, so no requester lapse.
             assert_eq!(c.state.as_ref().unwrap().phase, Phase::Rejected, "{ctx}");
             assert_eq!(c.state.as_ref().unwrap().rework_count, 0, "{ctx}");
@@ -814,14 +819,24 @@ fn check_held_out(name: &str, w: &W, out: &acn_core::Output) {
         "C-10" => {
             assert_eq!(c1, Some(&ConditionStatus::Pass), "{ctx}");
             assert_eq!(st.phase, Phase::Satisfied, "{ctx}");
-            assert!(out.anomalies.iter().all(|a| a.code == Code::Unbound), "{ctx}");
+            assert!(
+                out.anomalies.iter().all(|a| a.code == Code::Unbound),
+                "{ctx}"
+            );
         }
         // e: REQUEST, COUNTER (performer, seed hash), ACCEPT (requester), REPORT, ATTEST
         "C-10b" => {
             assert_eq!(c1, Some(&ConditionStatus::Pass), "{ctx}");
             let want = common::held_out::seed_hash(&common::held_out::PS);
-            assert_eq!(st.performer_seed_hash.as_deref(), Some(want.as_str()), "{ctx}");
-            assert!(out.anomalies.iter().all(|a| a.code == Code::Unbound), "{ctx}");
+            assert_eq!(
+                st.performer_seed_hash.as_deref(),
+                Some(want.as_str()),
+                "{ctx}"
+            );
+            assert!(
+                out.anomalies.iter().all(|a| a.code == Code::Unbound),
+                "{ctx}"
+            );
         }
         "C-10c" => {
             assert!(has(1, Code::Malformed), "{ctx}");
@@ -829,15 +844,27 @@ fn check_held_out(name: &str, w: &W, out: &acn_core::Output) {
         }
         // e: REQUEST, PROMISE, REPORT, ATTEST
         "C-11" | "C-13" | "C-14" => {
-            let code = if name == "C-11" { Code::SeedMismatch } else { Code::InstanceMismatch };
+            let code = if name == "C-11" {
+                Code::SeedMismatch
+            } else {
+                Code::InstanceMismatch
+            };
             assert!(has(3, code), "{ctx}");
             assert_eq!(c1, Some(&ConditionStatus::Unverified), "not counted: {ctx}");
         }
         // e: REQUEST, PROMISE, REPORT (not applied)
         "C-12" | "C-12b" => {
-            let code = if name == "C-12" { Code::SeedWithheld } else { Code::SeedMismatch };
+            let code = if name == "C-12" {
+                Code::SeedWithheld
+            } else {
+                Code::SeedMismatch
+            };
             assert!(has(2, code), "{ctx}");
-            assert_eq!(st.phase, Phase::Promised, "the REPORT is incomplete, not applied: {ctx}");
+            assert_eq!(
+                st.phase,
+                Phase::Promised,
+                "the REPORT is incomplete, not applied: {ctx}"
+            );
         }
         other => panic!("no expectation for {other}"),
     }
@@ -866,21 +893,102 @@ fn cr003_held_out_vectors_under_every_arrival_order() {
     }
 }
 
+/// Documentation-audit fixes: unknown fields below the top level, bad supplied documents,
+/// performer-run judged disqualifiers, escrow acks from unrelated terms.
+#[test]
+fn audit_fixes() {
+    use acn_core::Terms;
+    let code = |t: serde_json::Value| Terms::check(&t).err().map(|e| e.0);
+    // Nothing that would bind silently, at any depth.
+    let paid = |f: fn(&mut serde_json::Value)| {
+        terms(|t| {
+            t["price"] = json!({"amount": 10, "unit": "sat"});
+            t["payment"] = json!({"mint": "https://mint.test"});
+            f(t)
+        })
+    };
+    assert_eq!(code(paid(|_| {})), None);
+    assert_eq!(
+        code(paid(|t| t["payment"]["holdback"] = json!(0.2))),
+        Some(Code::Malformed)
+    );
+    assert_eq!(
+        code(paid(|t| t["price"]["split"] = json!([1]))),
+        Some(Code::Malformed)
+    );
+    let cond = |f: &'static str| {
+        common::cos::cos_terms(1, move |t| t["conditions"][0][f] = json!({"fraction": 0.2}))
+    };
+    assert_eq!(code(cond("holdback")), Some(Code::Malformed));
+    assert_eq!(code(cond("audit")), Some(Code::Malformed));
+    // Free-form class fields on a mechanical condition are still fine.
+    assert_eq!(code(cond("test_ids")), None);
+
+    // A supplied document that hashes but doesn't parse is reported, not left pending.
+    let mut w = W::default();
+    let bad = common::judged::judged_terms(|t| {
+        t["conditions"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("rubric_ref");
+    });
+    let d = Draft::new(K_REQUEST)
+        .tag(vec!["p".into(), pk(&PERF)])
+        .tag(vec!["profile".into(), "N".into()])
+        .terms_hash(&terms_hash(&bad))
+        .content(json!({}));
+    let r = w.add(d, &REQ, 1000);
+    w.docs.insert(terms_hash(&bad), bad);
+    let out = w.fold();
+    assert!(out.has(&r.id, Code::HiddenCriteria), "{:?}", out.anomalies);
+    assert!(!out.commitments.contains_key(&r.id));
+
+    // Terms listing the performer as runner of a judged disqualifier.
+    let mut w = W::default();
+    let mut dq = common::judged::judged_terms(|_| {})["conditions"][1].clone();
+    dq["id"] = json!("d1");
+    dq["runners"] = json!([pk(&PERF)]);
+    let t = common::cos::cos_terms(1, |t| t["disqualifiers"] = json!([dq]));
+    let r = request(&mut w, "N", &t);
+    assert!(w.fold().has(&r.id, Code::SelfJudged));
+
+    // An ESCROW_ACK from a key that is a settlement verifier only in some other document.
+    let mut w = W::default();
+    let r = request(&mut w, "N", &terms(|_| {}));
+    let other =
+        common::settlement::verifier_terms(9, |t| t["settlement_verifier"] = json!(pk(&STRANGER)));
+    w.docs.insert(terms_hash(&other), other);
+    let ack = Draft::new(K_ESCROW_ACK)
+        .tag(vec!["c".into(), r.id.clone()])
+        .content(json!({"hashlock": hashlock()}));
+    let a = w.add(ack, &STRANGER, 1050);
+    assert!(w.fold().has(&a.id, Code::Unauthorized));
+}
+
 /// Instance pools in the terms: well-formed, public, never reused across a rework round.
 #[test]
 fn cr003_instance_terms() {
     use common::held_out::held_out_terms;
     let code = |t: serde_json::Value| acn_core::Terms::check(&t).err().map(|e| e.0);
-    let set = |f: &'static str, v: serde_json::Value| held_out_terms(1, move |t| t["conditions"][0]["instances"][f] = v);
+    let set = |f: &'static str, v: serde_json::Value| {
+        held_out_terms(1, move |t| t["conditions"][0]["instances"][f] = v)
+    };
     assert_eq!(code(held_out_terms(1, |_| {})), None);
-    assert_eq!(code(held_out_terms(1, |t| t["rework_limit"] = json!(1))), Some(Code::Malformed));
+    assert_eq!(
+        code(held_out_terms(1, |t| t["rework_limit"] = json!(1))),
+        Some(Code::Malformed)
+    );
     assert_eq!(code(set("sample_size", json!(21))), Some(Code::Malformed));
-    assert_eq!(code(set("pool_rule", json!(""))), Some(Code::HiddenCriteria));
+    assert_eq!(
+        code(set("pool_rule", json!(""))),
+        Some(Code::HiddenCriteria)
+    );
     assert_eq!(code(set("pool_items", json!([]))), Some(Code::Malformed));
     // The derivation in C-13 really differs from the runner's pick.
     let w = common::held_out::c13();
     let cid = acn_core::instances::from_hex(&w.events[0].id).unwrap();
-    let mut s = acn_core::instances::sample(&common::held_out::RS, &common::held_out::PS, &cid, 20, 5);
+    let mut s =
+        acn_core::instances::sample(&common::held_out::RS, &common::held_out::PS, &cid, 20, 5);
     s.sort();
     assert_ne!(s, vec![0, 1, 2, 3, 4]);
 }

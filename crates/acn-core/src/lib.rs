@@ -1,4 +1,4 @@
-//! ACN core — Agent Commitments over Nostr (spec: `docs/Core.md`, v0.4).
+//! ACN core — Agent Commitments over Nostr (spec: `docs/Core.md`, v0.5).
 //!
 //! A validator is a **pure function** from an event set (plus content-addressed documents) to
 //! commitment states and anomalies (spec §10). This crate has no I/O, no clock, and no C

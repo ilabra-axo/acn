@@ -24,7 +24,7 @@ conversations.
 
 ## Status
 
-Phase 1 scaffold (see [docs/ROADMAP.md](docs/ROADMAP.md)). Working today:
+Phases 0 and 0.5 plus the ACN track so far (see [docs/ROADMAP.md](docs/ROADMAP.md)). Working today:
 
 - NIP-17 encrypted DMs, both text and structured messages
 - Contract registry with JSON Schema validation and hash pinning; 5 built-in contracts
@@ -34,11 +34,14 @@ Phase 1 scaffold (see [docs/ROADMAP.md](docs/ROADMAP.md)). Working today:
   actions back to agents ([apps/desktop](apps/desktop/README.md))
 - MCP → Nostr agent bridge (stdio and streamable HTTP MCP servers), NIP-CD slash commands,
   agent manifest with data-handling disclosure, form/button actions routed back to tools
-- **ACN commitments** ([docs/Core.md](docs/Core.md) v0.2). The pure `acn-core` validator
-  (deterministic fold, V-1…V-16, order-independence property test, WASM build) drives everything.
+- **ACN commitments** ([docs/Core.md](docs/Core.md) v0.5). The pure `acn-core` validator
+  (deterministic fold, V-1…V-11 and V-13…V-27, order-independence property test, WASM build) drives everything.
   The agent bridge acts as `acn-mcp-shim`: it publishes `K_SVC` and an operator binding, and
   answers T0 `REQUEST`s with signed `REPORT`s. The desktop app shows each commitment as a live
   card, where you choose Accept (SATISFY) or Reject.
+- **ACN demo**: 16 scenarios (judged conditions, settlement triggers, disqualifiers, held-out
+  tests and more) in live mode with a Cashu test mint, or in presenter mode in the browser
+  ([docs/DEMO.md](docs/DEMO.md)); real LLM judges via `acn-judge` (`nmesh-acn-sim --judges`)
 - Dev relay and CLI client
 - Marmot/MLS behind the `mls` feature (KeyPackage publishing only)
 
@@ -66,7 +69,7 @@ cargo run -p nmesh-cli --bin nmesh -- chat npub1...
 > /card Deploy finished all services healthy
 ```
 
-UI-only preview in a browser with a mock backend: `cd apps/desktop && pnpm dev`.
+Browser preview without Tauri or a relay (presenter mode: stand-in chat, real ACN in WASM): `cd apps/desktop && pnpm dev`.
 
 ## Layout
 

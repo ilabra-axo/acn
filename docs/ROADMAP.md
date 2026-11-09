@@ -21,12 +21,12 @@ of focused work for 1–2 people.
 - [x] Tauri 2 shell + Svelte 5 UI: sidebar, chat, agent banner, slash autocomplete
 - [x] Tier 0 web renderers: card, table, form, location (with AR-anchor badge), generic, alt
 - [x] Actions: card buttons and form submits → kind 4931 → bridge routes `/command` to MCP tools
-- [x] Browser preview with a mock backend, plus a screenshot script
+- [x] Browser preview with a stand-in backend (now presenter mode), plus a screenshot script
 
 ## ACN track (docs/Core.md)
 
 - [x] Core.md v0.2: time model, advancing/annotating acts, NIP-59-compliant private mode, NUT-14 lock, escrowed-preimage arbitration, V-15/V-16
-- [x] **P0** `acn-core`: all 13 acts, terms, JCS, sibling resolution, bindings, endorsements, attestations; scenarios for every act and anomaly code; permutation property test; `wasm32-unknown-unknown` build
+- [x] **P0** `acn-core`: all 13 v0.2 acts (CR-002 added `RELEASE`, `FUND`, `CLAIM`), terms, JCS, sibling resolution, bindings, endorsements, attestations; scenarios for every act and anomaly code; permutation property test; `wasm32-unknown-unknown` build
 - [x] P1 (partial): `K_SVC`, operator binding, T0 at price 0 end to end (desktop ↔ relay ↔ shim ↔ MCP), private-mode transport
 - [x] Demo: 9 scenarios (T0, T1, N, rework, attestations, dispute/ruling, governance, lapse, equivocation) in live mode (`nmesh-acn-sim`) and presenter mode (WASM), with the Director and presentation clock ([DEMO.md](DEMO.md))
 - [x] P1 (T1 / N part): Cashu via CDK against a local test mint (`nmesh-mint`, fake Lightning): NUT-14 HTLC lock at request time, DLEQ + NUT-07 check before work, redeem on SATISFY / RULING, refund after the locktime, double spend rejected; integrated wallet (panel, balances, per-commitment token state); presenter mode uses a simulated mint with the same rules

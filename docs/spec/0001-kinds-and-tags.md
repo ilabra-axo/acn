@@ -16,6 +16,10 @@
 | 34931 | addressable | Renderer manifest | JSON `RendererManifest` | `d`, `alt`, `contract`* |
 | 34932 | addressable | Agent manifest | JSON `AgentManifest` | `d`, `alt`, `contract`* |
 
+ACN kinds (7700–7739, 37700) are specified in [Core.md](../Core.md) §5.1 and defined in
+`crates/acn-core/src/kinds.rs`; `nmesh-proto` mirrors `K_PRIVATE_ACT` (7739) and `K_SVC` (37700)
+for routing.
+
 Structured messages and actions are normally **rumors** (unsigned, inside NIP-59 gift wraps or
 Marmot group messages). Publishing them signed and in the clear is allowed only for public
 contexts.
