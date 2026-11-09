@@ -34,7 +34,8 @@ of focused work for 1–2 people.
 - [x] Real judge harness (`acn-judge`): pinned judges on OpenAI-compatible endpoints (local Ollama or hosted), repeats and medians, injection scan plus model vote, pinned by `harness_hash`; `nmesh-acn-sim --judges`. Presenter mode keeps scripted judges. Next: Atlas does the work for real (an LLM performer), so the judges grade what was asked
 - [x] D-28: `overruled_judgement` flags rejections of passed judged conditions (V-16)
 - [x] CR-003 Phase A (`acn-terms/0.5`): no hidden criteria (public rubrics and checks), disqualifiers, `open` conditions drafted in `COUNTER` with closure before promise, the terms card; `/drafted`, `/disqualified`
-- [ ] CR-003 Phase B: held-out instances and the two-party seed; Phase C: terms templates (`K_TERMS_TEMPLATE`); Phase D: drafters and linter in the reference binding (this is where P2's negotiation UI and P3's binding API land)
+- [x] CR-003 Phase B: held-out instances and the two-party seed (RFC 6962 pool roots, seeds committed before delivery, sample derived from both, proofs in the attestation); `/held-out`
+- [ ] CR-003 Phase C: terms templates (`K_TERMS_TEMPLATE`); Phase D: drafters and linter in the reference binding (this is where P2's negotiation UI and P3's binding API land)
 - [x] Board (queue view, §12): columns by ACN stage across agents and roles, whose-move from `acn-view`, needs-you filter, paged Closed column, drawer with the full card; no drag-and-drop. Reset demo (Director)
 - [ ] P1 remainder: T0 paid (unlocked token swapped before work) in the MCP shim
 - [ ] Wallet: NIP-60 backup, NWC top-up, real mints and a multi-mint policy, binding `max_sat` caps applied to the wallet, encrypted preimage/proof storage

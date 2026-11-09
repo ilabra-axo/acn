@@ -85,7 +85,7 @@ MAY follow RFC 2119.
     MUST be readable by the performer before it signs `PROMISE` or `ACCEPT`. Criteria are: rubric
     text, mechanical check definitions, disqualifiers, and the description and generation rule of
     any instance pool. Only the selection of evaluation instances may be unpredictable, and only
-    by the two-party seed mechanism (CR-003 §2.3, Phase B).
+    by the two-party seed mechanism (§7 "Held-out instances").
 
 ## 3. Roles and system layers
 
@@ -330,14 +330,14 @@ only against a failing attestation, and `SATISFY` is not legal. From Funded, the
 | Act | Signer | Legal from (phase) | Result | Required content (JSON) |
 | --- | --- | --- | --- | --- |
 | `REQUEST` | requester | — (root) | Requested | `terms` tag; content: `{terms?: <inline doc>, token?: <NIP-44 ciphertext to performer>, note?}` |
-| `COUNTER` | either | Requested, Countered, Promised (N only) | Countered, or Promised with `pending` | new `terms` tag; `{terms?: <inline doc>, reason}` |
-| `ACCEPT` | the non-countering party | Countered, or Promised with `pending` | Promised (`terms` := counter terms) | `terms` tag = pending counter terms; every condition closed (V-26) |
-| `PROMISE` | performer | Requested (N) | Promised | `terms` tag = current terms; every condition closed (V-26); `{p_on_time: 0..1, token_verified: bool}` |
+| `COUNTER` | either | Requested, Countered, Promised (N only) | Countered, or Promised with `pending` | new `terms` tag; `{terms?: <inline doc>, reason}`; a performer's counter to terms with instances also `{performer_seed_hash}` (§7) |
+| `ACCEPT` | the non-countering party | Countered, or Promised with `pending` | Promised (`terms` := counter terms) | `terms` tag = pending counter terms; every condition closed (V-26); the performer's, to terms with instances, also `{performer_seed_hash}` |
+| `PROMISE` | performer | Requested (N) | Promised | `terms` tag = current terms; every condition closed (V-26); `{p_on_time: 0..1, token_verified: bool}`; to terms with instances also `{performer_seed_hash}` |
 | `DECLINE` | performer | Requested, Countered | Declined | `{reason}` |
 | `WITHDRAW` | requester | Requested, Countered, Promised | Withdrawn | `{reason}` |
 | `REVOKE` | performer | Promised, Reworking | Revoked (scored) | `{reason}` |
 | `PROGRESS` | performer | Promised, Reworking (annotating) | unchanged | `{p_on_time?, note?}` |
-| `REPORT` | performer | Promised, Reworking; Requested in T0/T1 | Reported (Offered under `contingent`) | `x` tags for artifacts; `{result?: <inline JSON ≤16 KiB>, contract?: <id>, derivation?: <hash>, note?}`; under `contingent` also `{ciphertext, hashlock, sealed?: <NIP-44 v2 payload>}` (§8.2) |
+| `REPORT` | performer | Promised, Reworking; Requested in T0/T1 | Reported (Offered under `contingent`) | `x` tags for artifacts; `{result?: <inline JSON ≤16 KiB>, contract?: <id>, derivation?: <hash>, note?}`; under `contingent` also `{ciphertext, hashlock, sealed?: <NIP-44 v2 payload>}` (§8.2); with instances also `{performer_seed}` (§7, V-27) |
 | `SATISFY` | requester (by hand, or automatically by its binding under a pre-set policy, §8.2) | Reported (requester trigger); Settled (judgement, once) | Satisfied; unchanged after Settled | `{preimage?: <hex>}`; required when the terms carry a hashlock and the trigger is `requester` |
 | `REJECT` | requester | Reported (under `verifier`: only with a failing attestation or a disqualifier hit); Settled (judgement, once) | Reworking, or Rejected at the rework limit (always Rejected in T0/T1, and whenever a disqualifier is hit, CR-003); unchanged after Settled | `{gaps: [{condition, evidence: [..], note?}]}`, non-empty; conditions must exist in terms |
 | `DISPUTE` | either | Reported; Rejected (if disputable) | Disputed | `{reason, evidence?: [..]}`; terms must name an arbiter |
@@ -514,8 +514,43 @@ disqualifiers), `description` (the disqualifying act), `class` (`mechanical` or 
   established. Reputation projections SHOULD weigh `disqualified` as breach and `below_threshold`
   as a quality miss.
 
-Not yet: `human` disqualifiers (no declaration kind exists, D-30), `grounding` or `interpretive`
-ones (D-29), and `instances` (CR-003 Phase B).
+Not yet: `human` disqualifiers (no declaration kind exists, D-30), and `grounding` or
+`interpretive` ones (D-29).
+
+**Held-out instances (CR-003).** The criteria are public; the cases tested against them are drawn
+after delivery from a fixed pool (the syllabus is public, the exam questions are not). A
+`mechanical` or `judged` condition or disqualifier MAY carry `instances` (for `judged`, among its
+judged fields):
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `pool_description` | string | Public: what kind of cases the pool holds. Empty is `hidden_criteria` (INV-14) |
+| `pool_rule` | string | Public: how the pool was generated or curated. Empty is `hidden_criteria` |
+| `pool_root` | sha256 | Merkle root over the pool items, fixed in the terms version |
+| `pool_size`, `sample_size` | integer | 1 ≤ `sample_size` ≤ `pool_size` |
+| `requester_seed_hash` | sha256 | sha256 of the requester's 32-byte seed, committed in the terms version |
+
+- **Pool.** RFC 6962 §2.1 Merkle tree (as in Certificate Transparency): leaf `sha256(0x00 ‖ d)`,
+  node `sha256(0x01 ‖ l ‖ r)`, where `d` is the JCS encoding of the item's JSON value. The
+  contents are never published, only revealed item by item when sampled.
+- **Seeds.** The requester commits its seed's hash in the terms and gives the seed privately to
+  the runner (by NIP-44, e.g. a `["seed", <ciphertext>, <runner>]` tag on the `REQUEST`). The
+  performer commits `performer_seed_hash` in the act that binds it: its `PROMISE` or `ACCEPT`, or
+  the performer's `COUNTER` the requester then accepts (missing: `malformed`, like a missing
+  preimage, V-10). Its `REPORT` reveals `performer_seed` (T0/T1: the `REPORT` is the binding act,
+  so the reveal is the commitment).
+- **Sample.** `seed = sha256(requester_seed ‖ performer_seed ‖ commitment_id)` over the raw
+  32-byte values. Each index `i` in `0..pool_size` ranks by `sha256(seed ‖ u32_be(i))`; the
+  `sample_size` lowest ranks are the sample. Neither party alone controls it: the requester
+  committed first and can't grind, and the performer can't know the cases before delivery,
+  because the requester's seed stays with the runner until it attests.
+- **Attestation.** The runner's attestation reveals `requester_seed` and `instances: [{index,
+  item, proof}]`: exactly the sample, each item with its RFC 6962 audit path (verified as in RFC
+  9162 §2.1.3.2) against `pool_root` (V-27).
+- **No rework.** Terms with instances need `rework_limit` 0: the first attestation reveals the
+  requester's seed and the sample, so a rework would be graded on known cases. A retry is a new
+  commitment with new seeds (commitments are atomic, §1). The review-window lapse applies to a
+  runner that doesn't attest in time, as for any verifier.
 
 **Assurance labels.** Every condition carries a derived assurance label: `check`
 (`mechanical`), `grounded` (`grounding`), `opinion` (`judged` and `interpretive`), `human`
@@ -702,7 +737,8 @@ execution log), `started`/`ended` (advisory).
 
 - **`K_ATTEST_MECH`:** `{result: "pass"|"fail", method, recipe?, env?}`; `result` is
   `"hit"|"clear"` when `cond` names a disqualifier (CR-003; also for `K_ATTEST_GROUND` and
-  `K_ATTEST_JUDGED`). Under `contingent`, also
+  `K_ATTEST_JUDGED`). When the item has held-out instances, every attestation kind also carries
+  `requester_seed` and `instances: [{index, item, proof: [hex]}]` (§7, V-27). Under `contingent`, also
   `ciphertext`, `hashlock` and `plaintext` (V-21).
 - **`K_ATTEST_GROUND`:** `{result, referent: {source, hash}, method}`.
 - **`K_ATTEST_JUDGED`:** signed by a runner key listed in the condition's `runners`. Content:
@@ -849,6 +885,14 @@ list). Every rule failure produces an anomaly with a code and a severity:
 26. **V-26 Closure (new, CR-003).** `PROMISE`, `ACCEPT`, and a T0/T1 `REPORT` from Requested are
     applied only against terms in which every condition and disqualifier is closed (§7 "Drafting
     and closure"). `unclosed_condition` (reject, on the act).
+27. **V-27 Held-out instances (new, CR-003).** When the terms in force declare instances: a binding
+    act without `performer_seed_hash` is `malformed`; a `REPORT` without `performer_seed` is
+    `seed_withheld`, and one whose seed doesn't hash to the commitment is `seed_mismatch` (both
+    reject: the `REPORT` is incomplete, so the performer still owes it). An attestation on an item
+    with instances counts only if its `requester_seed` hashes to `requester_seed_hash`
+    (`seed_mismatch`, reject, on the runner's attestation), its indices are exactly the sample
+    derived from both seeds, and every item proves against `pool_root` (`instance_mismatch`,
+    reject).
 
 V-18 also covers the contingent constraint that every condition is `mechanical`:
 `contingent_nondeterministic` (reject; on a `REQUEST`, no commitment).
@@ -915,7 +959,7 @@ is reused for the remaining invalid combination.
 | S-17 | Funded; no `CLAIM` before the `FUND` locktime | Lapsed; performer fault |
 | S-18 | Offered; requester `SATISFY`, then `REJECT` of passing work | Neither applied; `illegal_transition` |
 
-**Conditions-of-satisfaction vectors (CR-003 Phase A).** Each also runs under every arrival-order
+**Conditions-of-satisfaction vectors (CR-003; C-10…C-14 are Phase B).** Each also runs under every arrival-order
 permutation.
 
 | Id | Setup | Expected |
@@ -939,6 +983,14 @@ permutation.
 | C-5b | Performer `ACCEPT`s a requester counter that leaves a condition open | Not applied; `unclosed_condition` |
 | C-5c | T1 `REPORT` (implicit promise) against terms with an open condition | Not applied; `unclosed_condition` |
 | C-9 | Terms with none of the CR-003 additions (no disqualifiers, nothing open) | Promise, report, pass, satisfy as before; no new anomalies. Every earlier vector passes unchanged |
+| C-10 | Valid seeds, derivation and Merkle proofs | Attestation counted; Satisfied |
+| C-10b | The performer's `COUNTER` commits its seed; the requester accepts | The counter's commitment binds; the `REPORT`'s seed checked against it |
+| C-10c | `PROMISE` to terms with instances, without `performer_seed_hash` | Not applied; `malformed` |
+| C-11 | Revealed requester seed doesn't match its hash | Not counted; `seed_mismatch` on the attestation |
+| C-12 | `REPORT` omits the performer seed | Not applied (incomplete); `seed_withheld` |
+| C-12b | `REPORT` reveals a seed other than the committed one | Not applied; `seed_mismatch` |
+| C-13 | Sampled indices don't follow the derivation | Not counted; `instance_mismatch` |
+| C-14 | A sampled item fails its proof against `pool_root` | Not counted; `instance_mismatch` |
 | C-8 | A disqualifier with an audit window (`window: until_audit_end`) | Replaced by decision: commitments are atomic, so there is no audit window or holdback; the terms don't parse (`malformed`). The CR's expectation (main settlement stands, holdback refunds) does not apply |
 
 ## 11. Bindings, governance and reputation
@@ -985,7 +1037,7 @@ assurance label; `open` ones marked, with their suggested class), **Checked by**
 runners and judges with their fingerprints, or the requester), **Pay if** (price, settlement
 trigger, deadline, review window, revisions), and **Disqualified if** (each disqualifier with its
 label). They MUST also show who drafted the version and a diff against the previous one, and say
-when a version can't be promised yet (V-26). For instance pools (CR-003 Phase B) they show the
+when a version can't be promised yet (V-26). For instance pools (§7) they show the
 description, rule and sample size, never the contents. Reference: `acn_view::TermsCard`
 (`Projection.terms_card`, `pending_card`, `versions`, `terms_diff`).
 
@@ -1029,7 +1081,7 @@ row needs a scenario test in the conformance suite.
 | Forged token | Bogus proof that shows "unspent" | DLEQ (NUT-12) verification before promising |
 | Arbiter collusion | Arbiter + performer use the escrowed `s` | Arbiters are scored keys; arbiter choice is in the terms; high-value work splits into milestones |
 | Judge gaming | Optimizing for a judge model | Interpretive reports are never sufficient (INV-8, V-11); a `judged` condition is explicitly an opinion and labelled so (§7), with the safeguards below |
-| Judge hill-climbing | Performer runs the known judge and rubric locally and iterates until it passes | Rubrics are public (INV-14), so not hidden criteria: held-out instances (CR-003 §2.3, Phase B); judge ensembles across model families; an audit condition of a stronger class in the terms (§7); a disqualifier for rubric-term stuffing (§7) |
+| Judge hill-climbing | Performer runs the known judge and rubric locally and iterates until it passes | Rubrics are public (INV-14), so not hidden criteria: held-out instances (§7); judge ensembles across model families; an audit condition of a stronger class in the terms (§7); a disqualifier for rubric-term stuffing (§7) |
 | Judge prompt injection | Deliverable contains text addressed to the judge | The harness isolates and sanitizes the artifact; detection fails the condition and is recorded on the performer (V-17.5, vector J-6) |
 | Self-judging | Performer runs the judge or signs as runner | The runner must not be the performer (`self_judged`, V-17.1, vectors J-3, J-3b) |
 | Judge drift or collusion | A judge passes poor work systematically | Audit conditions alongside the judges (§7); outcomes on the record, so runners and judge fingerprints can be scored |
@@ -1038,8 +1090,10 @@ row needs a scenario test in the conformance suite.
 | Pre-empted release (verifier trigger) | The requester rejects passing work before the verifier releases | `REJECT` before `RELEASE` is legal only against a failing attestation (§6.1; vector S-8b) |
 | False pass (verifier trigger) | Verifier and performer collude to pass bad work | Deterministic conditions make the false pass provable from the artifacts; verifier reputation destroyed |
 | Key leak (contingent v1) | The attesting verifier passes `k` or the plaintext to the requester, who reads it without funding | Verifier scored and value-capped; residual risk until zero-knowledge proofs replace the verifier's attestation (D-20) |
-| Gaming a public rubric (CR-003) | Performer optimizes for rubric wording, not substance | Held-out instances (Phase B); reference and counterexample material in the rubric; a rubric-stuffing disqualifier; audit conditions |
-| Seed grinding (CR-003) | One party picks its seed to steer the sample | Two-party seed committed before delivery (Phase B) |
+| Gaming a public rubric (CR-003) | Performer optimizes for rubric wording, not substance | Held-out instances (§7); reference and counterexample material in the rubric; a rubric-stuffing disqualifier; audit conditions |
+| Seed grinding (CR-003) | One party picks its seed to steer the sample | Two-party seed: the requester's committed in the terms, the performer's in its binding act, both before delivery (V-27) |
+| Runner picks the cases (CR-003) | The runner tests an easier subset or swaps items | The sample is derived, not chosen, and each item proves against `pool_root`; anyone can recheck the attestation (`instance_mismatch`, V-27) |
+| Seed leak (CR-003) | The runner passes the requester's seed to the performer before delivery | Residual: the runner is trusted with the seed until it attests, like a verifier with an escrowed secret; scored, and the requester can be its own runner |
 | Self-serving conditions (CR-003) | Performer drafts conditions it can trivially meet | The requester must `ACCEPT` that version; card and diff shown (§12); templates with records as defaults (Phase C) |
 | Pretextual disqualification (CR-003) | Requester alleges a hit to withhold payment | Only the disqualifier's runners attest (V-25); unsupported hits and `REJECT`s naming them flagged `unsupported_disqualification`; withholding without a counted hit is a requester lapse |
 | Vague disqualifiers (CR-003) | Statements about quality used as a catch-all | Guidance and lint in the bindings: disqualifiers name acts, quality goes in rubrics |
@@ -1187,6 +1241,11 @@ From CR-003 (conditions-of-satisfaction authorship; its OD-1…OD-7, plus three 
   sits with CR-002 settlement.
 - [ ] **D-34 Counter auto-accept (CR-003 OD-2).** Whether a requester may pre-commit to accept
   counters that only close open conditions from a named template, without a separate act.
+- [ ] **D-39 Held-out instances across rework.** Terms with instances need `rework_limit` 0
+  because the first attestation reveals the requester's seed. Allowing rework needs a fresh,
+  pre-committed requester seed per round: e.g. commit `h = sha256^(n)(s)` and reveal the chain
+  backwards, one link per round, so a revealed link doesn't give away the next. Only worth it if
+  per-commitment retries prove too costly.
 - [ ] **D-35 Deliverable-derived pools (CR-003 OD-4).** Allowing `pool_root` to be fixed at
   `REPORT` when the pool is the deliverable's own content, such as its citations.
 - [ ] **D-36 Judge rationales (CR-003 OD-6).** D-19, now sharper with public rubrics: publishing
@@ -1199,7 +1258,7 @@ From CR-003 (conditions-of-satisfaction authorship; its OD-1…OD-7, plus three 
 Each phase is gated by acceptance criteria that a coding agent can test mechanically.
 
 1. **P0 Grammar and validator crate (`acn-core`).** Act schemas, terms schema, JCS hashing, the
-   fold, sibling resolution, V-1…V-11 and V-13…V-26, anomaly codes, `status_at`.
+   fold, sibling resolution, V-1…V-11 and V-13…V-27, anomaly codes, `status_at`.
    - Gate: scenario tests for every act and every anomaly code pass.
    - Gate: a property test shows identical state and anomalies under arrival-order permutations
      of each scenario (INV-2).
@@ -1253,5 +1312,6 @@ invent patterns. Kind numbers and tag letters are symbolic until D-1 closes.
 | Payment dependency, overruled judgement | 2026-11-08 | §12, §13, §14 (D-28) | Clients SHOULD show what payment depends on before the performer promises; new threat row "withheld satisfaction (requester trigger)"; open decision D-28 on flagging rejections of passed `judged` conditions | Clarification, no wire change. Reference: `acn_view::Projection.payment_depends_on`, shown on the card |
 | Reference judge harness | 2026-11-08 | §14 (D-18) | `acn-judge/1`: pinned judges on OpenAI-compatible endpoints, producing `K_ATTEST_JUDGED` that V-17 counts; noted as a D-18 candidate | No spec change; D-18 stays open |
 | D-28 closed: overruled judgement | 2026-11-08 | §10 (V-16, vectors J-15…J-17), §13, §14 | New flag `overruled_judgement` on a `REJECT` gap naming a `judged` condition with a counted passing attestation; per gap; no exemption for disagreeing judges | Applied, no wire change (flag only, INV-5 unchanged) |
-| CR-003 conditions-of-satisfaction authorship, Phase A | 2026-11-09 | INV-14, §6.2, §7, §8.2, §9, §10 (V-16, V-17, V-20, V-24…V-26, vectors), §12, §13, §14 (D-16, D-31, D-38 closed; D-29…D-37) | No hidden criteria (INV-14): `commit_reveal` rejected at every version, `rubric_ref` required and `check_ref` for hashed checks from `acn-terms/0.5`; `disqualifiers[]` with `hit`/`clear` attestations by named runners, `disqualified` on the `REPORT`, breach rejects without rework, `RELEASE` and auto-satisfy blocked; `open` conditions and the closure rule for `PROMISE`/`ACCEPT`/T-`REPORT`; terms versions derived from the chain; the terms card; codes `hidden_criteria`, `disqualified`, `unsupported_disqualification`, `unclosed_condition`; seven threat rows; J-5 amended, J-18 added (the old J-5 check); vectors C-1…C-9 | Phase A applied. Terms version `acn-terms/0.5`, the only one accepted: a prototype baseline with one set of rules, so the compatibility paths for 0.2–0.4 are removed and unknown terms fields are `malformed` (the wire stays `acn/0.4`). **CR-003 corrected:** it assumed CR-001's holdback and audit windows, which were dropped, and commitments are atomic (CR-002); the earlier decisions hold. So disqualifiers have no `window` (checked before settlement), `until_audit_end` and the audit-window effects of §2.2 don't exist, C-8 is replaced (an audit window is `malformed`), D-31 is closed, and §2.7's "split, holdback" are not on the card. **Also changed by decision:** `version` / `prev` / `drafted_by` are derived from the signed chain rather than added as terms fields (they can't then be misattributed); "evidence producer" means a listed verifier of the class, the runners, or the requester; `human`, `grounding` and `interpretive` disqualifiers are rejected at parse pending D-29, D-30; the spec has no separate breach path, so a hit makes `REJECT` legal under every trigger and, while it stands, any `REJECT` ends in Rejected without rework (C-6…C-6f), and the requester's silence after a hit is no lapse; the validator still applies a `SATISFY` or `FUND` after a hit (D-38); condition and disqualifier ids share one namespace. Demo: `/drafted`, `/disqualified`. Phases B (instances, seeds), C (templates) and D (authoring aids) pending; §4's template examples still carry `audit` / `holdback` / `window` and need the same correction in Phase C |
+| CR-003 conditions-of-satisfaction authorship, Phase A | 2026-11-09 | INV-14, §6.2, §7, §8.2, §9, §10 (V-16, V-17, V-20, V-24…V-26, vectors), §12, §13, §14 (D-16, D-31, D-38 closed; D-29…D-37) | No hidden criteria (INV-14): `commit_reveal` rejected at every version, `rubric_ref` required and `check_ref` for hashed checks from `acn-terms/0.5`; `disqualifiers[]` with `hit`/`clear` attestations by named runners, `disqualified` on the `REPORT`, breach rejects without rework, `RELEASE` and auto-satisfy blocked; `open` conditions and the closure rule for `PROMISE`/`ACCEPT`/T-`REPORT`; terms versions derived from the chain; the terms card; codes `hidden_criteria`, `disqualified`, `unsupported_disqualification`, `unclosed_condition`; seven threat rows; J-5 amended, J-18 added (the old J-5 check); vectors C-1…C-9 | Phase A applied. Terms version `acn-terms/0.5`, the only one accepted: a prototype baseline with one set of rules, so the compatibility paths for 0.2–0.4 are removed and unknown terms fields are `malformed` (the wire stays `acn/0.4`). **CR-003 corrected:** it assumed CR-001's holdback and audit windows, which were dropped, and commitments are atomic (CR-002); the earlier decisions hold. So disqualifiers have no `window` (checked before settlement), `until_audit_end` and the audit-window effects of §2.2 don't exist, C-8 is replaced (an audit window is `malformed`), D-31 is closed, and §2.7's "split, holdback" are not on the card. **Also changed by decision:** `version` / `prev` / `drafted_by` are derived from the signed chain rather than added as terms fields (they can't then be misattributed); "evidence producer" means a listed verifier of the class, the runners, or the requester; `human`, `grounding` and `interpretive` disqualifiers are rejected at parse pending D-29, D-30; the spec has no separate breach path, so a hit makes `REJECT` legal under every trigger and, while it stands, any `REJECT` ends in Rejected without rework (C-6…C-6f), and the requester's silence after a hit is no lapse; the validator still applies a `SATISFY` or `FUND` after a hit (D-38); condition and disqualifier ids share one namespace. Demo: `/drafted`, `/disqualified`. Phase B applied (next row); C (templates) and D (authoring aids) pending; §4's template examples still carry `audit` / `holdback` / `window` and need the same correction in Phase C |
+| CR-003 Phase B, held-out instances | 2026-11-09 | INV-14, §6.2, §7, §9, §10 (V-27, vectors C-10…C-14), §12, §13, §14 (D-39) | `instances` on `mechanical` and `judged` conditions and disqualifiers (public description and rule, RFC 6962 `pool_root`, sizes, `requester_seed_hash`); `performer_seed_hash` in the binding act, `performer_seed` in `REPORT`; sample `sha256(rs ‖ ps ‖ commitment_id)` ranking indices; attestations reveal the requester seed and the sampled items with audit paths; codes `seed_mismatch`, `seed_withheld`, `instance_mismatch`; three threat rows | Applied, same terms version. **Changed from CR-003 by decision:** the CR left the encodings open, so the tree is RFC 6962 over JCS item bytes, indices rank by `sha256(seed ‖ u32_be(i))`, and seeds are 32 raw bytes; a missing seed commitment in a binding act is `malformed` (V-10's pattern); `seed_withheld` and `seed_mismatch` reject the `REPORT` rather than flag it, so the performer still owes a complete one; instances need `rework_limit` 0 (D-39) and are not allowed on `grounding`/`human`/`interpretive` items; the requester's seed travels to the runner in a NIP-44 `seed` tag. Judged instances parse and verify, but the reference judge harness (`acn-judge`) doesn't yet feed sampled items to the judges. Demo: `/held-out` |
 | Contingent sealing format | 2026-11-08 | §6.2 (`REPORT`), §8.2 step 2 | The sealed deliverable `C` is a NIP-44 v2 payload keyed directly by `k`; inline as `content.sealed` or on Blossom; `ciphertext` = sha256 of the payload bytes. Reference: `acn-core::sealed`, interop-tested against rust-nostr | Clarification, no wire version change. Implemented end to end in the demo cast (`/contingent`), with `/judged`, `/injected` and `/judged-auto` for CR-001 |

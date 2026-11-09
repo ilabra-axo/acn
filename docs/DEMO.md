@@ -53,6 +53,12 @@ scenario logic** (`acn-core`, `acn-view`, `acn-sim`). Every act is a real BIP-34
    Both conditions pass, yet Verity attests `d2` as **hit**: Satisfy disappears, the Director
    says *Reject: d2 hit*, and the commitment ends **Rejected** with no rework, although one was
    allowed. `disqualified` is on Atlas's REPORT: a breach of stated terms, not a low score.
+7. **Held-out tests** (`/held-out`, free). Verity keeps 20 integration tests Atlas never sees;
+   the terms card shows only what they are, how they were chosen and that 5 will be drawn. Your
+   app commits a seed's hash in the terms and sends the seed privately to Verity; Atlas commits
+   its own seed's hash when it promises and reveals the seed with the work. Verity derives the
+   sample from both seeds and the commitment id, runs those 5, and attests with your seed and
+   a Merkle proof for each case, so anyone can check the pick wasn't chosen.
 
 Point out the ladder: a judged condition certifies that pinned judges produced a score; it is
 evidence about an opinion, not about the work (INV-8). Stronger classes (mechanical, grounded,
@@ -131,7 +137,7 @@ the speed. The cast keeps its keys in `.nmesh/sim/`, so npubs stay the same acro
 **Wallet.** The cast hosts a Cashu test mint (CDK, fake Lightning) on `http://127.0.0.1:3338`,
 and the desktop app's wallet points there by default (`NMESH_MINT`; set it to `none` to disable).
 Click the **₿** chip in the sidebar, then **Top up 100 test sats** before running *Paid call*,
-*Dispute* or the judged scenarios (all fifteen scenarios cost 261 sat; 60 of it stays locked
+*Dispute* or the judged scenarios (all sixteen scenarios cost 261 sat; 60 of it stays locked
 after the injection until its locktime). Without enough funds the request is refused before anything is signed. To use a
 separately running mint: `./target/debug/nmesh-mint` and `nmesh-acn-sim --mint http://127.0.0.1:3338`.
 Atlas DMs you when it redeems; send it `wallet` to see its balance.
@@ -205,6 +211,7 @@ the silent promise turns red as overdue, without any act being sent.
 | **Judged, you settle** (40 sat) | Satisfy (auto-satisfy) | Muse is the runner (not the performer: `self_judged` otherwise); the requester trigger; closing is paying |
 | **Drafted conditions** | Accept counter-offer, then Satisfy (auto) | The `REQUEST`'s `c2` is `open` (an underspecified request is fine; a `PROMISE` against it would be `unclosed_condition`); the counter's terms card and diff; v2 drafted by Atlas binds after your `ACCEPT` |
 | **Disqualified** | Accept counter-offer, then Reject (`d2`) | `c1` and `c2` pass, `d2` hit; Satisfy not offered; Rejected with `rework_count` 0; `disqualified` on the REPORT |
+| **Held-out tests** | Satisfy | The terms card shows the pool's description, rule and "5 of 20", never the cases; `PROMISE` carries `performer_seed_hash`, `REPORT` reveals `performer_seed`; Verity's attestation lists the sampled cases with proofs (V-27) |
 | **Contingent** (30 sat) | Fund | *🔒 Encrypted delivery* until `CLAIM`; Verity's attestation names `ciphertext`, `hashlock`, `plaintext` (V-21); Review lane passes Verity → you → Atlas; the card decrypts after the claim |
 | **Rogue agent** | — | *unaccountable ⚠* (no binding); PROMISE and DECLINE at once → **equivocation** flagged on both; the closing act wins deterministically, the loser is `stale` and kept as evidence |
 
