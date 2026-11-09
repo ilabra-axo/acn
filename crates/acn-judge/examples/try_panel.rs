@@ -50,6 +50,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         acn_judge::HARNESS_ID,
         acn_judge::harness_hash()
     );
+    // What to pin in a judged condition's `judges` (e.g. docs/acn/templates/).
+    println!("judges {}", serde_json::to_string(&panel.fingerprints())?);
     for (label, text) in [
         ("clean", artifact.clone()),
         ("injected", format!("{artifact} {INJECTION}")),

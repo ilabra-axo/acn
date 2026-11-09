@@ -1,0 +1,78 @@
+{
+  "v": "acn-template/1",
+  "name": "research-brief/v1",
+  "description": "A short research brief for a named kind of reader: structure and citations checked mechanically, quality scored by two judges, and fabricated citations, verbatim copying and rubric stuffing as disqualifiers. The topic goes in the deliverable, not the template.",
+  "slots": {
+    "checker": {"type": "pubkey", "guidance": "Runs the checks and the judges and attests the disqualifiers; list it as the mechanical verifier too. Never the performer."},
+    "reader": {"type": "string", "default": "non-specialist", "guidance": "Who the brief is for"},
+    "words": {"type": "string", "default": "800-1200", "guidance": "Word range the structure check enforces"},
+    "structure_check": {"type": "sha256", "guidance": "Hash of the script that checks the word range and the four sections, published on Blossom"},
+    "citations_check": {"type": "sha256", "guidance": "Hash of the script that checks every claim is cited and every cited URL resolves"},
+    "similarity_check": {"type": "sha256", "guidance": "Hash of the script that compares the brief against its cited sources for verbatim copying"}
+  },
+  "conditions": [
+    {
+      "id": "c1", "class": "mechanical",
+      "description": "{{words}} words; sections Summary, Obligations, Timeline, Sources present",
+      "check_hash": "{{structure_check}}", "check_ref": "blossom:{{structure_check}}"
+    },
+    {
+      "id": "c2", "class": "mechanical",
+      "description": "Every factual claim carries a citation and every cited URL resolves",
+      "check_hash": "{{citations_check}}", "check_ref": "blossom:{{citations_check}}"
+    },
+    {
+      "id": "c3", "class": "judged",
+      "description": "Accurate, clear for a {{reader}} reader, covers obligations and timeline",
+      "judges": [
+        {"model_id": "qwen2.5", "model_version": "1.5b-instruct-q4_K_M", "prompt_template_hash": "e081952dc83f4e1a23f000ac1cdf6ac2305974ab5f94c50b0213d8cde21daa53", "harness_hash": "20c78f6ce25cdaeb189d6b3b2b29b61bebbb0ddc384f44fd5549f3cfe7d5eb3f", "sampling": {"max_tokens": 300, "seed": 7, "temperature": 0.0}},
+        {"model_id": "llama3.2", "model_version": "1b-instruct-q8_0", "prompt_template_hash": "e081952dc83f4e1a23f000ac1cdf6ac2305974ab5f94c50b0213d8cde21daa53", "harness_hash": "20c78f6ce25cdaeb189d6b3b2b29b61bebbb0ddc384f44fd5549f3cfe7d5eb3f", "sampling": {"max_tokens": 300, "seed": 7, "temperature": 0.0}}
+      ],
+      "rubric_hash": "532f1c291b537866d721062ab760d021d4ca78aa61a8c5ed2b22974895438c13",
+      "rubric_ref": "blossom:532f1c291b537866d721062ab760d021d4ca78aa61a8c5ed2b22974895438c13",
+      "scale": {"min": 0.0, "max": 10.0},
+      "threshold": 8.0,
+      "aggregation": "all",
+      "repeats": 3,
+      "runners": ["{{checker}}"]
+    }
+  ],
+  "disqualifiers": [
+    {
+      "id": "d1", "class": "judged",
+      "description": "A citation does not support the claim it is attached to, or the cited source does not exist",
+      "judges": [
+        {"model_id": "qwen2.5", "model_version": "1.5b-instruct-q4_K_M", "prompt_template_hash": "e081952dc83f4e1a23f000ac1cdf6ac2305974ab5f94c50b0213d8cde21daa53", "harness_hash": "20c78f6ce25cdaeb189d6b3b2b29b61bebbb0ddc384f44fd5549f3cfe7d5eb3f", "sampling": {"max_tokens": 300, "seed": 7, "temperature": 0.0}},
+        {"model_id": "llama3.2", "model_version": "1b-instruct-q8_0", "prompt_template_hash": "e081952dc83f4e1a23f000ac1cdf6ac2305974ab5f94c50b0213d8cde21daa53", "harness_hash": "20c78f6ce25cdaeb189d6b3b2b29b61bebbb0ddc384f44fd5549f3cfe7d5eb3f", "sampling": {"max_tokens": 300, "seed": 7, "temperature": 0.0}}
+      ],
+      "rubric_hash": "54205b8bad17c5341d2fad86a2744cf8cfd192c9da84367e39219006da07e7ec",
+      "rubric_ref": "blossom:54205b8bad17c5341d2fad86a2744cf8cfd192c9da84367e39219006da07e7ec",
+      "scale": {"min": 0.0, "max": 10.0},
+      "threshold": 7.0,
+      "aggregation": "all",
+      "repeats": 3,
+      "runners": ["{{checker}}"]
+    },
+    {
+      "id": "d2", "class": "mechanical",
+      "description": "Reproduces source text verbatim beyond short quotation",
+      "check_hash": "{{similarity_check}}", "check_ref": "blossom:{{similarity_check}}",
+      "runners": ["{{checker}}"]
+    },
+    {
+      "id": "d3", "class": "judged",
+      "description": "Repeats rubric terms without substance to raise the score",
+      "judges": [
+        {"model_id": "qwen2.5", "model_version": "1.5b-instruct-q4_K_M", "prompt_template_hash": "e081952dc83f4e1a23f000ac1cdf6ac2305974ab5f94c50b0213d8cde21daa53", "harness_hash": "20c78f6ce25cdaeb189d6b3b2b29b61bebbb0ddc384f44fd5549f3cfe7d5eb3f", "sampling": {"max_tokens": 300, "seed": 7, "temperature": 0.0}},
+        {"model_id": "llama3.2", "model_version": "1b-instruct-q8_0", "prompt_template_hash": "e081952dc83f4e1a23f000ac1cdf6ac2305974ab5f94c50b0213d8cde21daa53", "harness_hash": "20c78f6ce25cdaeb189d6b3b2b29b61bebbb0ddc384f44fd5549f3cfe7d5eb3f", "sampling": {"max_tokens": 300, "seed": 7, "temperature": 0.0}}
+      ],
+      "rubric_hash": "29219e8b7fadc8d6c4e203f65dbf1f736083617082c65fe3ae39d1f5387165af",
+      "rubric_ref": "blossom:29219e8b7fadc8d6c4e203f65dbf1f736083617082c65fe3ae39d1f5387165af",
+      "scale": {"min": 0.0, "max": 10.0},
+      "threshold": 7.0,
+      "aggregation": "all",
+      "repeats": 3,
+      "runners": ["{{checker}}"]
+    }
+  ]
+}
