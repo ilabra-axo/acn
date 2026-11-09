@@ -67,6 +67,11 @@
         {#if open && (d.check_ref || d.rubric_ref)}<span class="mono ref">{d.check_ref ?? d.rubric_ref}</span>{/if}
       </div>
       {#if open && d.rubric_text}<div class="rubric">Rubric: {d.rubric_text}</div>{/if}
+      {#if d.instances}
+        <div class="pool" title={`Pool root ${d.instances.pool_root}`}>
+          Held-out: {d.instances.sample_size} of {d.instances.pool_size} cases, drawn after delivery from both parties' seeds. Pool: {d.instances.pool_description}. Rule: {d.instances.pool_rule}.
+        </div>
+      {/if}
     {/each}
     {#if !card.done_means.length}<div class="row muted">No conditions: the requester's own judgement.</div>{/if}
   </div>
@@ -136,6 +141,7 @@
   .lbl[data-a="check"], .lbl[data-a="grounded"] { color: var(--ok); }
   .ref { font-size: 10.5px; color: var(--faint); }
   .rubric { font-size: 11.5px; color: var(--muted); padding-left: 29px; font-style: italic; }
+  .pool { font-size: 11.5px; color: var(--muted); padding-left: 29px; }
   .judge { font-size: 10.5px; color: var(--faint); padding-left: 29px; }
   .dq .w { color: var(--danger); }
   .note { font-size: 11px; color: var(--faint); }

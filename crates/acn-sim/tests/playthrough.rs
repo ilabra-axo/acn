@@ -17,8 +17,10 @@ struct World {
     clock: u64,
     escrow: BTreeMap<String, String>,
     secret: [u8; 32],
-    /// Contingent performer keys (the host's job in live and presenter mode).
+    /// The performer's per-commitment secret (the host's job in live and presenter mode).
     keys: BTreeMap<String, String>,
+    /// Requester seeds the runner received (held-out instances).
+    seeds: BTreeMap<String, String>,
 }
 
 impl World {
@@ -48,6 +50,7 @@ impl World {
             escrow: BTreeMap::new(),
             secret: [9; 32],
             keys: BTreeMap::new(),
+            seeds: BTreeMap::new(),
         }
     }
 
@@ -62,12 +65,15 @@ impl World {
         let info = scenario(id).unwrap();
         let t = template(id, &self.cast).unwrap();
         let h = acn_core::jcs::sha256_hex(&self.secret);
+        let seed = [0x5e; 32];
+        let seed_hash = acn_core::jcs::sha256_hex(&seed);
         let terms = instantiate(
             &t,
             id,
             json!({"brief": "the demo"}),
             self.clock,
             t.hashlock.then_some(h.as_str()),
+            Some(&seed_hash),
         )
         .unwrap();
         let d = Draft::request(self.cast.key(info.actor), &t.profile, &terms, None).unwrap();
@@ -79,8 +85,11 @@ impl World {
         if holder && t.hashlock {
             self.escrow.insert(r.id.clone(), hex(&self.secret));
         }
-        if t.terms["settlement_trigger"] == "contingent" {
-            self.keys.insert(r.id.clone(), hex(&[0x6b; 32]));
+        // The performer host keeps one secret per commitment (`k` when contingent).
+        self.keys.insert(r.id.clone(), hex(&[0x6b; 32]));
+        // The requester gives its seed to the runner (a NIP-44 `seed` tag in the live host).
+        if t.requester_seed_to.is_some() {
+            self.seeds.insert(r.id.clone(), hex(&seed));
         }
         r.id
     }
@@ -89,7 +98,14 @@ impl World {
     fn play(&mut self, c: &str) -> Vec<String> {
         let mut narration = vec![];
         for _ in 0..40 {
-            let moves = react_with(&self.cast, &self.events, &self.escrow, None, &self.keys);
+            let moves = react_with(
+                &self.cast,
+                &self.events,
+                &self.escrow,
+                None,
+                &self.keys,
+                &self.seeds,
+            );
             if !moves.is_empty() {
                 for m in moves {
                     narration.push(m.narration.clone());
@@ -217,6 +233,23 @@ fn scenario_outcomes() {
     assert!(codes(&p).contains(&"disqualified"));
     assert_eq!(p.rework_count, 0, "breach: no rework");
 
+    // CR-003 Phase B: the runner attests the sample both seeds select; it counts.
+    let p = run("held-out");
+    assert_eq!(
+        p.phase,
+        Some(Phase::Satisfied),
+        "{:?} {:?}",
+        acts(&p),
+        codes(&p)
+    );
+    assert!(codes(&p).iter().all(|c| *c == "unbound"), "{:?}", codes(&p));
+    let card = p.terms_card.as_ref().unwrap();
+    let i = card.done_means[0]
+        .instances
+        .as_ref()
+        .expect("pool shown on the card");
+    assert_eq!((i.pool_size, i.sample_size), (20, 5));
+
     let p = run("rogue");
     assert_eq!(p.phase, Some(Phase::Declined));
     assert!(codes(&p).contains(&"equivocation"));
@@ -280,7 +313,7 @@ fn lanes(id: &str) -> Vec<(acn_view::Lane, Option<acn_view::Role>)> {
     };
     note(&w);
     for _ in 0..40 {
-        let moves = react_with(&w.cast, &w.events, &w.escrow, None, &w.keys);
+        let moves = react_with(&w.cast, &w.events, &w.escrow, None, &w.keys, &w.seeds);
         if !moves.is_empty() {
             for m in moves {
                 if let Some(e) = &m.escrow {

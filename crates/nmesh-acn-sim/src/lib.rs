@@ -97,8 +97,11 @@ struct Store {
     /// commitment -> decrypted Cashu token addressed to Atlas
     tokens: Mutex<HashMap<String, String>>,
     redeemed: Mutex<HashSet<String>>,
-    /// Contingent (Core.md §8.2): Atlas's delivery key `k` per commitment.
+    /// Atlas's secret per commitment: the delivery key `k` when contingent (Core.md §8.2), and
+    /// what its performer seed for held-out instances is derived from.
     keys: Mutex<BTreeMap<String, String>>,
+    /// Requester seeds the runner decrypted from a REQUEST's `seed` tag (CR-003 §2.3).
+    seeds: Mutex<BTreeMap<String, String>>,
 }
 
 impl Store {
@@ -424,13 +427,25 @@ impl Sim {
                     Err(err) => tracing::warn!(error = %err, "escrow could not be decrypted"),
                 }
             }
-            if self.sessions[&Actor::Performer].public_key().to_hex() == p_tag(&e) {
-                let content: Value = serde_json::from_str(&e.content).unwrap_or_default();
-                if content["terms"]["settlement_trigger"] == "contingent" {
-                    // Atlas's delivery key; H = sha256(k) goes in the offer.
-                    let k = Keys::generate().secret_key().to_secret_hex();
-                    self.store.keys.lock().unwrap().insert(e.id.clone(), k);
+            // The requester's seed for held-out instances, for the runner it names.
+            if let Some(t) = e.tags.iter().find(|t| t[0] == "seed" && t.len() > 2) {
+                if let Some(runner) = self.actor_of(&t[2]) {
+                    let keys = self.sessions[&runner].keys();
+                    match nostr_sdk::nips::nip44::decrypt(keys.secret_key(), &sender, &t[1]) {
+                        Ok(s) => {
+                            self.store.seeds.lock().unwrap().insert(e.id.clone(), s);
+                        }
+                        Err(err) => {
+                            tracing::warn!(error = %err, "requester seed could not be decrypted")
+                        }
+                    }
                 }
+            }
+            if self.sessions[&Actor::Performer].public_key().to_hex() == p_tag(&e) {
+                // Atlas's per-commitment secret: `k` when contingent (H = sha256(k) goes in the
+                // offer); its seed for held-out instances is derived from it.
+                let k = Keys::generate().secret_key().to_secret_hex();
+                self.store.keys.lock().unwrap().insert(e.id.clone(), k);
                 self.check_payment(&e, sender).await;
             }
         }
@@ -604,7 +619,8 @@ impl Sim {
         let payments = self.store.payments.lock().unwrap().clone();
         self.maybe_redeem(c, &events);
         let keys = self.store.keys.lock().unwrap().clone();
-        for m in acn_sim::react_with(&self.cast, &events, &escrow, Some(&payments), &keys) {
+        let seeds = self.store.seeds.lock().unwrap().clone();
+        for m in acn_sim::react_with(&self.cast, &events, &escrow, Some(&payments), &keys, &seeds) {
             // CLAIM only once the FUND token is verified (and redeem it with k first).
             if m.draft.kind == K_CLAIM && !self.store.tokens.lock().unwrap().contains_key(c) {
                 continue;

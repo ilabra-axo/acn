@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 
 mod terms_card;
 pub use terms_card::{
-    CheckedBy, DiffKind, DiffLine, DisqualifierItem, DoneItem, PayIf, TermsCard, TermsVersionView,
+    CheckedBy, DiffKind, DiffLine, DisqualifierItem, DoneItem, InstancesView, PayIf, TermsCard,
+    TermsVersionView,
 };
 
 use acn_core::kinds::*;
@@ -418,7 +419,18 @@ fn summary(e: &Event) -> String {
             } else {
                 format!(" ({method})")
             };
-            format!("{}: {}{m}", tag(e, "cond").unwrap_or("?"), s(&v, "result"))
+            let sampled = match v["instances"].as_array() {
+                Some(a) => {
+                    let idx: Vec<String> = a.iter().map(|x| x["index"].to_string()).collect();
+                    format!(" · held-out cases {} with proofs", idx.join(", "))
+                }
+                None => String::new(),
+            };
+            format!(
+                "{}: {}{m}{sampled}",
+                tag(e, "cond").unwrap_or("?"),
+                s(&v, "result")
+            )
         }
         K_ATTEST_JUDGED => {
             let judges: Vec<String> = v["judges"]

@@ -107,12 +107,26 @@ pub fn invoke(req: &str) -> Result<Value, String> {
             let now: u64 = arg(&r, "now")?;
             let performer: String = arg(&r, "performer")?;
             let hashlock: Option<String> = arg(&r, "hashlock")?;
+            // Held-out instances: sha256 of the requester's seed (the host keeps the seed).
+            let seed_hash: Option<String> = arg(&r, "requester_seed_hash").unwrap_or_default();
             let input = r.get("input").cloned().unwrap_or(json!({}));
-            let terms = instantiate(&t, &tool, input, now, hashlock.as_deref())?;
+            let terms = instantiate(
+                &t,
+                &tool,
+                input,
+                now,
+                hashlock.as_deref(),
+                seed_hash.as_deref(),
+            )?;
             let mut d =
                 Draft::request(&performer, &t.profile, &terms, None).map_err(|e| e.to_string())?;
             if let Some(escrow) = r.get("escrow").and_then(Value::as_str) {
                 d = d.tag(vec!["escrow".into(), escrow.into()]);
+            }
+            if let (Some(seed), Some(to)) =
+                (r.get("seed").and_then(Value::as_str), &t.requester_seed_to)
+            {
+                d = d.tag(vec!["seed".into(), seed.into(), to.clone()]);
             }
             ser(&d)
         }
@@ -122,6 +136,8 @@ pub fn invoke(req: &str) -> Result<Value, String> {
             let escrow: BTreeMap<String, String> = arg(&r, "escrow").unwrap_or_default();
             // Contingent performer keys `k` by commitment (the host generates them).
             let keys: BTreeMap<String, String> = arg(&r, "keys").unwrap_or_default();
+            // Requester seeds the runner holds (held-out instances).
+            let seeds: BTreeMap<String, String> = arg(&r, "seeds").unwrap_or_default();
             let payments: Option<BTreeMap<String, PaymentCheck>> =
                 match r.get("payments").filter(|p| !p.is_null()) {
                     Some(_) => Some(arg(&r, "payments")?),
@@ -133,6 +149,7 @@ pub fn invoke(req: &str) -> Result<Value, String> {
                 &escrow,
                 payments.as_ref(),
                 &keys,
+                &seeds,
             ))
         }
 
