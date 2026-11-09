@@ -62,6 +62,10 @@ pub enum Code {
     Disqualified,
     UnsupportedDisqualification,
     UnclosedCondition,
+    // Held-out instances (CR-003 Phase B).
+    SeedMismatch,
+    SeedWithheld,
+    InstanceMismatch,
 }
 
 impl Code {
@@ -107,6 +111,9 @@ impl Code {
         Code::Disqualified,
         Code::UnsupportedDisqualification,
         Code::UnclosedCondition,
+        Code::SeedMismatch,
+        Code::SeedWithheld,
+        Code::InstanceMismatch,
     ];
 
     pub fn severity(self) -> Severity {
@@ -177,6 +184,9 @@ impl Code {
             Disqualified => "disqualified",
             UnsupportedDisqualification => "unsupported_disqualification",
             UnclosedCondition => "unclosed_condition",
+            SeedMismatch => "seed_mismatch",
+            SeedWithheld => "seed_withheld",
+            InstanceMismatch => "instance_mismatch",
         }
     }
 }

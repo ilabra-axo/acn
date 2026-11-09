@@ -58,6 +58,8 @@ pub struct Pending {
     pub terms: String,
     /// The countering party.
     pub by: String,
+    /// A performer's counter commits its seed for held-out instances (CR-003 §2.3).
+    pub seed_hash: Option<String>,
 }
 
 /// Commitment state as a record (spec §6.1).
@@ -80,6 +82,10 @@ pub struct State {
     pub offer_hashlock: Option<String>,
     /// Contingent: locktime of the FUND payment (the claim deadline).
     pub fund_locktime: Option<u64>,
+    /// Held-out instances: the performer's seed hash, committed by the act that bound it, and the
+    /// seed its REPORT revealed (CR-003 §2.3).
+    pub performer_seed_hash: Option<String>,
+    pub performer_seed: Option<String>,
     pub head: String,
     pub head_at: u64,
 }
@@ -478,6 +484,8 @@ impl<'a, 'e> Ctx<'a, 'e> {
             ciphertext: None,
             offer_hashlock: None,
             fund_locktime: None,
+            performer_seed_hash: None,
+            performer_seed: None,
             head: req.id().to_string(),
             head_at: req.at(),
         };
@@ -835,6 +843,9 @@ impl<'a, 'e> Ctx<'a, 'e> {
             );
             return;
         }
+        if !instances_ok(acc, self.req.id(), condition, snap, p) {
+            return;
+        }
         if condition.class == ConditionClass::Judged {
             let Some(verdict) = self.judged_evidence(acc, run, condition, report, p, false) else {
                 return;
@@ -943,6 +954,9 @@ impl<'a, 'e> Ctx<'a, 'e> {
             return;
         }
         if !contingent_bound(acc, t, snap, p) {
+            return;
+        }
+        if !instances_ok(acc, self.req.id(), &d.as_condition(), snap, p) {
             return;
         }
         let verdict = if d.class == ConditionClass::Judged {
@@ -1314,9 +1328,16 @@ impl<'a, 'e> Ctx<'a, 'e> {
                     ));
                 }
                 run.terms[&h].settlement_combo()?;
+                // A performer's counter binds it once accepted, so it commits its seed here.
+                let seed_hash = if is_perf && run.terms[&h].has_instances() {
+                    Some(seed_commitment(k)?)
+                } else {
+                    None
+                };
                 next.pending = Some(Pending {
                     terms: h,
                     by: by.into(),
+                    seed_hash,
                 });
                 if !st.promised {
                     next.phase = Countered;
@@ -1345,6 +1366,14 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 if let Some(t) = run.terms.get(&pending.terms) {
                     require_closed(t)?;
                     self.require_escrow(t)?;
+                    // The performer binds by this ACCEPT, or bound in the counter it accepts.
+                    if t.has_instances() {
+                        next.performer_seed_hash = if is_perf {
+                            Some(seed_commitment(k)?)
+                        } else {
+                            pending.seed_hash.clone()
+                        };
+                    }
                 }
                 next.terms = pending.terms.clone();
                 next.pending = None;
@@ -1366,6 +1395,9 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 }
                 require_closed(terms)?;
                 self.require_escrow(terms)?;
+                if terms.has_instances() {
+                    next.performer_seed_hash = Some(seed_commitment(k)?);
+                }
                 next.promised = true;
                 next.phase = Promised;
             }
@@ -1412,6 +1444,33 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 if st.phase == Requested {
                     require_closed(terms)?;
                     self.require_escrow(terms)?;
+                }
+                // Held-out instances: the REPORT reveals the performer's seed (CR-003 §2.3). In
+                // T1 the REPORT is also the binding act, so the seed commits itself.
+                if terms.has_instances() {
+                    let Some(seed) = k.str_field("performer_seed").filter(|s| is_sha256_hex(s))
+                    else {
+                        return Err((
+                            Code::SeedWithheld,
+                            "the terms declare held-out instances: the REPORT must reveal `performer_seed` (32-byte hex)".into(),
+                        ));
+                    };
+                    let seed = seed.to_ascii_lowercase();
+                    let h = hex::decode(&seed)
+                        .map(|b| jcs::sha256_hex(&b))
+                        .unwrap_or_default();
+                    match &st.performer_seed_hash {
+                        Some(want) if *want != h => {
+                            return Err((
+                                Code::SeedMismatch,
+                                "performer_seed does not hash to the committed performer_seed_hash"
+                                    .into(),
+                            ))
+                        }
+                        Some(_) => {}
+                        None => next.performer_seed_hash = Some(h),
+                    }
+                    next.performer_seed = Some(seed);
                 }
                 if k.at() > terms.deadline {
                     flags.push((Code::Late, "REPORT after the terms deadline".into()));
@@ -1666,6 +1725,110 @@ impl<'a, 'e> Ctx<'a, 'e> {
 
 fn is_sha256_hex(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// The `performer_seed_hash` a binding act must carry when the terms declare instances. Missing
+/// is `malformed`, like a missing preimage (V-10).
+fn seed_commitment(k: &Parsed) -> Result<String, (Code, String)> {
+    k.str_field("performer_seed_hash")
+        .filter(|h| is_sha256_hex(h))
+        .map(str::to_ascii_lowercase)
+        .ok_or((
+            Code::Malformed,
+            "the terms declare held-out instances: the binding act must commit `performer_seed_hash`".into(),
+        ))
+}
+
+/// V-27 (CR-003 §2.3): an attestation on an item with instances reveals the requester's seed
+/// and exactly the derived sample, each item with an RFC 6962 proof against `pool_root`.
+fn instances_ok(
+    acc: &mut Acc,
+    commitment: &str,
+    item: &crate::terms::Condition,
+    snap: &State,
+    p: &Parsed,
+) -> bool {
+    use crate::instances as ins;
+    let Some(i) = crate::terms::instances_of(item) else {
+        return true;
+    };
+    let rs = p.str_field("requester_seed").and_then(ins::from_hex);
+    if rs.is_none_or(|s| jcs::sha256_hex(&s) != i.requester_seed_hash) {
+        acc.push(
+            p.id(),
+            Code::SeedMismatch,
+            format!(
+                "`{}`: requester_seed missing or not matching requester_seed_hash",
+                item.id
+            ),
+        );
+        return false;
+    }
+    let (Some(rs), Some(ps), Some(cid), Some(root)) = (
+        rs,
+        snap.performer_seed.as_deref().and_then(ins::from_hex),
+        ins::from_hex(commitment),
+        ins::from_hex(&i.pool_root),
+    ) else {
+        acc.push(
+            p.id(),
+            Code::InstanceMismatch,
+            "no revealed performer seed to derive the sample from",
+        );
+        return false;
+    };
+    let mut want = ins::sample(&rs, &ps, &cid, i.pool_size, i.sample_size);
+    want.sort_unstable();
+    let given = p.content["instances"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let mut got: Vec<u32> = given
+        .iter()
+        .filter_map(|x| x["index"].as_u64())
+        .map(|x| x as u32)
+        .collect();
+    got.sort_unstable();
+    if got != want || got.len() != given.len() {
+        acc.push(
+            p.id(),
+            Code::InstanceMismatch,
+            format!(
+                "`{}`: the sampled indices do not follow from both seeds (want {want:?})",
+                item.id
+            ),
+        );
+        return false;
+    }
+    for x in &given {
+        let path: Option<Vec<ins::Hash>> = x["proof"].as_array().and_then(|a| {
+            a.iter()
+                .map(|h| h.as_str().and_then(ins::from_hex))
+                .collect()
+        });
+        let leaf = ins::leaf_hash(&ins::item_bytes(&x["item"]));
+        let ok = path.is_some_and(|path| {
+            ins::verify(
+                x["index"].as_u64().unwrap_or(u64::MAX),
+                i.pool_size as u64,
+                &leaf,
+                &path,
+                &root,
+            )
+        });
+        if !ok {
+            acc.push(
+                p.id(),
+                Code::InstanceMismatch,
+                format!(
+                    "`{}`: instance {} does not prove against pool_root",
+                    item.id, x["index"]
+                ),
+            );
+            return false;
+        }
+    }
+    true
 }
 
 /// CR-003 §2.4: underspecified requests are allowed; underspecified promises are not.

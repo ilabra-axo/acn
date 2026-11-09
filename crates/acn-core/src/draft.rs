@@ -51,6 +51,16 @@ impl Draft {
         self
     }
 
+    /// Set one field of the JSON content (e.g. `performer_seed_hash` on a binding act).
+    pub fn field(mut self, key: &str, v: Value) -> Self {
+        let mut c: Value = serde_json::from_str(&self.content).unwrap_or_else(|_| json!({}));
+        if let Some(o) = c.as_object_mut() {
+            o.insert(key.into(), v);
+        }
+        self.content = c.to_string();
+        self
+    }
+
     /// Commitment id, `prev` and counterparties: the envelope of every non-root act.
     pub fn act(kind: u16, commitment: &str, prev: &str, parties: &[&str]) -> Self {
         let mut d = Self::new(kind).tag(t("c", commitment)).tag(vec![

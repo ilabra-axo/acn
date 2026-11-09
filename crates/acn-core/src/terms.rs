@@ -68,7 +68,48 @@ pub struct Disqualifier {
 }
 
 /// Fields a `mechanical` disqualifier may carry besides `id`, `class` and `description`.
-const MECHANICAL_DISQUALIFIER_FIELDS: &[&str] = &["runners", "check_hash", "check_ref"];
+const MECHANICAL_DISQUALIFIER_FIELDS: &[&str] =
+    &["runners", "check_hash", "check_ref", "instances"];
+
+/// Held-out instances (spec §7, CR-003 §2.3): the criteria are public, but which cases from a
+/// fixed pool get tested is drawn from two seeds after delivery. The pool's description and rule
+/// are criteria (INV-14); its contents are not.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Instances {
+    /// Public: what kind of cases the pool holds.
+    pub pool_description: String,
+    /// Public: how the pool was generated or curated.
+    pub pool_rule: String,
+    /// RFC 6962 Merkle root over the pool items (`instances` module).
+    pub pool_root: String,
+    pub pool_size: u32,
+    pub sample_size: u32,
+    /// sha256 of the requester's 32-byte seed, committed in this terms version.
+    pub requester_seed_hash: String,
+}
+
+impl Instances {
+    fn check(&self, id: &str) -> Result<(), String> {
+        let bad = |m: &str| Err(format!("`{id}` instances: {m}"));
+        if !is_sha256(&self.pool_root) || !is_sha256(&self.requester_seed_hash) {
+            return bad("pool_root and requester_seed_hash must be lowercase sha256 hex");
+        }
+        if self.pool_size == 0 || self.sample_size == 0 || self.sample_size > self.pool_size {
+            return bad("need 1 ≤ sample_size ≤ pool_size");
+        }
+        Ok(())
+    }
+}
+
+/// A condition's or disqualifier's `instances`, if it declares any (for `judged`, inside the
+/// judged fields; otherwise a class field).
+pub fn instances_of(c: &Condition) -> Option<Instances> {
+    if c.class == ConditionClass::Judged {
+        return c.judged().ok()?.instances;
+    }
+    serde_json::from_value(c.extra.get("instances")?.clone()).ok()
+}
 
 /// What an attestation says about a disqualifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,9 +171,6 @@ impl Disqualifier {
             if self.extra.contains_key(f) {
                 return bad(&format!("`{f}`: commitments are atomic, so a disqualifier is checked before settlement and nothing is held back after it"));
             }
-        }
-        if self.extra.contains_key("instances") {
-            return bad("instances arrive with CR-003 Phase B");
         }
         if self.class == ConditionClass::Mechanical {
             if let Some(f) = self
@@ -278,6 +316,9 @@ pub struct Judged {
     pub repeats: u32,
     /// Keys allowed to run the judges and sign `K_ATTEST_JUDGED`. MUST NOT include the performer.
     pub runners: Vec<String>,
+    /// Held-out instances the judges score (CR-003 §2.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instances: Option<Instances>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -449,7 +490,19 @@ impl Terms {
                         format!("`{}`: rubric_text does not hash to rubric_hash", c.id),
                     ));
                 }
-            } else if Self::check_hidden(c) {
+            }
+            if let Some(i) = instances_of(c) {
+                if i.pool_description.trim().is_empty() || i.pool_rule.trim().is_empty() {
+                    return Err((
+                        Code::HiddenCriteria,
+                        format!(
+                            "`{}`: an instance pool needs a public description and rule",
+                            c.id
+                        ),
+                    ));
+                }
+            }
+            if c.class != ConditionClass::Judged && Self::check_hidden(c) {
                 return Err((
                     Code::HiddenCriteria,
                     format!(
@@ -512,6 +565,36 @@ impl Terms {
         for d in &t.disqualifiers {
             d.check()?;
         }
+        // Instances: well-formed, only where something can test them, and never reused across a
+        // rework round (the first attestation reveals the requester's seed and the sample, so a
+        // rework would be graded on known cases; a retry is a new commitment with new seeds).
+        let disq: Vec<Condition> = t
+            .disqualifiers
+            .iter()
+            .map(Disqualifier::as_condition)
+            .collect();
+        for c in t.conditions.iter().chain(&disq) {
+            let declared = c.extra.contains_key("instances");
+            if declared && !matches!(c.class, ConditionClass::Mechanical | ConditionClass::Judged) {
+                return Err(format!(
+                    "`{}`: only mechanical and judged items take instances",
+                    c.id
+                ));
+            }
+            if c.class == ConditionClass::Mechanical && declared {
+                let i: Instances = serde_json::from_value(c.extra["instances"].clone())
+                    .map_err(|e| format!("`{}` instances: {e}", c.id))?;
+                i.check(&c.id)?;
+            }
+            if c.class == ConditionClass::Judged {
+                if let Some(i) = c.judged()?.instances {
+                    i.check(&c.id)?;
+                }
+            }
+        }
+        if t.has_instances() && t.rework_limit > 0 {
+            return Err("held-out instances need rework_limit 0: a rework would be graded on cases the first attestation revealed".into());
+        }
         for c in t
             .conditions
             .iter()
@@ -528,6 +611,16 @@ impl Terms {
 
     pub fn disqualifier(&self, id: &str) -> Option<&Disqualifier> {
         self.disqualifiers.iter().find(|d| d.id == id)
+    }
+
+    /// Any condition or disqualifier declares held-out instances (the performer then commits a
+    /// seed when it binds, and reveals it in its REPORT).
+    pub fn has_instances(&self) -> bool {
+        self.conditions.iter().any(|c| instances_of(c).is_some())
+            || self
+                .disqualifiers
+                .iter()
+                .any(|d| instances_of(&d.as_condition()).is_some())
     }
 
     /// Overall assurance: the weakest condition's label. With no conditions, closure rests on
