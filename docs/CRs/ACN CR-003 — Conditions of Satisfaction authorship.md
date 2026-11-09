@@ -7,12 +7,13 @@ Nov 8, 2026 · @ivan Labra
 > [Core.md](../Core.md) (v0.5), and where they differ, Core.md wins. Record: Core.md Appendix B,
 > rows "CR-003".
 >
-> - **Corrected:** this CR assumed CR-001's holdback and audit windows, which were dropped
->   (commitments are atomic). So disqualifiers have no `window`: they are checked before
->   settlement, and `until_audit_end` and "a hit during the audit window" (§2.2) don't exist.
->   Vector C-8 is replaced (an audit window is `malformed`); §2.7's "split, holdback" are not on
->   the card. The §4 template examples still carry `audit`, `holdback` and `window` and must be
->   corrected in Phase C.
+> - **Corrected in this text (Nov 9):** as first written, this CR assumed CR-001's holdback and
+>   audit windows, which were dropped: commitments are atomic, and nothing is held back or
+>   audited after settlement. The disqualifier `window` field (`until_satisfy` /
+>   `until_audit_end`), the audit-window effects, the holdback in the card, the L9 lint rule and
+>   the `audit` / `holdback` / `window` lines of the §4 templates have been removed below, and
+>   vector C-8 rewritten. A disqualifier is checked before settlement; an audit is a condition
+>   of the same commitment.
 > - **Changed by decision:** terms versions, `prev` and `drafted_by` are derived from the signed
 >   chain, not terms fields. A disqualifier hit makes `REJECT` legal under every trigger, and
 >   while it stands any `REJECT` ends Rejected without rework; the requester's silence after a
@@ -103,7 +104,7 @@ Seven changes, each naming the part of the spec it modifies. Together they make 
 - `rubric_disclosure` is removed. Terms carry `rubric_hash` plus `rubric_ref`, a retrievable reference (Blossom) to the rubric text. Terms that declare `commit_reveal` or omit `rubric_ref` are rejected with `hidden_criteria`.
 - Mechanical checks referenced only by hash also get a retrievable reference. A check definition the performer cannot fetch is a hidden criterion.
 - Judged-evidence check 4 becomes: the rubric text at `rubric_ref` hashes to `rubric_hash`. Code `rubric_mismatch` is kept.
-- Threat "Judge hill-climbing": mitigation becomes held-out instances (2.3), judge ensembles across model families, audits with holdback, and a disqualifier for rubric-term stuffing.
+- Threat "Judge hill-climbing": mitigation becomes held-out instances (2.3), judge ensembles across model families, audit conditions of a stronger class, and a disqualifier for rubric-term stuffing.
 - Vector J-5 becomes: terms declare `commit_reveal`; expected: rejected, `hidden_criteria`.
 - CR-001 demo 3.1 uses a public rubric. CR-001 OD-3 (rubric reveal timing) is closed by this change.
 
@@ -119,15 +120,15 @@ A disqualifier is a public predicate about the deliverable or the way it was pro
 | `statement` | string | The disqualifying act in plain language, e.g. "modifies or deletes existing tests" |
 | `class` | enum | `mechanical`, `judged` or `human`; the same fields as a condition of that class (runners, judges, rubric, declarer) |
 | `instances` | object or null | Optional sampling, as in 2.3, e.g. citations sampled for source verification |
-| `window` | enum | `until_satisfy` or `until_audit_end` (the latter requires CR-001 `holdback`) |
+
+A disqualifier is checked before the commitment settles; commitments are atomic, so there is no window after settlement.
 
 **Attestation.** A disqualifier is checked with the attestation kind of its class, referencing the disqualifier id, with `result` of `hit` or `clear`. Only keys named in the disqualifier may sign it; any other signer gives `unsupported_disqualification`, recorded on the signer.
 
 **Effects.**
 
 - A hit before SATISFY: the requester MUST NOT issue SATISFY, auto-satisfy is blocked, and the commitment takes the spec's performer-breach path. Code `disqualified` is recorded on the performer with the disqualifier id.
-- A hit during the audit window: settled main payment stands (tokens are not clawed back), the holdback refunds at locktime, and `disqualified` is recorded.
-- Withholding payment on an attested `clear` result, or on no attestation, is a requester fault, as for CR-001 holdback.
+- Withholding payment on an attested `clear` result, or on no attestation, is a requester fault, as for any review lapse.
 - Reputation projections SHOULD weight `disqualified` as breach and `below_threshold` as a quality miss; the codes are distinct for this reason.
 
 **Assurance.** Disqualifiers carry their own derived assurance label, displayed beside the commitment's label. They do not enter the commitment's overall label, which still describes how satisfaction is established.
@@ -189,7 +190,7 @@ Templates exist so that a track record (pass rate, dispute rate, audit agreement
 | --- | --- | --- | --- |
 | `hidden_criteria` | Terms carry a criterion the performer cannot fetch (2.1) | Terms author | Terms version rejected |
 | `unclosed_condition` | PROMISE or ACCEPT against an open or incomplete condition or disqualifier (2.4) | Signer | Act not counted |
-| `disqualified` | A valid `hit` attestation for a disqualifier (2.2) | Performer | Commitment fails or holdback refunds |
+| `disqualified` | A valid `hit` attestation for a disqualifier (2.2) | Performer | Commitment fails |
 | `unsupported_disqualification` | Disqualifier attestation signed by an unlisted key (2.2) | Signer | Attestation not counted |
 | `seed_mismatch` | A revealed seed does not match its hash (2.3) | Revealing party | Attestation or REPORT not counted |
 | `seed_withheld` | REPORT omits the performer seed when instances are declared (2.3) | Performer | REPORT incomplete |
@@ -200,7 +201,7 @@ Templates exist so that a track record (pass rate, dispute rate, audit agreement
 
 **Target:** the clients and projections section; the adversarial-cases table.
 
-Before PROMISE, ACCEPT or SATISFY, clients MUST show the terms version as a card with four parts: **Done means** (each condition in plain language, with class and assurance label), **Checked by** (runners, judges with fingerprints, declarers), **Pay if** (price, split, holdback, settlement trigger), and **Disqualified if** (each disqualifier with its label). They MUST also show who drafted the version and a diff against the previous version. For instance pools they show the description, rule and sample size, never the contents.
+Before PROMISE, ACCEPT or SATISFY, clients MUST show the terms version as a card with four parts: **Done means** (each condition in plain language, with class and assurance label), **Checked by** (runners, judges with fingerprints, declarers), **Pay if** (price and settlement trigger), and **Disqualified if** (each disqualifier with its label). They MUST also show who drafted the version and a diff against the previous version. For instance pools they show the description, rule and sample size, never the contents.
 
 Add to the adversarial-cases table:
 
@@ -234,7 +235,6 @@ Core validates terms; it never helps write them. The aids below belong in the re
 | L6 | Warning | A `judged` condition has no paired disqualifier for its most obvious gaming route |
 | L7 | Warning | A single judge, or all judges from one model family, at a price above a configured threshold |
 | L8 | Warning | A `judged` condition with no instances, references or counterexamples, so it is open to overfitting |
-| L9 | Warning | Holdback is absent while a disqualifier uses `until_audit_end` |
 
 L4 to L6 carry the main best-practice rules from section 4, so the guidance is enforced at the point of authoring rather than read once in the docs.
 
@@ -250,7 +250,7 @@ This section goes into the docs as `docs/acn/cos-templates.md`. The two examples
 4. **Give the judge examples.** A reference and a counterexample make a rubric concrete, and they are the easiest thing for a non-technical requester to supply.
 5. **Use deterministic checks wherever they exist.** Judged conditions cover what checks cannot, and they carry the `opinion` label.
 6. **Use ensembles across model families once the price matters**, with aggregation `all` for strict work.
-7. **Split payment by certainty.** Mechanical checks release fast; judged and audited checks release later through holdback.
+7. **Put certainty in the conditions, not in the timing.** Commitments are atomic: what needs a stronger check (an audit) is a condition of the same commitment, checked before it settles; what can only be checked later belongs in a later commitment.
 8. **Let the performer draft, then read the diff.** The performer knows what can be verified; the requester decides what it will accept.
 9. **Prefer a template with a record over a fresh definition.** Override slots, not structure.
 
@@ -294,21 +294,15 @@ disqualifiers:
   - id: d1
     class: mechanical
     statement: "Modifies or deletes existing tests or their assertions"
-    window: until_satisfy
   - id: d2
     class: judged
     statement: "Hardcodes outputs or special-cases test inputs"
-    window: until_audit_end
   - id: d3
     class: mechanical
     statement: "Touches files outside {{scope_paths}} without flagging it in REPORT"
-    window: until_satisfy
   - id: d4
     class: mechanical
     statement: "Adds dependencies not listed in the terms"
-    window: until_satisfy
-audit: { rate: 0.1, auditors: [human_reviewer], window: 7d }
-holdback: { fraction: 0.2 }
 price: "{{price}}"
 deadline: "{{deadline}}"
 ```
@@ -354,17 +348,12 @@ disqualifiers:
       pool_description: "The brief's own citations"
       pool_rule: "All citations in the delivered brief, in order of appearance"
       sample_size: 5
-    window: until_audit_end
   - id: d2
     class: mechanical
     statement: "Reproduces source text verbatim beyond short quotation"
-    window: until_satisfy
   - id: d3
     class: judged
     statement: "Repeats rubric terms without substance to raise the score"
-    window: until_satisfy
-audit: { rate: 0.2, auditors: [domain_expert], window: 14d }
-holdback: { fraction: 0.5 }
 price: "{{price}}"
 ```
 
@@ -382,7 +371,7 @@ A requester commissions a retry-with-backoff change to a relay client for 20,000
 4. The requester's card shows v2 drafted by the performer, with the diff against v1. The requester accepts; the commitment binds.
 5. The performer delivers and signs REPORT with the artifact hash and its seed.
 6. The requester's binding runs the checks. Five of twenty held-out integration tests are sampled from both seeds and pass. Both judges score at least 7 on three runs each. All disqualifiers are clear.
-7. Auto-SATISFY releases 16,000 sat. After the 7-day audit window, unsampled, the binding releases the 4,000 sat holdback.
+7. Auto-SATISFY releases the 20,000 sat. The commitment is closed; nothing is held back.
 
 A second run has the performer loosen one existing assertion. Every condition passes, `d1` is attested as hit, auto-satisfy is blocked, and `disqualified` is recorded. The point for the audience is that a breach of stated terms and a low score are different events with different consequences.
 
@@ -397,7 +386,7 @@ A second run has the performer loosen one existing assertion. Every condition pa
 | C-5 | A | Performer COUNTER closes all open conditions; requester accepts | Binds; `drafted_by` is the performer |
 | C-6 | A | Conditions pass; mechanical disqualifier hit before SATISFY | Auto-satisfy blocked; `disqualified`; breach path |
 | C-7 | A | Disqualifier hit signed by an unlisted key; requester withholds | Hit not counted; `unsupported_disqualification`; requester fault |
-| C-8 | A | `until_audit_end` disqualifier hit inside the audit window | Main settlement stands; holdback refunds; `disqualified` |
+| C-8 | A | A disqualifier carries an audit window (`window`) | Terms don't parse; `malformed` (commitments are atomic) |
 | C-9 | A | Commitment uses none of the new fields | Behaves exactly as before CR-003 |
 | C-10 | B | Valid seeds, derivation and Merkle proofs | Attestation counted |
 | C-11 | B | Revealed requester seed does not match its hash | Not counted; `seed_mismatch` |

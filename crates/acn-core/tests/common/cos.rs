@@ -117,8 +117,8 @@ pub fn c7b() -> W {
     d.w
 }
 
-/// C-8 (resolved): an `until_audit_end` disqualifier needs a holdback, which acn-terms doesn't
-/// have; the terms don't parse.
+/// C-8: a disqualifier with an audit window. Commitments are atomic, so nothing is checked after
+/// settlement; the terms don't parse.
 pub fn c8() -> W {
     let mut w = W::default();
     let t = cos_terms(3111, |t| {

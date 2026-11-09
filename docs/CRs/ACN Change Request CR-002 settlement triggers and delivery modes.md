@@ -1,4 +1,4 @@
-# ACN Change Request CR-002: settlement triggers and delivery modes
+# ACN Change Request CR-002: settlement triggers
 
 Nov 8, 2026 · @ivan Labra
 
@@ -6,10 +6,11 @@ Nov 8, 2026 · @ivan Labra
 > written; the normative text is [Core.md](../Core.md) (v0.5), and where they differ, Core.md
 > wins. Record: Core.md Appendix B, rows "CR-002".
 >
-> - **Dropped:** the `delivery` field (`staged`, `encrypted_until_paid`) and staged delivery.
->   Commitments are atomic; a staged job is a sequence of commitments, and the exposure of the
->   deliverable follows from the trigger (encrypted until paid only under `contingent`). Vectors
->   S-2 (reused for another invalid combination) and S-3 (retired).
+> - **Removed from this text (Nov 9):** the `delivery` field (`clear`, `staged`,
+>   `encrypted_until_paid`) and staged delivery, which this CR first proposed (hence the file
+>   name). Commitments are atomic: a staged job is a sequence of commitments, and the exposure of
+>   the deliverable follows from the trigger (encrypted until paid only under `contingent`).
+>   Vector S-2 was rewritten for the remaining invalid combination, S-3 retired, OD-4 closed.
 > - **Deferred until a second value exists:** `fulfillment_proof` (`verifier_attested` is
 >   implied) and `rail` (Cashu is the only rail).
 > - **Renamed:** `VERIFIER_ACK` is the shared `K_ESCROW_ACK`, code `missing_escrow_ack`.
@@ -24,14 +25,14 @@ Nov 8, 2026 · @ivan Labra
 > - **Reference:** `acn-core` (V-18…V-23), `acn-wallet`, `nmesh-wallet`, demo `/judged`,
 >   `/contingent`.
 
-CR-002 separates what a commitment checks from who can trigger payment and when the deliverable is exposed. Two new terms fields, `settlement_trigger` and `delivery`, let a performer insist on zero-trust settlement as policy, without a separate protocol. The requester and verifier triggers and staged delivery can be built now; the contingent trigger is fully specified but gated on a rail capability that a short spike must confirm.
+CR-002 separates what a commitment checks from who can trigger payment and when the deliverable is exposed. A new terms field, `settlement_trigger`, lets a performer insist on zero-trust settlement as policy, without a separate protocol; under the contingent trigger the deliverable stays encrypted until paid. The requester and verifier triggers can be built now; the contingent trigger is fully specified but gated on a rail capability that a short spike must confirm.
 
 ## 1. Agent prompt
 
 Paste the block below into the repo agent with this whole document attached. It applies on top of CR-001.
 
 ```text
-You are applying change request CR-002 (settlement triggers and delivery modes) to ACN.
+You are applying change request CR-002 (settlement triggers) to ACN.
 The repository holds the authoritative ACN spec and reference code, kept in sync.
 CR-002 is attached: sections 2 and 3 are normative; section 4 holds a spike, phasing,
 conformance vectors and open decisions.
@@ -54,8 +55,8 @@ amendment is authorized by the spec owner; apply it exactly as written. Any OTHE
 change that would touch an invariant: stop and ask.
 
 Rules
-- Default behaviour must not change: a commitment with no settlement_trigger and no
-  delivery field behaves exactly as today (requester, clear).
+- Default behaviour must not change: a commitment with no settlement_trigger behaves
+  exactly as today (requester).
 - Spec and code must agree at the end. Conflicts with the current spec or code are
   listed with a proposed resolution, never resolved silently.
 - Use symbolic kind names; allocate provisional numbers from the existing block.
@@ -85,22 +86,19 @@ Two terms fields make settlement and exposure explicit. Each trigger is defined 
 | Field | Values | Default | Meaning |
 | --- | --- | --- | --- |
 | `settlement_trigger` | `requester`, `verifier`, `contingent` | `requester` | Who can cause payment to be released |
-| `delivery` | `clear`, `staged`, `encrypted_until_paid` | `clear` | When the deliverable becomes readable by the requester |
 | `fulfillment_proof` | `verifier_attested`, `zk` | none | Required when `settlement_trigger` is `contingent`; how the encrypted deliverable is shown to pass its conditions. `zk` is reserved and rejected in this version |
 | `settlement_verifier` | pubkey | none | Required when `settlement_trigger` is `verifier`, or when `fulfillment_proof` is `verifier_attested` |
 | `rail` | `cashu`, `lightning` | `cashu` | Settlement rail. Must have the capabilities its trigger requires (3.4) |
 
 ### 2.2 Valid combinations
 
-Only these five combinations are valid in this version. Any other combination makes the `REQUEST` invalid (code `invalid_settlement_combo`).
+Each trigger has its own constraints; terms that break them make the `REQUEST` invalid (code `invalid_settlement_combo`). Commitments are atomic: one deliverable, one settlement. The deliverable is in the clear under `requester` and `verifier`, and encrypted until paid under `contingent`.
 
-| `settlement_trigger` | `delivery` | Who must trust whom | Typical use |
-| --- | --- | --- | --- |
-| `requester` | `clear` | Performer trusts requester | Today's behaviour; subjective work |
-| `requester` | `staged` | Performer trusts requester, one stage at a time | Larger subjective work; exposure capped per stage |
-| `verifier` | `clear` | Both trust a scored, listed verifier | Deterministic or judged conditions without proofs |
-| `verifier` | `staged` | As above, per stage | Larger checkable work |
-| `contingent` | `encrypted_until_paid` | Requester trusts the attesting verifier not to leak the key (v1); no trust with `zk` (later) | Deterministic conditions; zero trust as the target |
+| `settlement_trigger` | Who must trust whom | Typical use |
+| --- | --- | --- |
+| `requester` | Performer trusts requester | Today's behaviour; subjective work |
+| `verifier` | Both trust a scored, listed verifier | Deterministic or judged conditions without proofs |
+| `contingent` | Requester trusts the attesting verifier not to leak the key (v1); no trust with `zk` (later) | Deterministic conditions; zero trust as the target |
 
 Required constraints:
 
@@ -126,7 +124,7 @@ Required constraints:
 5. On a passing attestation, the requester publishes `FUND`: a payment locked to `H` on the declared rail (a hash-locked Cashu token to the performer, or payment of a Lightning invoice the performer issued with payment hash `H`).
 6. The performer claims the payment, which reveals `k` to the requester through the rail, and publishes `CLAIM` containing `k`. The requester decrypts `C`.
 
-**`staged` delivery (with `requester` or `verifier`).** The deliverable is split into ordered stages in the terms, each with its own condition subset and its own hash-locked token (existing milestone mechanism). Stage `n+1` is delivered only after stage `n` settles, which caps each party's exposure at one stage.
+**Larger work.** To cap exposure, split the work into a sequence of commitments, each settled on its own (any trigger). There is no staging inside a commitment.
 
 ## 3. Specification B: acts, states, validation, rails, policy (normative)
 
@@ -187,11 +185,11 @@ Computed lapses, each recorded as a fault of the named party:
 
 ### 3.5 Policy filtering
 
-**Target:** the Binding API, `Executor.quote` and requester-side bindings. Bindings filter on `settlement_trigger`, `delivery`, `rail` and `settlement_verifier` as local policy. Example policies, configured per binding, not by the protocol:
+**Target:** the Binding API, `Executor.quote` and requester-side bindings. Bindings filter on `settlement_trigger`, `rail` and `settlement_verifier` as local policy. Example policies, configured per binding, not by the protocol:
 
 - **Zero-trust performer:** accept only `contingent`.
 - **Cautious requester:** refuse `contingent` and `verifier` unless `settlement_verifier` is in its trusted set.
-- **Default commercial:** accept `requester` + `clear` below a value threshold; require `verifier` or `staged` above it.
+- **Default commercial:** accept `requester` below a value threshold; require `verifier` above it, or split the work into smaller commitments.
 
 ### 3.6 Threats
 
@@ -240,7 +238,7 @@ One empirical question gates the contingent trigger on Cashu; everything else ca
 
 ### 4.2 Phasing
 
-1. **Phase A, no rail dependency.** New terms fields and defaults; combination validation; `staged` delivery; verifier trigger (`VERIFIER_ACK`, `RELEASE`, Settled, verifier lapse); rail-capability declaration; policy filters; invariant amendment. Gate: vectors S-1 to S-8.
+1. **Phase A, no rail dependency.** New terms fields and defaults; combination validation; verifier trigger (`VERIFIER_ACK`, `RELEASE`, Settled, verifier lapse); rail-capability declaration; policy filters; invariant amendment. Gate: vectors S-1 to S-8.
 2. **Phase B, spike.** Section 4.1, report and recorded decision.
 3. **Phase C, contingent.** `verifier_attested` contingent settlement on the rails Phase B allows: Offered and Funded states, `FUND`, `CLAIM`, `fund_window`, contingent attestation fields. Gate: vectors S-9 to S-15.
 4. **Later, out of scope.** `zk` fulfillment proofs, which remove the verifier from the contingent path.
@@ -250,8 +248,8 @@ One empirical question gates the contingent trigger on Cashu; everything else ca
 | Id | Setup | Expected |
 | --- | --- | --- |
 | S-1 | Commitment with no new fields | Behaves exactly as before; all pre-CR-002 vectors pass |
-| S-2 | `requester` + `encrypted_until_paid` | `REQUEST` invalid; `invalid_settlement_combo` |
-| S-3 | `staged`; stage 2 `REPORT` before stage 1 settles | Not applied; `illegal_transition` |
+| S-2 | `verifier` with a `human` condition | `REQUEST` invalid; `invalid_settlement_combo` |
+| S-3 | *(retired with staged delivery)* | — |
 | S-4 | Verifier trigger; `PROMISE` without `VERIFIER_ACK` | Not applied; `missing_verifier_ack` |
 | S-5 | Verifier trigger; passing attestations; valid `RELEASE`; later requester `SATISFY` | Settled; `SATISFY` recorded as judgement, no state change |
 | S-6 | `RELEASE` with a secret that does not hash to `H` | Not applied; `bad_release` |
@@ -271,8 +269,8 @@ Each vector also runs under every arrival-order permutation.
 
 - [ ] **OD-1 Zero-knowledge fulfillment proofs.** Proof system and zkVM choice, and which predicate classes are practical to prove.
 - [ ] **OD-2 Requester bond for contingent.** Whether requesters post a small bond, forfeited on an unfunded passing offer, to compensate performer effort.
-- [ ] **OD-3 Verifier with encrypted delivery.** Whether `verifier` + `encrypted_until_paid` should become valid, with the verifier holding both secrets.
-- [ ] **OD-4 Staged contingent delivery.** Whether `contingent` can be staged, one key per stage.
+- [ ] **OD-3 Verifier with encrypted delivery.** Whether the `verifier` trigger should also keep the deliverable encrypted until paid, with the verifier holding both secrets.
+- [x] **OD-4 Staged contingent delivery.** Closed: commitments are atomic; a staged job is a sequence of commitments, each of which can be contingent.
 - [ ] **OD-5 Verifier payment.** Whether the settlement verifier is paid through its own ACN commitment with the requester or through a fee embedded in the terms.
 - [ ] **OD-6 Lightning dependency.** Which Lightning integration to use if the repo has none.
 - [ ] **OD-7 Cashu outcome.** Recorded result of the spike and the resulting capability rule.

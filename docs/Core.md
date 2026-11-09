@@ -937,7 +937,7 @@ arrival-order permutation" below means this.
 | J-6 | `injection_detected` true | Condition failed; `injection_detected` on the performer's `REPORT` |
 | J-7 | Aggregation `all`; one judge below θ | Condition failed; `below_threshold` |
 | J-8 | `repeats` 3; attestation carries 2 runs | Not counted; `judge_mismatch` |
-| J-9, J-10 | *(holdback vectors)* | Dropped with the holdback (Appendix B) |
+| J-9, J-10 | *(removed)* | Were holdback vectors; commitments are atomic (Appendix B) |
 | J-11 | One `mechanical` and one `judged` condition | Overall assurance `opinion` |
 | J-12 | Declared aggregate/result disagree; an unlisted runner | `malformed`; `unlisted_verifier`; not counted |
 | J-13 | Judged floor plus a `mechanical` audit condition; judges pass, audit fails | `c2` pass, audit fail: not every condition is met; assurance `opinion` |

@@ -438,7 +438,7 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | Arbiter escrow | §8.4 | NIP-44 `escrow` tag; `nmesh_acn_sim::Sim::ingest` | `live` (*dispute*: Atlas redeems after the RULING) | ✅ |
 | Integrated wallet UI | — | `WalletPanel.svelte`, sidebar chip, Director balances, card token state; `App::{wallet, top_up, refund}`, `AppEvent::Wallet` | `presenter.mjs` | ✅ |
 | T0 paid (unlocked token, swapped before work) | §6.3, §8.3 | — (the shim is free-only) | — | ⬜ |
-| Milestones, multiple tokens | §8.5 | — | — | ⬜ |
+| Milestones | §8.5 (a sequence of commitments; no multi-token commitments) | composed above the protocol | — | n/a by design |
 | Wallet backup / NIP-60, NWC top-up, real mints | — | — | — | ⬜ |
 | Blossom artifacts, derivation records | §9 | `x` tags carried only | — | ⬜ |
 | `K_SCORE`, reputation (D-13) | §11 | kind reserved | — | ⬜ |
