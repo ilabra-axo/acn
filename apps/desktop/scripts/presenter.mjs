@@ -145,15 +145,22 @@ console.log("ok   judged MVP: you 10 sat (60 locked), Atlas 130 sat");
 
 // CR-003: drafting in the negotiation cycle, and a disqualifier hit.
 await run("drafted", {
-  manual: [{ waitFor: ".commitment .terms-card >> text=drafted by Atlas", shot: "p15-drafted-counter", click: true }],
+  manual: [
+    // CR-003 Phase C: the counter is an instantiation of Atlas's published template.
+    { waitFor: ".commitment .terms-card .tpl[data-s=counted] >> text=retry-change/v1", shot: null },
+    { waitFor: ".commitment .terms-card >> text=drafted by Atlas", shot: "p15-drafted-counter", click: true },
+  ],
 });
 await run("disqualified", {
   manual: [
     { waitFor: ".director >> text=Accept counter-offer", shot: null, click: true },
     { waitFor: ".director >> text=Reject: d2 hit", shot: "p16-disqualified" },
+    // The template's record now carries this disqualification next to the paid /drafted one.
+    { waitFor: ".commitment .terms-card .tpl[data-s=counted] >> text=(1 disqualified)", shot: null },
   ],
 });
 await page.locator(".commitment").last().locator("text=disqualified").first().waitFor({ timeout: 10000 });
+
 // CR-003 Phase B: held-out cases drawn from both seeds, proved against the pool root.
 await run("held-out", { manual: [{ waitFor: ".commitment .terms-card >> text=Held-out: 5 of 20", shot: "p17-held-out-terms" }] });
 await page.locator(".commitment").last().getByRole("button", { name: /signed events/ }).click();

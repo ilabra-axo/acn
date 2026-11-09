@@ -94,6 +94,7 @@ impl<L: Llm> World<L> {
             gatekeeper: pk(Actor::Gatekeeper),
             mint: SIM_MINT.into(),
             judge_panel: Some(serde_json::to_value(panel.fingerprints()).unwrap()),
+            templates: Default::default(),
         };
         Self {
             keys,

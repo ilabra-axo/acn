@@ -96,6 +96,12 @@ pub fn invoke(req: &str) -> Result<Value, String> {
             ser(&acn_view::project(&events, &me, now))
         }
         "scenarios" => ser(&acn_sim::SCENARIOS),
+        // The cast's public terms templates: who signs each, and at what time.
+        // The host signs each, then puts the ids in `cast.templates` (by name).
+        "templates" => ser(&acn_sim::templates()
+            .into_iter()
+            .map(|(name, actor, draft)| json!({"name": name, "actor": actor, "draft": draft}))
+            .collect::<Vec<_>>()),
         "template" => {
             let cast: Cast = arg(&r, "cast")?;
             let id: String = arg(&r, "scenario")?;

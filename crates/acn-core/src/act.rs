@@ -309,6 +309,13 @@ pub fn parse(ev: &Event) -> R<Option<Parsed<'_>>> {
             }
         }
         K_ATTEST_JUDGED => judged_content(&content).map_err(|m| (Code::Malformed, m))?,
+        K_TERMS_TEMPLATE => {
+            if c.is_some() || !prevs.is_empty() {
+                return malformed("a terms template stands alone: no `c` or `prev`");
+            }
+            crate::template::TermsTemplate::parse(&content)
+                .map_err(|e| (Code::Malformed, format!("template: {e}")))?;
+        }
         _ => {}
     }
     if matches!(

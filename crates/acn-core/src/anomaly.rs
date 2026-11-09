@@ -66,6 +66,8 @@ pub enum Code {
     SeedMismatch,
     SeedWithheld,
     InstanceMismatch,
+    // Terms templates (CR-003 Phase C).
+    TemplateMismatch,
 }
 
 impl Code {
@@ -114,6 +116,7 @@ impl Code {
         Code::SeedMismatch,
         Code::SeedWithheld,
         Code::InstanceMismatch,
+        Code::TemplateMismatch,
     ];
 
     pub fn severity(self) -> Severity {
@@ -134,6 +137,7 @@ impl Code {
             | OverruledJudgement
             | Disqualified
             | UnsupportedDisqualification
+            | TemplateMismatch
             | AttestationMismatch
             | PrematureFund => Severity::Flag,
             _ => Severity::Reject,
@@ -187,6 +191,7 @@ impl Code {
             SeedMismatch => "seed_mismatch",
             SeedWithheld => "seed_withheld",
             InstanceMismatch => "instance_mismatch",
+            TemplateMismatch => "template_mismatch",
         }
     }
 }

@@ -50,8 +50,13 @@ fn sealed_payloads_are_nip44_v2() {
     let k = [0x6bu8; 32];
     let text = "A 500-word technical summary. ".repeat(20);
     let ours = acn_core::sealed::seal(&k, &[3; 32], text.as_bytes()).unwrap();
-    let bytes = base64::engine::general_purpose::STANDARD.decode(&ours).unwrap();
-    assert_eq!(decrypt_to_bytes(&ConversationKey::new(k), &bytes).unwrap(), text.as_bytes());
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&ours)
+        .unwrap();
+    assert_eq!(
+        decrypt_to_bytes(&ConversationKey::new(k), &bytes).unwrap(),
+        text.as_bytes()
+    );
     let theirs = encrypt_to_bytes(&ConversationKey::new(k), text.as_bytes()).unwrap();
     let b64 = base64::engine::general_purpose::STANDARD.encode(theirs);
     assert_eq!(acn_core::sealed::open(&k, &b64).unwrap(), text.as_bytes());

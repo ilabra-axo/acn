@@ -24,6 +24,9 @@
   };
   const checkers = (i: TermsCard["checked_by"][number]) =>
     i.requester ? "the requester" : i.keys.length ? i.keys.map(name).join(", ") : "nobody named";
+  // Template slot values (template laundering is about these, Core §13): keys and hashes shortened.
+  const slotValue = (v: unknown) =>
+    typeof v === "string" && /^[0-9a-f]{64}$/.test(v) ? name(v) : typeof v === "string" ? `"${v}"` : JSON.stringify(v);
   const shown = (l: DiffLine, v: string | null) => (v && l.kind === "time" ? when(Number(v)) : v);
 </script>
 
@@ -34,6 +37,25 @@
     {#if card.assurance}<span class="pill a" data-a={card.assurance}>assurance: {card.assurance}</span>{/if}
     <button class="link" onclick={() => (open = !open)}>{open ? "hide" : "details"}</button>
   </div>
+  {#if card.template}
+    {@const tv = card.template}
+    <div class="tpl" data-s={tv.status.status} title={`Template event ${tv.event}`}>
+      {#if tv.status.status === "counted"}✓ from template{:else if tv.status.status === "mismatch"}⚠ claims template{:else}from template{/if}
+      <span class="mono">{tv.name ?? `${tv.event.slice(0, 10)}…`}</span>
+      {#if tv.author}by {name(tv.author)}{/if}
+      {#if tv.status.status === "mismatch"}<span class="bad">· doesn't match it: {tv.status.reason}</span>
+      {:else if tv.status.status === "unavailable"}<span class="muted">· template not fetched, can't check</span>
+      {:else}
+        <span class="muted">· record here: {tv.record.commitments} commitment{tv.record.commitments === 1 ? "" : "s"}, {tv.record.paid} paid, {tv.record.rejected} rejected{tv.record.disqualified ? ` (${tv.record.disqualified} disqualified)` : ""}{tv.record.disputed ? `, ${tv.record.disputed} disputed` : ""}{tv.record.open ? `, ${tv.record.open} open` : ""}</span>
+      {/if}
+    </div>
+    {#if Object.keys(tv.slots).length}
+      <div class="tpl-slots">
+        filled in:
+        {#each Object.entries(tv.slots) as [k, v], i}{i ? " · " : " "}<span class="mono">{k}</span> = {slotValue(v)}{/each}
+      </div>
+    {/if}
+  {/if}
   {#if card.unclosed}
     <div class="warn">⚠ Can't be promised or accepted yet: {card.unclosed}.</div>
   {/if}
@@ -130,6 +152,11 @@
   .pill { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--sunken); color: var(--muted); }
   .link { margin-left: auto; background: none; border: 0; color: var(--accent); font-size: 11.5px; cursor: pointer; padding: 0; }
   .warn { color: var(--warn); font-size: 12px; }
+  .tpl { font-size: 11.5px; color: var(--ok); }
+  .tpl[data-s="mismatch"] { color: var(--warn); }
+  .tpl[data-s="unavailable"] { color: var(--muted); }
+  .tpl .bad { color: var(--warn); }
+  .tpl-slots { font-size: 11px; color: var(--muted); }
   .sec { display: flex; flex-direction: column; gap: 3px; }
   .sh { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--faint); font-weight: 650; }
   .row { display: flex; gap: 7px; align-items: baseline; flex-wrap: wrap; }

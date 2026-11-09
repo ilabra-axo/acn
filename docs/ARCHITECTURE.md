@@ -106,12 +106,12 @@ flowchart TB
 |---|---|---|---|---|---|
 | `nmesh-proto` | lib | nmesh wire format: kinds, structured messages, actions, manifests, NIP-CD slash commands | `StructuredMessage`, `Action`, `AgentManifest`, `SlashCommandDefinition`, `parse_invocation`, `bind_args` | none | 890 |
 | `nmesh-contracts` | lib | Data contracts: JSON Schema registry, hash pinning, renderer resolution, trust policy | `ContractRegistry`, `schema_hash`, `resolve_renderer`, `TrustPolicy`, `builtin::*` | none | 450 |
-| `acn-core` | lib | ACN grammar and validator: event model, BIP-340 verification, JCS, terms (`acn-terms/0.5` only; unknown fields are malformed), bindings, the deterministic fold, `status_at`, act drafting, CR-003 checks (no hidden criteria, disqualifiers, closure rule), contingent sealing (NIP-44 v2 keyed by `k`), held-out instances (RFC 6962 pool proofs, two-seed sample) | `fold`, `status_at`, `Draft`, `Terms`, `Template`, `instantiate`, `binding_status`, `Code`, `sealed::{seal, open, ciphertext_hash}`, `instances::{root, proof, verify, sample}` | none, no C deps | 4,670 |
-| `acn-view` | lib | Projections of the fold for UIs: timeline, evidence, counter diff, settlement, allowed acts, board lanes; the terms card, terms versions and diffs (CR-003) | `project`, `Projection`, `Entry`, `ConditionView`, `DisqualifierView`, `SettlementView`, `Lane`, `TermsCard`, `TermsVersionView`, `DiffLine`, `InstancesView` | none | 1,330 |
-| `acn-sim` | lib | Demo scenarios: the cast, terms templates, reactions (incl. scripted judges, the contingent seal and the held-out pool with its proofs), requester hints | `SCENARIOS`, `template`, `react`, `react_with` (escrow, payments, performer keys, requester seeds), `Move.escrow`, `Move.judge` (`JudgeJob`: the host runs real judges and fills the content), `Cast.judge_panel`, `requester_hint`, `requester_draft` | none | 1,690 |
+| `acn-core` | lib | ACN grammar and validator: event model, BIP-340 verification, JCS, terms (`acn-terms/0.5` only; unknown fields are malformed), bindings, the deterministic fold, `status_at`, act drafting, CR-003 checks (no hidden criteria, disqualifiers, closure rule), contingent sealing (NIP-44 v2 keyed by `k`), held-out instances (RFC 6962 pool proofs, two-seed sample), terms templates (typed slots, V-28 re-instantiation) | `fold`, `status_at`, `Draft`, `Terms`, `Template`, `instantiate`, `template::{TermsTemplate, TemplateRef, check}`, `binding_status`, `Code`, `sealed::{seal, open, ciphertext_hash}`, `instances::{root, proof, verify, sample}` | none, no C deps | 4,670 |
+| `acn-view` | lib | Projections of the fold for UIs: timeline, evidence, counter diff, settlement, allowed acts, board lanes; the terms card, terms versions and diffs, template provenance and records (CR-003) | `project`, `Projection`, `Entry`, `ConditionView`, `DisqualifierView`, `SettlementView`, `Lane`, `TermsCard`, `TermsVersionView`, `DiffLine`, `InstancesView`, `TemplateView`, `template_records` | none | 1,330 |
+| `acn-sim` | lib | Demo scenarios: the cast, service terms offers, Atlas's published terms template (`retry-change/v1`), reactions (incl. scripted judges, the contingent seal and the held-out pool with its proofs), requester hints | `SCENARIOS`, `template`, `react`, `react_with` (escrow, payments, performer keys, requester seeds), `Move.escrow`, `Move.judge` (`JudgeJob`: the host runs real judges and fills the content), `Cast.judge_panel`, `Cast.templates` (published ids, recorded by the host), `templates`, `requester_hint`, `requester_draft` | none | 1,690 |
 | `acn-judge` | lib + example | Judge harness for `judged` conditions: a panel of pinned judges on OpenAI-compatible endpoints (Ollama, OpenAI, OpenRouter, ...), repeats and medians, artifact delimiting, injection scan plus model vote, `K_ATTEST_JUDGED` content that V-17 counts; pinned by `harness_hash` | `Panel::{load, with_llm, fingerprints, evaluate}`, `PanelConfig`, `Llm`, `HttpLlm`, `harness_hash`; example `try_panel` | HTTP to the judges; reads `judges.toml` and API keys from env | 730 |
 | `acn-wallet` | lib | Wallet views shared by all hosts; `SimMint`, a pure Cashu-shaped mint with NUT-14 rules for presenter mode; settlement advice derived from the fold | `WalletView`, `Lock`, `SimMint`, `settlement::{check_payment, advise, request_token}` | none | 740 |
-| `acn-wasm` | cdylib | Browser entry point: JSON-in/JSON-out ABI over core + view + sim + wallet | `acn_invoke` (`op`: `fold`, `project`, `template`, `request`, `react`, `hint`, `requester_draft`, `sign`, `mint_*`, `payment_check`, `advise`, ...) | none | 320 |
+| `acn-wasm` | cdylib | Browser entry point: JSON-in/JSON-out ABI over core + view + sim + wallet | `acn_invoke` (`op`: `fold`, `project`, `template`, `templates`, `request`, `react`, `hint`, `requester_draft`, `sign`, `mint_*`, `payment_check`, `advise`, ...) | none | 320 |
 | `nmesh-wallet` | lib | Cashu wallet over CDK (wallet feature only): top up, HTLC lock, inspect (DLEQ + NUT-07 + lock shape), redeem, NUT-14 refund (manual swap), revealed preimage (NUT-07), lock index + history per commitment | `CashuWallet` | mint HTTP; SQLite + JSON index | 590 |
 | `nmesh-mint` | lib + bin | Local Cashu test mint: CDK mint + `cdk-fake-wallet` Lightning backend + `cdk-axum` | `start(MintConfig) -> RunningMint`; bin `nmesh-mint` | HTTP; SQLite | 160 |
 | `nmesh-core` | lib | Nostr session: keys, relays, NIP-17 send/receive, inbox stream, peer discovery, ACN transport, MLS spike | `Session`, `Inbound`, `Body`, `PeerInfo`, `sign_act`, `send_act`, `acn_public`, `find_acn_services` | relays, key files | 760 |
@@ -147,9 +147,10 @@ C toolchain.
 | 7700–7712 | ACN acts (REQUEST … RULING) | `acn_core::kinds` | regular events, provisional (D-1) |
 | 7713–7715 | `K_RELEASE`, `K_FUND`, `K_CLAIM` (CR-002) | `acn_core::kinds` | advancing; `FUND` term-preserving, the others closing |
 | 7720–7726 | attestations, interpretive report, endorse, score, judged attestation, escrow ack | `acn_core::kinds` | annotating; `K_SCORE` reserved; `K_ATTEST_JUDGED` = 7725 (CR-001); `K_ESCROW_ACK` = 7726 (CR-002) |
+| 7727 | `K_TERMS_TEMPLATE` (CR-003) | `acn_core::kinds` | standalone, published publicly; its id pins it |
 | 7730–7732 | bind, bind ack, bind revoke | `acn_core::kinds` | published publicly |
 | 7739 | `K_PRIVATE_ACT` | `acn_core::kinds` | rumor whose content is one signed act |
-| 37700 | `K_SVC` service advertisement | `acn_core::kinds` | addressable; tools, terms templates, data handling |
+| 37700 | `K_SVC` service advertisement | `acn_core::kinds` | addressable; tools with their terms offers, mints, data handling |
 
 Every ACN act carries a `v` tag of `acn/0.4` (`acn_core::kinds::VERSION`); any other value is
 `bad_version`.
@@ -174,8 +175,14 @@ replies, actions and de-duplication.
   and fields the schema doesn't define (e.g. `holdback`, `audit`) are `malformed`. Criteria must
   be public (`hidden_criteria` otherwise); conditions may be left `open` in a `REQUEST` or
   `COUNTER` but must be closed before `PROMISE` / `ACCEPT` (`unclosed_condition`).
-- **Templates** (`acn_core::draft::Template`) are published in `K_SVC` with relative times.
-  `instantiate` fixes the deadline, review window, tool and input, the hashlock / locktime, and
+- **Terms templates** (`acn_core::template`, CR-003) are signed `K_TERMS_TEMPLATE` events:
+  conditions and disqualifiers with typed `{{slot}}` placeholders. Terms drafted from one carry
+  `template_ref {event, hash, slots}`; the fold re-instantiates it (V-28) and flags
+  `template_mismatch` if it doesn't reproduce the terms, which still apply. `acn-view` computes
+  each template's record. Guidance and two templates: `docs/acn/cos-templates.md`,
+  `docs/acn/templates/`.
+- **Service terms offers** (`acn_core::draft::Template`) are published per tool in `K_SVC` with
+  relative times. `instantiate` fixes the deadline, review window, tool and input, the hashlock / locktime, and
   (for held-out instances) every `instances.requester_seed_hash`. The requester sends its seed
   NIP-44-encrypted to the runner named by `Template.requester_seed_to` in a `seed` tag.
 - **Settlement (§8):** the requester generates `s`, puts `H = sha256(s)` and the locktime
@@ -420,14 +427,14 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | Open conditions, closure before promise | §6, V-26, CR-003 §2.4 | `Terms::unclosed`, `require_closed` (`unclosed_condition`); drafting in `COUNTER` | C-3…C-5c; *drafted* scenario | ✅ |
 | Terms card, versions, diffs | §12, CR-003 §2.7 | `acn_view::{card, diff}`; `Projection.{versions, terms_card, pending_card, terms_diff}`; `TermsCard.svelte` | playthrough (*drafted*, *held-out*), `presenter.mjs` | ✅ |
 | Held-out instances, two-party seed | §7, V-27, CR-003 §2.3 (Phase B) | `terms::Instances`; `acn_core::instances` (RFC 6962 `root` / `proof` / `verify`, `sample` from both seeds); fold seed checks (`seed_mismatch`, `seed_withheld`, `instance_mismatch`); `seed` tag (`App::request`, `Template.requester_seed_to`) | `cr003_held_out_vectors_under_every_arrival_order` (C-10…C-14), `cr003_instance_terms`, `instances` unit tests, *held-out* scenario | ✅ |
-| Terms templates (CR-003 Phase C) | CR-003 §2.5 | — | — | ⬜ |
+| Terms templates | §7, V-28, CR-003 §2.5 (Phase C) | `acn_core::template` (`TermsTemplate::{parse, instantiate}`, `TemplateRef`, `check`), `K_TERMS_TEMPLATE`, `Draft::template`, `Commitment.template`; `acn_view::{TemplateView, template_records}`; `Cast.templates`, `acn_sim::templates`; `docs/acn/templates/` | `cr003_template_vectors_under_every_arrival_order` (C-15…C-16e), `template` unit tests, `acn-judge/tests/templates.rs` (the published files), *drafted* / *disqualified* in `playthrough`, `live`, `presenter.mjs` | ✅ |
 | Authoring aids (CR-003 Phase D) | CR-003 §3 | — | — | ⬜ |
 | Governance endorsements | V-14 | `needs_endorsement` / `endorsed` | `governance` | ✅ |
 | Causal monotonicity, late flags | V-15, §6.5 | `step` | `time_regress`, `late` | ✅ |
 | Time-derived status (lapse) | §6.5 | `acn_core::status_at` | `time_status`, *silent* scenario | ✅ |
 | Every anomaly code reachable | §10 | `Code::ALL` | `every_anomaly_code_is_exercised` | ✅ |
 | Private-mode transport | §5.5 | `Session::send_act`; `Body::Act` | `app_flow`, `live` | ✅ |
-| `K_SVC` with terms templates | §4, §7 | `shim::service_advertisement`; `nmesh_acn_sim::advertise` | `live` | ✅ |
+| `K_SVC` with per-tool terms offers | §4, §7 | `shim::service_advertisement`; `nmesh_acn_sim::advertise` | `live` | ✅ |
 | T0 over MCP (`acn-mcp-shim`) | §6.3, §11 | `shim::Shim::drive` | `app_flow` | ✅ price 0 only |
 | Hashlock settlement (T1, N) | INV-6, V-10, §8 | preimage in `SATISFY` / `RULING`; `SettlementView` | `t1_preimage`, *paid*, *dispute* | ✅ |
 | HTLC lock at request time, token in `content.token` | §8.2 steps 1–2 | `CashuWallet::lock_htlc`; `App::request` (NIP-44 to the performer) | `htlc`, `live` | ✅ test mint |
@@ -442,7 +449,7 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | Wallet backup / NIP-60, NWC top-up, real mints | — | — | — | ⬜ |
 | Blossom artifacts, derivation records | §9 | `x` tags carried only | — | ⬜ |
 | `K_SCORE`, reputation (D-13) | §11 | kind reserved | — | ⬜ |
-| Binding API for external harnesses | §11, D-10; proposal in `Binding API.md` | interfaces implemented directly by the reference bindings; no `acn-binding` crate, no `binding_level`, no conformance suites | — | 🟡 proposal |
+| Binding API for external harnesses | §11, D-10; proposal in `harness-binding-API.md` | interfaces implemented directly by the reference bindings; no `acn-binding` crate, no `binding_level`, no conformance suites | — | 🟡 proposal |
 | Projections (thread / evidence view) | §12 | `acn_view::project`; `CommitmentCard.svelte` | playthrough, presenter script | ✅ |
 | Board (queue view) across agents and roles | §12 | `acn_view::Lane`, `Projection.{lane, my_role, next, needs_me, pending_endorsement, updated_at}`; `App::board(closed_limit)`; `Board.svelte`, `BoardTile.svelte` | `board_lanes_follow_the_workflow`, `live` (paging, needs_me), `scripts/board.mjs` | ✅ (no drag-and-drop, by design) |
 | Ledger view | §12 | wallet panel history only | — | 🟡 |
@@ -453,7 +460,7 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 |---|---|---|---|
 | Sixteen scenarios, scripted cast | `acn_sim::SCENARIOS`, `react_with`, `template` | `playthrough` (outcomes and lanes) | ✅ |
 | MVP: pay only if two judges score ≥ θ | `/judged` (verifier trigger, Verity runs the judges and `RELEASE`s), `/injected` (`injection_detected`, no release), `/judged-auto` (Muse runs, requester auto-satisfies); scripted judges by default and in presenter mode, real ones with `nmesh-acn-sim --judges judges.toml` (`acn-judge`) | `playthrough`, `live`, `presenter.mjs`; real judges: `acn-judge/tests/end_to_end.rs`, `live -- --ignored` with `NMESH_JUDGES` | ✅ |
-| Conditions authorship in the demo (CR-003) | `/drafted` (open condition closed by Atlas's `COUNTER`, disqualifiers clear), `/disqualified` (d2 hit, breach, no rework), `/held-out` (Verity's 20-case pool, 5 drawn from both seeds, Merkle proofs) | `playthrough`, `live`, `presenter.mjs` | ✅ |
+| Conditions authorship in the demo (CR-003) | `/drafted` (open condition closed by Atlas's `COUNTER`, instantiated from its published `retry-change/v1` template; disqualifiers clear), `/disqualified` (d2 hit, breach, no rework), `/held-out` (Verity's 20-case pool, 5 drawn from both seeds, Merkle proofs) | `playthrough`, `live`, `presenter.mjs` | ✅ |
 | Live cast on relays | `nmesh-acn-sim` | `live` (all sixteen via the app layer; top up 300, then 39 / 201 sat, 60 locked) | ✅ |
 | Director: next step, autopilot, clock | `requester_hint` / `run_hint`; `Director.svelte`; `set_clock_offset` | `live`, `scripts/presenter.mjs` | ✅ |
 | Presenter mode in the browser | `acn-wasm` + `presenter/*` | `scripts/presenter.mjs` (all sixteen, no page errors) | ✅ |
@@ -512,11 +519,12 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 
 | Test suite | Covers |
 |---|---|
-| `acn-core/tests/scenarios.rs` (+ `tests/common/`) | P0 gates: every act, every anomaly, permutation property over 86 scenarios; CR-001 (J-…), CR-002 (S-…) and CR-003 Phase A / B (C-…) vectors under every arrival order; terms version and instance-terms checks. Slowest suite (~3 min in debug) |
+| `acn-core/tests/scenarios.rs` (+ `tests/common/`) | P0 gates: every act, every anomaly, permutation property over 92 scenarios; CR-001 (J-…), CR-002 (S-…) and CR-003 Phase A / B / C (C-…) vectors under every arrival order; terms version and instance-terms checks. Slowest suite (~3 min in debug) |
 | `acn-core/tests/nostr_compat.rs` | signature interop with rust-nostr in both directions; sealed payloads are NIP-44 v2 |
-| `acn-core` unit | JCS canonical form; `sealed` round trip and padding; `instances` RFC 6962 vectors, proofs, two-seed sample |
+| `acn-core` unit | JCS canonical form; `sealed` round trip and padding; `instances` RFC 6962 vectors, proofs, two-seed sample; `template` parse and typed / textual instantiation |
 | `acn-sim/tests/playthrough.rs` | all sixteen scenarios reach their intended end and outcome; board lanes; payment check; idempotent reactions |
 | `acn-judge/tests/end_to_end.rs` | a real-judge panel (scripted models) plays `/judged`, `/judged-auto`, `/injected` through the fold; model-vote injection; refuses unpinned judges and wrong rubrics; `HttpLlm` against an OpenAI-compatible stub |
+| `acn-judge/tests/templates.rs` | the published templates (`docs/acn/templates/`) parse, instantiate into terms that parse and close, re-instantiate exactly (V-28); rubric files match their hashes; judges pinned to this harness and `judges.example.toml` |
 | `nmesh-core/tests/dm_roundtrip.rs` | NIP-17 text and structured messages over a mock relay |
 | `nmesh-agent-bridge/tests/app_flow.rs` | app ↔ relay ↔ bridge ↔ MCP: chat, forms, ACN T0 |
 | `nmesh-acn-sim/tests/live.rs` | app ↔ relay ↔ cast ↔ mint: discovery, all sixteen scenarios via hints, real balances (300 → 39 available + 60 locked; Atlas 201), insufficient funds, board paging, reset (incl. restart); opt-in (`--ignored`, `NMESH_JUDGES`): `/judged` and `/injected` with real judges |
@@ -536,7 +544,7 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
   has no scopes (no `max_sat`).
 - **The MCP shim is free T0 only.** It declines priced terms, other triggers and profiles, open
   conditions and held-out instances (`refusal` in `shim.rs`); no Blossom, derivation records or
-  wallet yet (Binding API.md §3).
+  wallet yet (harness-binding-API.md §3).
 - **Refund is a manual swap** (CDK's `receive` only tries the preimage path for HTLC proofs).
 - **Live refunds wait for the real locktime** (≈ 25 h in the demo templates); presenter mode can
   fast-forward it.
@@ -549,7 +557,8 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
   if judging fails, no attestation is sent and the review window applies.
 - **The held-out pool is public in the demo:** `acn_sim::HELD_OUT` is a constant in the same
   crate as Atlas's reactions, so "Atlas never sees it" holds only in the story.
-- **CR-003 Phases C and D are not built:** no terms-template schema or files, no authoring aids.
+- **CR-003 Phase D is not built:** no drafters or linter in the reference binding. Template
+  records are per template, not yet split by slot range.
 - **No local message store.** History comes back from relays (30-day window), and gift wraps
   sent to a single relay are lost when the dev relay restarts.
 - **Keys are in files**, with no external signer (NIP-46 / NIP-55) yet.

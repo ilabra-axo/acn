@@ -31,6 +31,12 @@ impl World {
             .map(|(i, a)| (*a, [i as u8 + 10; 32]))
             .collect();
         let pk = |a: Actor| public_key(&keys[&a]).unwrap();
+        // The cast's public templates (CR-003 §2.5), as every host publishes them.
+        let signed: Vec<(String, Event)> = templates()
+            .into_iter()
+            .map(|(name, a, d)| (name, d.sign(&keys[&a], 999_000).unwrap()))
+            .collect();
+        let events: Vec<Event> = signed.iter().map(|(_, e)| e.clone()).collect();
         let cast = Cast {
             performer: pk(Actor::Performer),
             rogue: pk(Actor::Rogue),
@@ -40,12 +46,16 @@ impl World {
             gatekeeper: pk(Actor::Gatekeeper),
             mint: SIM_MINT.into(),
             judge_panel: None,
+            templates: signed
+                .iter()
+                .map(|(n, e)| (n.clone(), e.id.clone()))
+                .collect(),
         };
         Self {
             actor_keys: keys,
             me: [1; 32],
             cast,
-            events: vec![],
+            events,
             clock: 1_000_000,
             escrow: BTreeMap::new(),
             secret: [9; 32],
@@ -228,10 +238,24 @@ fn scenario_outcomes() {
         (2, acn_view::Role::Performer)
     );
     assert_eq!(p.versions.len(), 2);
+    // CR-003 Phase C: Atlas's counter is an instantiation of its published template.
+    let tv = card.template.as_ref().expect("drafted from a template");
+    assert_eq!(tv.status, acn_core::template::TemplateStatus::Counted);
+    assert_eq!(tv.name.as_deref(), Some("retry-change/v1"));
+    assert_eq!((tv.record.commitments, tv.record.paid), (1, 1));
     let p = run("disqualified");
     assert_eq!(p.phase, Some(Phase::Rejected), "{:?}", acts(&p));
     assert!(codes(&p).contains(&"disqualified"));
     assert_eq!(p.rework_count, 0, "breach: no rework");
+    let r = &p
+        .terms_card
+        .as_ref()
+        .unwrap()
+        .template
+        .as_ref()
+        .unwrap()
+        .record;
+    assert_eq!((r.commitments, r.rejected, r.disqualified), (1, 1, 1));
 
     // CR-003 Phase B: the runner attests the sample both seeds select; it counts.
     let p = run("held-out");

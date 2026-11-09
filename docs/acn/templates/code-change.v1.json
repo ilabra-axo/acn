@@ -1,0 +1,70 @@
+{
+  "v": "acn-template/1",
+  "name": "code-change/v1",
+  "description": "A change to an existing code base: the suite passes, held-out integration tests pass, two judges score the change, and the obvious ways to game the tests are disqualifiers. Held-out instances need rework_limit 0 in the terms.",
+  "slots": {
+    "checker": {"type": "pubkey", "guidance": "Runs the checks and the judges and attests the disqualifiers; list it as the mechanical verifier too. Never the performer."},
+    "scope_paths": {"type": "string", "guidance": "Paths the change may touch, e.g. src/relay/"},
+    "suite_check": {"type": "sha256", "guidance": "Hash of the script that runs the existing test suite, published on Blossom"},
+    "coverage_check": {"type": "sha256", "guidance": "Hash of the script that runs the sampled held-out tests and the coverage diff, published on Blossom"},
+    "pool_root": {"type": "sha256", "guidance": "RFC 6962 Merkle root over the held-out integration tests (written before REQUEST, not in the repo)"},
+    "pool_size": {"type": "number", "default": 20, "guidance": "How many held-out tests the pool holds"},
+    "sample_size": {"type": "number", "default": 5, "guidance": "How many of them are drawn; at most pool_size"},
+    "requester_seed_hash": {"type": "sha256", "guidance": "sha256 of your 32-byte seed. Send the seed to the checker, never to the performer."}
+  },
+  "conditions": [
+    {
+      "id": "c1", "class": "mechanical",
+      "description": "The existing test suite passes",
+      "check_hash": "{{suite_check}}", "check_ref": "blossom:{{suite_check}}"
+    },
+    {
+      "id": "c2", "class": "mechanical",
+      "description": "New tests cover the stated behaviour, including failure paths, and the sampled held-out integration tests pass",
+      "check_hash": "{{coverage_check}}", "check_ref": "blossom:{{coverage_check}}",
+      "instances": {
+        "pool_description": "Integration tests exercising the changed behaviour",
+        "pool_rule": "Written by the requester before REQUEST; not in the repo",
+        "pool_root": "{{pool_root}}",
+        "pool_size": "{{pool_size}}",
+        "sample_size": "{{sample_size}}",
+        "requester_seed_hash": "{{requester_seed_hash}}"
+      }
+    },
+    {
+      "id": "c3", "class": "judged",
+      "description": "Readable, scoped to the request, handles errors",
+      "judges": [
+        {"model_id": "qwen2.5", "model_version": "1.5b-instruct-q4_K_M", "prompt_template_hash": "e081952dc83f4e1a23f000ac1cdf6ac2305974ab5f94c50b0213d8cde21daa53", "harness_hash": "20c78f6ce25cdaeb189d6b3b2b29b61bebbb0ddc384f44fd5549f3cfe7d5eb3f", "sampling": {"max_tokens": 300, "seed": 7, "temperature": 0.0}},
+        {"model_id": "llama3.2", "model_version": "1b-instruct-q8_0", "prompt_template_hash": "e081952dc83f4e1a23f000ac1cdf6ac2305974ab5f94c50b0213d8cde21daa53", "harness_hash": "20c78f6ce25cdaeb189d6b3b2b29b61bebbb0ddc384f44fd5549f3cfe7d5eb3f", "sampling": {"max_tokens": 300, "seed": 7, "temperature": 0.0}}
+      ],
+      "rubric_hash": "cc9ed8c98b92a7ac0a12d0147b1f527e1d7413eb5b991412e4c67264b2fe8d35",
+      "rubric_ref": "blossom:cc9ed8c98b92a7ac0a12d0147b1f527e1d7413eb5b991412e4c67264b2fe8d35",
+      "scale": {"min": 0.0, "max": 10.0},
+      "threshold": 7.0,
+      "aggregation": "all",
+      "repeats": 3,
+      "runners": ["{{checker}}"]
+    }
+  ],
+  "disqualifiers": [
+    {"id": "d1", "class": "mechanical", "description": "Modifies or deletes existing tests or their assertions", "runners": ["{{checker}}"]},
+    {
+      "id": "d2", "class": "judged",
+      "description": "Hardcodes outputs or special-cases test inputs",
+      "judges": [
+        {"model_id": "qwen2.5", "model_version": "1.5b-instruct-q4_K_M", "prompt_template_hash": "e081952dc83f4e1a23f000ac1cdf6ac2305974ab5f94c50b0213d8cde21daa53", "harness_hash": "20c78f6ce25cdaeb189d6b3b2b29b61bebbb0ddc384f44fd5549f3cfe7d5eb3f", "sampling": {"max_tokens": 300, "seed": 7, "temperature": 0.0}},
+        {"model_id": "llama3.2", "model_version": "1b-instruct-q8_0", "prompt_template_hash": "e081952dc83f4e1a23f000ac1cdf6ac2305974ab5f94c50b0213d8cde21daa53", "harness_hash": "20c78f6ce25cdaeb189d6b3b2b29b61bebbb0ddc384f44fd5549f3cfe7d5eb3f", "sampling": {"max_tokens": 300, "seed": 7, "temperature": 0.0}}
+      ],
+      "rubric_hash": "3790c81ddfb4a8f2748465847171eb4b55952008a216eaaa0ab1681c16cb3195",
+      "rubric_ref": "blossom:3790c81ddfb4a8f2748465847171eb4b55952008a216eaaa0ab1681c16cb3195",
+      "scale": {"min": 0.0, "max": 10.0},
+      "threshold": 7.0,
+      "aggregation": "all",
+      "repeats": 3,
+      "runners": ["{{checker}}"]
+    },
+    {"id": "d3", "class": "mechanical", "description": "Touches files outside {{scope_paths}} without flagging it in REPORT", "runners": ["{{checker}}"]},
+    {"id": "d4", "class": "mechanical", "description": "Adds dependencies the request does not list", "runners": ["{{checker}}"]}
+  ]
+}

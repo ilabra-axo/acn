@@ -35,7 +35,7 @@ Phases 0 and 0.5 plus the ACN track so far (see [docs/ROADMAP.md](docs/ROADMAP.m
 - MCP → Nostr agent bridge (stdio and streamable HTTP MCP servers), NIP-CD slash commands,
   agent manifest with data-handling disclosure, form/button actions routed back to tools
 - **ACN commitments** ([docs/Core.md](docs/Core.md) v0.5). The pure `acn-core` validator
-  (deterministic fold, V-1…V-11 and V-13…V-27, order-independence property test, WASM build) drives everything.
+  (deterministic fold, V-1…V-11 and V-13…V-28, order-independence property test, WASM build) drives everything.
   The agent bridge acts as `acn-mcp-shim`: it publishes `K_SVC` and an operator binding, and
   answers T0 `REQUEST`s with signed `REPORT`s. The desktop app shows each commitment as a live
   card, where you choose Accept (SATISFY) or Reject.

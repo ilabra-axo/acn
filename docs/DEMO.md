@@ -48,7 +48,9 @@ scenario logic** (`acn-core`, `acn-view`, `acn-sim`). Every act is a real BIP-34
    benchmark check with a retrievable definition and proposes two **disqualifiers** ("disables
    the benchmark", "modifies existing tests"). The counter shows the **terms card** (*Done means
    · Checked by · Pay if · Disqualified if*), **v2 · drafted by Atlas**, and the diff against
-   v1. You accept; Verity checks both conditions and both disqualifiers; auto-satisfy.
+   v1. The counter is an instantiation of a **terms template** Atlas published
+   (`retry-change/v1`): the card says **✓ from template**, shows the slot values filled in, and
+   the template's record across the commitments you can see. You accept; Verity checks both conditions and both disqualifiers; auto-satisfy.
 6. **Disqualified** (`/disqualified`). Same terms, but Atlas loosens an existing assertion.
    Both conditions pass, yet Verity attests `d2` as **hit**: Satisfy disappears, the Director
    says *Reject: d2 hit*, and the commitment ends **Rejected** with no rework, although one was
@@ -117,7 +119,7 @@ ollama pull qwen2.5:1.5b && ollama pull llama3.2:1b          # or hosted judges,
 cargo run -p acn-judge --example try_panel -- crates/acn-judge/judges.example.toml   # dry run
 ```
 
-The panel's fingerprints go into Atlas's `K_SVC` templates, so the terms pin the judges that will
+The panel's fingerprints go into Atlas's `K_SVC` terms offers, so the terms pin the judges that will
 actually run. Scores are real opinions: `/judged` may now end **Rejected** (`below_threshold`)
 instead of Settled. Two small local models take about a minute per judgement on a laptop CPU and
 are too small to be trusted judges; the example file shows hosted ones (API keys come from
@@ -146,8 +148,8 @@ Atlas DMs you when it redeems; send it `wallet` to see its balance.
 
 ## The Director
 
-- **Scenarios:** start a commitment with the scenario's terms template, which Atlas publishes
-  in its `K_SVC`.
+- **Scenarios:** start a commitment with the scenario's terms offer, which Atlas publishes per
+  tool in its `K_SVC`.
 - **Now:** explains what just happened and what you're about to do. **▶ Next** signs your next
   act. **Autopilot** plays the whole thing.
 - **Presentation clock:** moves the time used by `status_at` (deadlines, lapses) without

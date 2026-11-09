@@ -192,6 +192,20 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
             "dispute" => assert_eq!(view.chain.last().map(|e| e.act), Some("RULING")),
             "injected" => assert!(codes.contains(&"injection_detected"), "{codes:?}"),
             "disqualified" => assert!(codes.contains(&"disqualified"), "{codes:?}"),
+            // The app fetched Atlas's public template, so the counter's reference counts (V-28).
+            "drafted" => {
+                let tv = view
+                    .terms_card
+                    .as_ref()
+                    .and_then(|c| c.template.as_ref())
+                    .expect("template");
+                assert_eq!(
+                    tv.status,
+                    acn_core::template::TemplateStatus::Counted,
+                    "{tv:?}"
+                );
+                assert_eq!(tv.name.as_deref(), Some("retry-change/v1"));
+            }
             "contingent" => {
                 // Sealed until CLAIM revealed k; now the card shows the decrypted result.
                 let r = view.report.as_ref().expect("report");

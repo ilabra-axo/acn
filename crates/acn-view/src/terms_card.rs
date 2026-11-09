@@ -42,6 +42,88 @@ pub struct TermsCard {
     pub disqualified_if: Vec<DisqualifierItem>,
     /// Why this version can't be promised or accepted yet (closure rule, V-26).
     pub unclosed: Option<String>,
+    /// The template this version was drafted from, if it says so (V-28), with its record.
+    pub template: Option<TemplateView>,
+}
+
+/// A version's `template_ref`: which template, whether it checks out, and the template's record.
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateView {
+    pub event: String,
+    /// The template's `name`, when the template event is available.
+    pub name: Option<String>,
+    pub author: Option<String>,
+    pub status: acn_core::template::TemplateStatus,
+    pub slots: std::collections::BTreeMap<String, serde_json::Value>,
+    pub record: TemplateRecord,
+}
+
+/// A reader-computed track record for one template, over the commitments this reader can see
+/// whose terms in force carry a counted reference to it (CR-003 §2.5; not Core state).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct TemplateRecord {
+    pub commitments: u32,
+    /// Satisfied or Settled.
+    pub paid: u32,
+    pub rejected: u32,
+    pub disqualified: u32,
+    pub disputed: u32,
+    pub open: u32,
+}
+
+/// Records for every template, from the fold output.
+pub fn template_records(
+    out: &acn_core::Output,
+) -> std::collections::BTreeMap<String, TemplateRecord> {
+    use acn_core::Phase;
+    let mut m: std::collections::BTreeMap<String, TemplateRecord> = Default::default();
+    for c in out.commitments.values() {
+        let (Some(t), Some(st)) = (&c.terms, &c.state) else {
+            continue;
+        };
+        let (Some(r), Some(acn_core::template::TemplateStatus::Counted)) =
+            (&t.template_ref, &c.template)
+        else {
+            continue;
+        };
+        let rec = m.entry(r.event.clone()).or_default();
+        rec.commitments += 1;
+        if c.disqualified() {
+            rec.disqualified += 1;
+        }
+        if c.chain_kinds.contains(&acn_core::kinds::K_DISPUTE) {
+            rec.disputed += 1;
+        }
+        match st.phase {
+            Phase::Satisfied | Phase::Settled => rec.paid += 1,
+            Phase::Rejected => rec.rejected += 1,
+            Phase::Declined | Phase::Withdrawn | Phase::Revoked => {}
+            _ => rec.open += 1,
+        }
+    }
+    m
+}
+
+pub fn template_view(
+    t: &Terms,
+    events: &std::collections::BTreeMap<&str, &acn_core::Event>,
+    records: &std::collections::BTreeMap<String, TemplateRecord>,
+) -> Option<TemplateView> {
+    let r = t.template_ref.as_ref()?;
+    let ev = events
+        .get(r.event.as_str())
+        .filter(|e| e.kind == acn_core::kinds::K_TERMS_TEMPLATE);
+    let content: Option<serde_json::Value> = ev.and_then(|e| serde_json::from_str(&e.content).ok());
+    Some(TemplateView {
+        event: r.event.clone(),
+        name: content
+            .as_ref()
+            .and_then(|c| c["name"].as_str().map(str::to_owned)),
+        author: ev.map(|e| e.pubkey.clone()),
+        status: acn_core::template::check(t, r, content.as_ref()),
+        slots: r.slots.clone(),
+        record: records.get(&r.event).cloned().unwrap_or_default(),
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -134,7 +216,7 @@ pub struct DiffLine {
     pub after: Option<String>,
 }
 
-pub fn card(t: &Terms, v: &TermsVersionView) -> TermsCard {
+pub fn card(t: &Terms, v: &TermsVersionView, template: Option<TemplateView>) -> TermsCard {
     let s = |c: &acn_core::terms::Condition, f: &str| {
         c.extra.get(f).and_then(Value::as_str).map(str::to_owned)
     };
@@ -193,6 +275,7 @@ pub fn card(t: &Terms, v: &TermsVersionView) -> TermsCard {
             })
             .collect(),
         unclosed: t.unclosed(),
+        template,
     }
 }
 

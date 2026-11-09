@@ -20,6 +20,7 @@ pub mod instances;
 pub mod jcs;
 pub mod kinds;
 pub mod sealed;
+pub mod template;
 pub mod terms;
 
 mod act;

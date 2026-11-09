@@ -31,6 +31,8 @@ pub const K_SCORE: u16 = 7724;
 pub const K_ATTEST_JUDGED: u16 = 7725;
 /// Escrow holder (settlement verifier, or arbiter) confirms the escrowed secret hashes to `H`.
 pub const K_ESCROW_ACK: u16 = 7726;
+/// Terms template (CR-003): a signed, parameterized fragment of terms. Regular: its id pins it.
+pub const K_TERMS_TEMPLATE: u16 = 7727;
 
 pub const K_BIND: u16 = 7730;
 pub const K_BIND_ACK: u16 = 7731;
@@ -57,6 +59,7 @@ pub fn is_known(kind: u16) -> bool {
                 | K_ATTEST_GROUND
                 | K_ATTEST_JUDGED
                 | K_ESCROW_ACK
+                | K_TERMS_TEMPLATE
                 | K_INTERP_REPORT
                 | K_ENDORSE
                 | K_SCORE
@@ -91,6 +94,7 @@ pub fn name(kind: u16) -> &'static str {
         K_ATTEST_GROUND => "ATTEST_GROUND",
         K_ATTEST_JUDGED => "ATTEST_JUDGED",
         K_ESCROW_ACK => "ESCROW_ACK",
+        K_TERMS_TEMPLATE => "TERMS_TEMPLATE",
         K_INTERP_REPORT => "INTERP_REPORT",
         K_ENDORSE => "ENDORSE",
         K_SCORE => "SCORE",

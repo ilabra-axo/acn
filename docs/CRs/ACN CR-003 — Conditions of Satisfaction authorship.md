@@ -2,8 +2,8 @@
 
 Nov 8, 2026 · @ivan Labra
 
-> **Status (Nov 9, 2026): Phases A and B applied, with changes; Phases C (templates) and D
-> (authoring aids) not started.** This is the change request as written; the normative text is
+> **Status (Nov 9, 2026): Phases A, B and C applied, with changes; Phase D (authoring aids)
+> not started.** This is the change request as written; the normative text is
 > [Core.md](../Core.md) (v0.5), and where they differ, Core.md wins. Record: Core.md Appendix B,
 > rows "CR-003".
 >
@@ -21,10 +21,18 @@ Nov 8, 2026 · @ivan Labra
 >   `human`, `grounding` and `interpretive` disqualifiers are not allowed yet (D-29, D-30).
 >   Held-out instances need `rework_limit` 0 (D-39); the encodings the CR left open are fixed
 >   in Core.md §7 (RFC 6962 pool, sample ranking). Only `acn-terms/0.5` is accepted.
+>   Templates (Phase C): `template_ref` carries the slot values themselves, not their hash; a
+>   template covers conditions and disqualifiers only, so the §4 examples' `intent`, `price` and
+>   `deadline` aren't template content; an unavailable template isn't flagged; records are per
+>   template, not yet per slot range. The §4 examples are published as
+>   [docs/acn/templates/](../acn/templates/) with §4.1 as
+>   [docs/acn/cos-templates.md](../acn/cos-templates.md); `research-brief/v1` drops d1's
+>   deliverable-derived pool (D-35).
 > - **Open decisions:** OD-1 → D-33, OD-2 → D-34, OD-3 → D-32, OD-4 → D-35, OD-5 → D-29,
 >   OD-6 → D-36, OD-7 → D-37 (all open); added D-30, D-31 (closed), D-38 (closed), D-39.
-> - **Reference:** `acn-core` (V-24…V-27, `instances`), `acn-view` (terms card), demo
->   `/drafted`, `/disqualified`, `/held-out`. Not yet: judged held-out instances in `acn-judge`.
+> - **Reference:** `acn-core` (V-24…V-28, `instances`, `template`), `acn-view` (terms card,
+>   template records), demo `/drafted`, `/disqualified` (both from Atlas's `retry-change/v1`),
+>   `/held-out`. Not yet: judged held-out instances in `acn-judge`.
 
 CR-003 makes conditions of satisfaction (CoS) authorable inside the negotiation cycle. Either party may draft them, the performer typically in its counter-offer, and no commitment can form until every condition is closed and readable by the performer. It adds explicit disqualifiers, held-out evaluation instances with a two-party seed, and shareable terms templates. It assumes CR-001 and CR-002 are applied.
 

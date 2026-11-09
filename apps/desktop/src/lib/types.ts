@@ -217,6 +217,17 @@ export interface TermsCard {
   disqualified_if: { id: string; class: ConditionClass; assurance: Assurance | null; description: string; instances: InstancesView | null }[];
   /** Why this version can't be promised or accepted yet. */
   unclosed: string | null;
+  /** The template this version was drafted from (V-28), with its reader-computed record. */
+  template: TemplateView | null;
+}
+
+export interface TemplateView {
+  event: string;
+  name: string | null;
+  author: string | null;
+  status: { status: "counted" } | { status: "mismatch"; reason: string } | { status: "unavailable" };
+  slots: Record<string, unknown>;
+  record: { commitments: number; paid: number; rejected: number; disqualified: number; disputed: number; open: number };
 }
 
 /** Held-out instances: the public part of the pool (never its contents). */

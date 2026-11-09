@@ -189,7 +189,7 @@ pub async fn start(args: Config) -> anyhow::Result<Running> {
         sessions.insert(actor, s);
     }
     let pk = |a: Actor| sessions[&a].public_key().to_hex();
-    let cast = Cast {
+    let mut cast = Cast {
         performer: pk(Actor::Performer),
         rogue: pk(Actor::Rogue),
         verifier: pk(Actor::Verifier),
@@ -201,6 +201,7 @@ pub async fn start(args: Config) -> anyhow::Result<Running> {
             .judges
             .as_ref()
             .map(|p| serde_json::to_value(p.fingerprints()).unwrap_or_default()),
+        templates: Default::default(),
     };
     if let Some(p) = &args.judges {
         let names: Vec<String> = p
@@ -225,6 +226,12 @@ pub async fn start(args: Config) -> anyhow::Result<Running> {
         advertise(&sessions[&agent], agent, &cast).await?;
     }
     bind(&sessions[&Actor::Performer], &operator).await?;
+    // Public terms templates (CR-003 §2.5); the cast drafts counters against their ids.
+    for (name, actor, d) in acn_sim::templates() {
+        let ev = sessions[&actor].sign_act(&d, None)?;
+        sessions[&actor].publish_act(&ev).await?;
+        cast.templates.insert(name, ev.id);
+    }
 
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let sim = Arc::new(Sim {

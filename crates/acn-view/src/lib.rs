@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 
 mod terms_card;
 pub use terms_card::{
-    CheckedBy, DiffKind, DiffLine, DisqualifierItem, DoneItem, InstancesView, PayIf, TermsCard,
-    TermsVersionView,
+    template_records, CheckedBy, DiffKind, DiffLine, DisqualifierItem, DoneItem, InstancesView,
+    PayIf, TemplateRecord, TemplateView, TermsCard, TermsVersionView,
 };
 
 use acn_core::kinds::*;
@@ -281,14 +281,15 @@ pub struct Projection {
 }
 
 /// Project every commitment in `events` from `me`'s point of view at time `now`.
-/// `events` may include public binding events (they feed V-8).
+/// `events` may include public binding events (they feed V-8) and terms templates (V-28).
 pub fn project(events: &[Event], me: &str, now: u64) -> Vec<Projection> {
     let out = fold(events, &BTreeMap::new());
     let by_id: BTreeMap<&str, &Event> = events.iter().map(|e| (e.id.as_str(), e)).collect();
+    let records = template_records(&out);
     let mut list: Vec<Projection> = out
         .commitments
         .values()
-        .map(|c| one(c, &out, &by_id, me, now))
+        .map(|c| one(c, &out, &by_id, &records, me, now))
         .collect();
     list.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
     list
@@ -470,6 +471,7 @@ fn one(
     c: &Commitment,
     out: &Output,
     by_id: &BTreeMap<&str, &Event>,
+    records: &BTreeMap<String, TemplateRecord>,
     me: &str,
     now: u64,
 ) -> Projection {
@@ -689,8 +691,11 @@ fn one(
     // The version in force: the last one carrying that hash (an ACCEPTed counter, or the request).
     let in_force = versions.iter().rev().find(|v| v.in_force);
     let pending_v = versions.iter().rev().find(|v| v.pending);
-    let terms_card = in_force.and_then(|v| Some(terms_card::card(docs.get(&v.hash).or(terms)?, v)));
-    let pending_card = pending_v.and_then(|v| Some(terms_card::card(docs.get(&v.hash)?, v)));
+    let card_for = |t: &acn_core::Terms, v: &TermsVersionView| {
+        terms_card::card(t, v, terms_card::template_view(t, by_id, records))
+    };
+    let terms_card = in_force.and_then(|v| Some(card_for(docs.get(&v.hash).or(terms)?, v)));
+    let pending_card = pending_v.and_then(|v| Some(card_for(docs.get(&v.hash)?, v)));
     let terms_diff = match (pending_v, in_force) {
         (Some(p), Some(f)) => docs
             .get(&f.hash)
