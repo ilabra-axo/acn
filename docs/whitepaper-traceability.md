@@ -16,7 +16,7 @@ only when the code path exists and a test exercises it (named in the row or in
 | 3 | The requester writes the terms: deliverable, deadline, price, how the result is checked | §7 | `Terms` (`acn-core/src/terms.rs`); per-tool terms offers in `K_SVC`, instantiated by `nmesh-app`; conditions may come from a signed terms template (`K_TERMS_TEMPLATE`, CR-003); drafters and a linter help write them (`acn-author`, CR-003 §3: lint errors block a `REQUEST`, warnings on the card; the performer drafts its counter from its templates) | ✅ (drafting screen: P2) |
 | 3 | Payment is locked at request time | §8.1–8.2 | `H` in the terms; `nmesh-wallet` locks the price as a NUT-14 HTLC token before the REQUEST is signed and sends it NIP-44-encrypted in `content.token`; the performer verifies it with the mint (DLEQ + NUT-07) before working, or declines `payment_invalid`. Under the contingent trigger (CR-002) nothing is locked up front: the requester `FUND`s after the attestation | ✅ test mint (fake Lightning) |
 | 3 | The agent signs those exact terms | INV-4, V-9 | `PROMISE`/`ACCEPT` must carry the terms hash in force; `terms_mismatch` otherwise | ✅ |
-| 3 | Report with evidence | §6.2, §9 | `REPORT` with an inline result and `x` artifact hashes; attestations (`K_ATTEST_*`) | 🟡 Blossom artifacts and derivation records not built |
+| 3 | Report with evidence | §6.2, §9 | `REPORT` with an inline result and `x` artifact hashes; attestations (`K_ATTEST_*`). The reference bindings store every artifact and a derivation record on Blossom (`acn_binding::Performer`, `nmesh-blossom`), and the L0 suite fetches and hash-checks them | ✅ reference bindings; 🟡 the demo cast reports inline |
 | 3 | Checked by tests, real data, or a person | §7 condition classes | `mechanical` / `grounding` / `judged` / `interpretive` / `human`, shown in the card's Conditions panel | 🟡 verifier actors are scripted in the demo; judges are real only with `--judges` |
 | 3 | Satisfied → payment released | INV-6, V-10 | `SATISFY` carries the preimage; `bad_preimage` if wrong; Atlas redeems at the mint; the card shows "redeemed by Atlas" | ✅ test sats |
 | 3 | Not satisfied → rework | §6.2 `REJECT` | `Reworking` below `rework_limit`, then `Rejected`; rework demo scenario | ✅ |
@@ -32,7 +32,7 @@ only when the code path exists and a test exercises it (named in the row or in
 | 5 | Not a platform; anyone can implement | INV-13 | Open spec; the validator is a standalone pure crate | ✅ |
 | 5 | Not a judge of quality; parties choose verifiers | §7 `verifiers` | Verifiers listed per class in the terms; unlisted ones flagged `unlisted_verifier` | ✅ |
 | 5 | Not a reputation authority; many scorers | §11 `K_SCORE` | Kind reserved; no scorer built | ⬜ |
-| 5 | Any framework can join via small interfaces; a thin tool-server adapter is enough | §11, D-10 | `acn-mcp-shim` in `nmesh-agent-bridge` (T0, free calls); the Binding API is a proposal ([harness-binding-API.md](harness-binding-API.md); reference behaviour in [binding-api.md](binding-api.md)), D-10 open | 🟡 |
+| 5 | Any framework can join via small interfaces; a thin tool-server adapter is enough | §11, D-10 | The Binding API's interfaces are traits (`acn-binding`, [harness-binding-API.md](harness-binding-API.md)); two bindings run on them, `acn-mcp-shim` (any MCP server) and `acn-cli-shim` (any command-line harness, no MCP), and both pass the L0 conformance suite (`acn-conformance`) with paid T1 calls and Blossom evidence | ✅ L0; 🟡 L1–L3 (negotiation, governance, verifiers) have no suites yet |
 | 6 | Nostr for messages; signed; no owner | §5 | `nostr-sdk`; relays | ✅ |
 | 6 | (added) Commitments can travel privately, each act still verifiable alone | §5.5 | `K_PRIVATE_ACT` rumor inside NIP-17 gift wraps (`nmesh-core/src/acn.rs`) | ✅ |
 | 6 | Cashu for payment, private by design | §8 | CDK 0.18 wallet (`nmesh-wallet`) and test mint (`nmesh-mint`); tokens encrypted to the performer, so relays see neither amount nor mint | 🟡 test mint only; no real mint, NIP-60 backup or NWC yet |
@@ -80,11 +80,11 @@ The whitepaper was last revised against v0.2. These passages no longer describe 
 
 ## Gaps the whitepaper depends on (to build or keep caveated)
 
-- Cashu against real mints (the CDK path works against a test mint): T0 paid tokens, NIP-60
+- Cashu against real mints (the CDK path works against a test mint, including paid calls to the reference bindings): NIP-60
   wallet backup, NWC top-up, multi-mint policy.
-- Binding API for external harnesses (D-10): P3.
+- Binding API beyond L0 (D-10): the L1–L3 suites.
 - `K_SCORE` scorers, including Brier scoring of `p_on_time`.
-- Blossom artifacts and derivation records: P2.
+- Blossom artifacts for the demo cast (the reference bindings have them): P2.
 - Public (non-private) commitments and selective disclosure to third parties (D-2 remainder), which track records need.
 - **Reputation under private commitments: open decision D-13 in Core.md.** Until it is
   resolved, the whitepaper's track-record claims (§5, §8) describe intent rather than mechanism.

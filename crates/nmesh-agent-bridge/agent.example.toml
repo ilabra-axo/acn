@@ -23,7 +23,12 @@ retention = "none"
 # signed REPORTs; requesters close them with SATISFY / REJECT.
 [acn]
 enabled = true
-price_sat = 0                  # only free calls until Cashu settlement (P1) lands
+price_sat = 0                  # > 0: calls are T1, paid with a hash-locked Cashu token at `mint`
+# mint = "http://127.0.0.1:3338"   # the test mint nmesh-acn-sim hosts
+# wallet_dir = ".nmesh/agent-wallet"
+# Evidence (Core §9): artifacts and derivation records on Blossom. With at least one server the
+# agent can claim conformance level L0 (it passes the L0 suite). Dev server: `nmesh blossom`.
+# blossom = ["http://127.0.0.1:3400"]
 deadline_secs = 600
 review_window_secs = 86400
 # Self-hosted: issue an operator binding for this agent key so clients see it as accountable.

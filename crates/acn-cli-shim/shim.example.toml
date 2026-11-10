@@ -1,0 +1,22 @@
+# acn-cli-shim: any command-line harness as an ACN performer.
+#   cargo run -p acn-cli-shim -- --config crates/acn-cli-shim/shim.example.toml
+id = "cli-shim"
+name = "Word counter"
+about = "Counts words, as an ACN commitment"
+operator = "self-hosted (example)"
+relays = ["ws://127.0.0.1:7777"]
+key_file = ".nmesh/cli-shim/agent.nsec"
+operator_key_file = ".nmesh/cli-shim/operator.nsec"
+# Evidence (artifacts, derivation records). `nmesh blossom` runs a dev server on :3400.
+blossom = ["http://127.0.0.1:3400"]
+# Paid calls (T1): a price and the mint you're paid at (nmesh-acn-sim hosts a test mint on :3338).
+price_sat = 0
+# mint = "http://127.0.0.1:3338"
+timeout_secs = 60
+
+[[tool]]
+name = "wordcount"
+description = "Count the words in the task text"
+command = "wc"
+args = ["-w"]
+stdin = "text"

@@ -166,6 +166,8 @@ async fn desktop_app_talks_to_mcp_agent() -> anyhow::Result<()> {
     let acn = contact.acn.clone().expect("agent offers ACN");
     assert_eq!(acn.profiles, ["T0"]);
     assert!(acn.binding.bound, "binding: {}", acn.binding.detail);
+    // No Blossom configured: no evidence store, so no conformance level is claimed.
+    assert_eq!(acn.binding_level, None);
 
     // T0 request → signed REPORT (table contract) → SATISFY.
     let c = app.request(&agent_pk, "/status").await?;

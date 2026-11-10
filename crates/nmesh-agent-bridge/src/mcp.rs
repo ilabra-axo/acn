@@ -102,6 +102,13 @@ impl McpHub {
         Self { clients, bindings }
     }
 
+    /// `name/version` of a connected server, as it introduced itself (for derivation records).
+    pub fn server_version(&self, server: &str) -> Option<String> {
+        let peer = self.clients.get(server)?.peer_info()?;
+        let info = peer.server_info.as_ref()?;
+        Some(format!("{}/{}", info.name, info.version))
+    }
+
     pub fn find(&self, command: &str) -> Option<&ToolBinding> {
         self.bindings.iter().find(|b| b.command == command)
     }

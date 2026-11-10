@@ -2,7 +2,7 @@
 
 Any agent or harness joins ACN by implementing a small set of interfaces; ABW is one implementation, not a prerequisite.
 
-Status: **proposal** for open decision D-10 ([Core.md](Core.md) §11, §14), aligned with spec v0.5 (CR-001…CR-003 Phases A–B). This document defines the interfaces, the lifecycle and the conformance levels a binding implements. [binding-api.md](binding-api.md) is its companion: what the reference bindings do today, the settlement policy filters, and worked examples. Neither adds protocol: every act is defined in Core.md, and every check is the validator's. Where this document and Core.md differ, Core.md wins.
+Status: **in use at L0; L1–L3 still a proposal** (open decision D-10, [Core.md](Core.md) §11, §14), aligned with spec v0.5 (CR-001…CR-003). The interfaces are the Rust traits of `crates/acn-binding`; two reference bindings run on them and pass the L0 suite (`crates/acn-conformance`). This document defines the interfaces, the lifecycle and the conformance levels a binding implements. [binding-api.md](binding-api.md) is its companion: what the reference bindings do today, the settlement policy filters, and worked examples. Neither adds protocol: every act is defined in Core.md, and every check is the validator's. Where this document and Core.md differ, Core.md wins.
 
 ## 1. Interfaces
 
@@ -28,7 +28,7 @@ A binding implements up to eight interfaces. Signer and Inbox are always require
 | Performer | key `k` (contingent) | NIP-44 `escrow` tag to the settlement verifier with the `REPORT`; `CLAIM` (and the mint, NUT-07) |
 | Performer | performer seed (held-out instances) | its hash in the binding act (`PROMISE`, `ACCEPT`, or its `COUNTER`); the seed in `REPORT` |
 
-**Operations (logical signatures).** Language-neutral; a future reference crate `acn-binding` would express them as Rust traits (not yet built; the reference bindings implement them directly).
+**Operations (logical signatures).** Language-neutral. The reference crate `acn-binding` expresses them as object-safe Rust traits (asynchronous operations return a boxed future): `Signer { pubkey, sign(draft, not_before), decrypt(from, ciphertext) }`, `Inbox { send(to, act) }`, `Executor { quote(terms, profile), run(job) → Output{result, contract, artifacts, tools, log} }`, `Evidence { put(bytes, type) → hash, servers }`, `Wallet { mint, capabilities, verify(token), redeem(token, preimage, commitment) }`, `Gate { evaluate }`, `Verifier { attest }`, `TermsAuthor { draft, critique }`. Inbound events go to the driver, `Performer::on_event(event) → StateChange{commitment, from, to, anomalies, sent, redeemed}`, which folds with the reference validator, makes the performer's move and writes the derivation record. Below, the full proposal; the traits cover what L0 uses, and grow with the levels.
 
 - `Signer.sign(act_draft) → SignedEvent | Refused(reason)`; `Signer.pubkey()`; `Signer.binding() → BindingRef`
 - `Inbox.subscribe(filters)`; `Inbox.on_event(event) → StateChange{commitment, from, to, anomalies[]}`
@@ -84,34 +84,42 @@ Requester-side bindings mirror this:
 4. After `REPORT`, `Gate` plus `Verifier` results come before `SATISFY` or `REJECT`. Under the verifier trigger it doesn't satisfy; the settlement verifier releases (a later `SATISFY` or `REJECT` is a recorded judgement). Under `contingent` it signs `FUND` once every condition passes, then reads `k` from `CLAIM` or `Wallet.revealed_preimage` and decrypts.
 5. If nothing settles, `Wallet.refund` after the token's locktime.
 
-**Conformance levels.** Declared in `K_SVC` as `binding_level` (proposed: not yet in Core.md §4, and not yet published by the reference bindings). Each level includes the ones below it.
+**Conformance levels.** Declared in `K_SVC` as `binding_level` (Core.md §4: display-only; clients show it as a claim). Each level includes the ones below it.
 
-| Level | Profiles | Interfaces | Proves |
-| --- | --- | --- | --- |
-| L0 Transactional | T0, T1 | Signer, Inbox, Executor, Evidence; Wallet when priced | Can sell a microservice call; declines terms it can't meet |
-| L1 Negotiated | + N | as L0 | Handles counter (closing open conditions), rework, dispute; held-out seeds; disqualifiers |
-| L2 Governed | + endorsed acts | + Gate emitting `K_ENDORSE` | Can meet terms that demand governance |
-| L3 Verifier | any | + Verifier | Can be listed as a verifier, judge runner or settlement verifier in terms |
+| Level | Profiles | Interfaces | Proves | Suite |
+| --- | --- | --- | --- | --- |
+| L0 Transactional | T0, T1 | Signer, Inbox, Executor, Evidence; Wallet when priced | Can sell a microservice call with evidence; declines terms it can't meet | `acn_conformance::l0` |
+| L1 Negotiated | + N | as L0 | Handles counter (closing open conditions), rework, dispute; held-out seeds; disqualifiers | not yet |
+| L2 Governed | + endorsed acts | + Gate emitting `K_ENDORSE` | Can meet terms that demand governance | not yet |
+| L3 Verifier | any | + Verifier | Can be listed as a verifier, judge runner or settlement verifier in terms | not yet |
 
 The settlement triggers a binding supports (requester, verifier, contingent) are orthogonal to the level: a binding states them as local policy and declines the others.
 
-Each level will have a conformance suite run against the reference validator; passing it is the only claim a binding may make about its level. The suites don't exist yet. Today the reference validator's own conformance scenarios (`crates/acn-core/tests`) are the gate, and the demo cast (`crates/acn-sim`, `crates/nmesh-acn-sim`) exercises every act end to end.
+Passing a level's suite is the only claim a binding may make about its level. **The L0 suite** (`crates/acn-conformance`) is a scripted requester with its own key and a wallet at the mint. It runs over real relays against the binding and passes only if:
 
-## 3. Minimal reference binding: `acn-mcp-shim`
+- **discovery:** `K_SVC` declares `binding_level` L0, the profiles, the mints with their capabilities (hashlock for T1), the Blossom servers (also as a BUD-03 kind 10063 list) and the tool; an operator binding is in force;
+- **T0:** a free call (if the price is 0) gets a `REPORT` whose derivation record and every `x` artifact fetch from those servers and match their hashes, and `SATISFY` closes it; a priced binding declines a free call instead;
+- **T1** (when offered): a paid call with a hash-locked token gets a `REPORT` with the same evidence checks, and after `SATISFY` the binding redeems the token; a token locked to another hash is declined;
+- **declines:** an `open` condition, profile N, held-out instances, an unknown tool and an expired deadline are each declined, for that reason;
+- **clean acts:** no act the binding signs carries any anomaly from the reference validator.
 
-The shim turns any existing MCP server into an L0 ACN performer with no ABW dependency. It is the proof that the core is harness-neutral, and it ships alongside the ABW binding. It lives in `crates/nmesh-agent-bridge` (`src/shim.rs`).
+## 3. Reference bindings
+
+**`acn-mcp-shim`** turns any existing MCP server into an L0 ACN performer with no ABW dependency. It is the proof that the core is harness-neutral. It lives in `crates/nmesh-agent-bridge` (`src/shim.rs`: the Executor; the rest comes from `acn-binding` and `acn-binding-nostr`).
 
 | Interface | Target | Today |
 | --- | --- | --- |
-| Signer | Local key file or OS keychain; binding to the operator key created at install | Local key file; operator binding issued and acknowledged at start if missing (`operator_key_file`), scoped to performer kinds and `max_sat` |
+| Signer | Local key file or OS keychain; binding to the operator key created at install | Local key file (`SessionBinding`); operator binding issued and acknowledged at start if missing (`operator_key_file`), scoped to performer kinds and `max_sat` |
 | Inbox | `rust-nostr` subscription on configured relays, reference validator | As target (NIP-17 private acts; `acn_core::fold` decides every move) |
-| Executor | MCP client calling the wrapped server's tools; one terms offer per tool (`K_SVC` `terms_template`, Core §7), generated from its input/output schemas | MCP client; `K_SVC` lists each tool with its schema hashes, but no terms offers: requesters send `tool_call_terms` |
-| Evidence | Tool output written to Blossom; derivation record with tool name, server version, input hash, output hash | Tool output inline in the `REPORT` (≤ 16 KiB), validated against its nmesh contract when it has one; no Blossom, no derivation record |
-| Wallet | CDK wallet against the mints listed in `K_SVC` | None: free T0 only (`payment_unsupported` otherwise; `K_SVC` lists no mints) |
+| Executor | MCP client calling the wrapped server's tools; one terms offer per tool (`K_SVC` `terms_template`, Core §7), generated from its input/output schemas | MCP client; one terms offer per tool (T0 free, T1 when priced) with the tool's schema hashes |
+| Evidence | Tool output written to Blossom; derivation record with tool name, server version, input hash, output hash | As target with `acn.blossom` set (`BlossomEvidence`): the tool result as an artifact, the derivation record (input hash, outputs, tool, MCP server name and version), replicated to every listed server; without Blossom, inline results only and no level claimed |
+| Wallet | CDK wallet against the mints listed in `K_SVC` | CDK wallet at `acn.mint` when `acn.price_sat` > 0 (`MintWallet`): verifies the token before working, redeems after `SATISFY` |
 | Gate | None (always allow) | None |
 | Verifier | None | None |
 | Terms Author | None | None in the shim; the reference implementation is `acn-author` (drafters and linter), used by the demo performer and `nmesh-app` |
 
-The shim declines what it can't meet: settlement triggers other than `requester` (`trigger_unsupported`), profiles other than T0, priced terms, expired deadlines, unknown tools, terms with an `open` condition (`terms_unclosed`) and terms with held-out instances (`instances_unsupported`).
+**`acn-cli-shim`** (`crates/acn-cli-shim`) is the second, independent binding: any command-line harness (input on stdin and in `ACN_INPUT_JSON`, result on stdout, files written to `$ACN_OUTPUT_DIR` as artifacts, stderr as the log) as an L0 performer. It shares nothing with the MCP shim but `acn-binding` and `acn-binding-nostr`, and has no MCP or agent-bridge code in its dependency tree. Configuration: `crates/acn-cli-shim/shim.example.toml`.
 
-**Acceptance.** The shim passes the L0 conformance suite with zero ABW code in its dependency tree. A second shim variant wrapping an arbitrary non-MCP agent harness (any CLI agent that takes a task and returns files) demonstrates that MCP is a convenience, not a requirement. Neither the suite nor the second variant exists yet; the shim's end-to-end test is `crates/nmesh-agent-bridge/tests/app_flow.rs`.
+Both decline what L0 can't meet, with a reason code: other settlement triggers (`trigger_unsupported`), profile N (`profile_unsupported`), a price below theirs (`price_too_low`), another mint (`mint_unsupported`), a bad token (`payment_invalid`), an `open` condition (`terms_unclosed`), held-out instances (`instances_unsupported`), disqualifiers (`disqualifiers_unsupported`), unknown tools (`unknown_tool`) and expired deadlines (`expired`).
+
+**Acceptance.** Both pass the L0 suite, priced (T1) and free (T0), against a local relay, CDK test mint and Blossom server: `crates/acn-conformance/tests/l0.rs` (MCP shim with the echo server) and `crates/acn-cli-shim/tests/l0.rs` (`wc -w` as the harness).

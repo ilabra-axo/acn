@@ -41,7 +41,7 @@
         {/if}
       </dd>
       <dt>Commitments</dt>
-      <dd>ACN {contact.acn.profiles.join(", ")} · {contact.acn.min_price_sat ? `from ${contact.acn.min_price_sat} sat` : "free"}</dd>
+      <dd>ACN {contact.acn.profiles.join(", ")} · {contact.acn.min_price_sat ? `from ${contact.acn.min_price_sat} sat` : "free"}{#if contact.acn.binding_level} · <span class="pill mono" title="Binding API conformance level the agent claims (K_SVC binding_level). The level's conformance suite is what proves it.">claims {contact.acn.binding_level}</span>{/if}{#if contact.acn.blossom.length} · evidence on {contact.acn.blossom.length} Blossom server{contact.acn.blossom.length === 1 ? "" : "s"}{/if}</dd>
     {/if}
     {#if contact.commands.length}
       <dt>Can do</dt>

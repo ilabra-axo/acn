@@ -12,6 +12,84 @@ dependencies = [
 ]
 
 [[package]]
+name = "acn-binding"
+version = "0.1.0"
+dependencies = [
+ "acn-author",
+ "acn-core",
+ "acn-wallet",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "acn-binding-nostr"
+version = "0.1.0"
+dependencies = [
+ "acn-binding",
+ "acn-core",
+ "anyhow",
+ "nmesh-blossom",
+ "nmesh-core",
+ "nmesh-wallet",
+ "nostr-sdk",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "acn-cli-shim"
+version = "0.1.0"
+dependencies = [
+ "acn-binding",
+ "acn-binding-nostr",
+ "acn-conformance",
+ "acn-core",
+ "anyhow",
+ "clap",
+ "nmesh-blossom",
+ "nmesh-core",
+ "nmesh-mint",
+ "nmesh-proto",
+ "nmesh-wallet",
+ "nostr-relay-builder",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "acn-conformance"
+version = "0.1.0"
+dependencies = [
+ "acn-binding",
+ "acn-core",
+ "anyhow",
+ "nmesh-agent-bridge",
+ "nmesh-blossom",
+ "nmesh-core",
+ "nmesh-mint",
+ "nmesh-proto",
+ "nmesh-wallet",
+ "nostr-relay-builder",
+ "nostr-sdk",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "acn-core"
 version = "0.1.0"
 dependencies = [
@@ -3163,13 +3241,17 @@ dependencies = [
 name = "nmesh-agent-bridge"
 version = "0.1.0"
 dependencies = [
+ "acn-binding",
+ "acn-binding-nostr",
  "acn-core",
  "anyhow",
  "clap",
  "nmesh-app",
+ "nmesh-blossom",
  "nmesh-contracts",
  "nmesh-core",
  "nmesh-proto",
+ "nmesh-wallet",
  "nostr-relay-builder",
  "rmcp",
  "rustls",
@@ -3204,11 +3286,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "nmesh-blossom"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "hex",
+ "nostr",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "nmesh-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "nmesh-blossom",
  "nmesh-contracts",
  "nmesh-core",
  "nmesh-proto",

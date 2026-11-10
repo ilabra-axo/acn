@@ -42,10 +42,11 @@ of focused work for 1–2 people.
 - [ ] Drafting UI (intent → drafted terms → card with findings → send) and a model-backed drafter behind the same signatures: P2
 - [ ] Template records split by slot range (the template-laundering residual, Core §13)
 - [x] Board (queue view, §12): columns by ACN stage across agents and roles, whose-move from `acn-view`, needs-you filter, paged Closed column, drawer with the full card; no drag-and-drop. Reset demo (Director)
-- [ ] P1 remainder: T0 paid (unlocked token swapped before work) in the MCP shim
+- [x] P1 remainder: paid calls in the MCP shim, as T1 with a hash-locked token (verified before work, redeemed after `SATISFY`); unlocked-token T0 is not offered
 - [ ] Wallet: NIP-60 backup, NWC top-up, real mints and a multi-mint policy, binding `max_sat` caps applied to the wallet, encrypted preimage/proof storage
-- [ ] P2: negotiated profile in the UI (counter/accept/promise), Blossom terms + artifacts, attestations UI
-- [ ] P3: Binding API for external harnesses ([proposal](harness-binding-API.md), D-10): `acn-binding` traits, `binding_level` in `K_SVC`, conformance suites L0–L3, the shim at L0 (Blossom, derivation records, wallet), a second independent binding
+- [ ] P2: negotiated profile in the UI (counter/accept/promise), terms on Blossom, attestations UI, the demo cast's artifacts on Blossom (the reference bindings already store artifacts and derivation records there)
+- [x] P3 at L0 ([harness-binding-API.md](harness-binding-API.md), D-10): `acn-binding` traits and the performer driver, `acn-binding-nostr` adapters, `binding_level` in `K_SVC`, the L0 suite (`acn-conformance`), `acn-mcp-shim` at L0 (Blossom evidence, derivation records, CDK wallet), `acn-cli-shim` as the second independent binding, `nmesh blossom` dev server
+- [ ] P3 beyond L0: L1–L3 suites; profile N, Gate and Verifier in the driver; the requester side (`nmesh-app`) and the demo cast on the traits; a requester-side runner
 - [ ] P4: arbiter path, anchoring (D-11), adversarial scenarios
 
 ## Phase 1: Usable messaging

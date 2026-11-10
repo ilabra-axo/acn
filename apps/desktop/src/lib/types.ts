@@ -61,6 +61,9 @@ export interface AcnPeer {
   binding: BindingView;
   tools: AcnTool[];
   simulated: boolean;
+  /** Conformance level the agent claims (K_SVC binding_level): a claim, not checked by the app. */
+  binding_level: string | null;
+  blossom: string[];
 }
 
 export interface Contact {

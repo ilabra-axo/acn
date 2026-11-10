@@ -87,6 +87,11 @@ pub struct AcnPeerView {
     pub tools: Vec<AcnToolView>,
     /// The agent says it is a simulation (demo cast).
     pub simulated: bool,
+    /// The Binding API conformance level the agent claims (`K_SVC` `binding_level`, Core §4).
+    /// A claim, shown as such: only the level's suite can check it.
+    pub binding_level: Option<String>,
+    /// Where its artifacts and derivation records are (Blossom servers, Core §9).
+    pub blossom: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -116,6 +121,16 @@ impl AcnPeerView {
             review_window_secs: defaults["review_window_secs"].as_u64().unwrap_or(86_400),
             binding: binding.into(),
             simulated: svc["simulated"].as_bool().unwrap_or(false),
+            binding_level: svc["binding_level"]
+                .as_str()
+                .filter(|l| matches!(*l, "L0" | "L1" | "L2" | "L3"))
+                .map(str::to_owned),
+            blossom: svc["blossom"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|s| s.as_str().map(str::to_owned))
+                .collect(),
             tools: svc["tools"]
                 .as_array()
                 .into_iter()

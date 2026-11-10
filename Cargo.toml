@@ -14,6 +14,11 @@ members = [
     "crates/acn-wallet",
     "crates/acn-judge",
     "crates/acn-author",
+    "crates/nmesh-blossom",
+    "crates/acn-binding",
+    "crates/acn-binding-nostr",
+    "crates/acn-conformance",
+    "crates/acn-cli-shim",
     "crates/nmesh-wallet",
     "crates/nmesh-mint",
     "crates/nmesh-acn-sim",
@@ -40,6 +45,10 @@ acn-sim = { path = "crates/acn-sim" }
 acn-wallet = { path = "crates/acn-wallet" }
 acn-judge = { path = "crates/acn-judge" }
 acn-author = { path = "crates/acn-author" }
+nmesh-blossom = { path = "crates/nmesh-blossom" }
+acn-binding = { path = "crates/acn-binding" }
+acn-binding-nostr = { path = "crates/acn-binding-nostr" }
+acn-conformance = { path = "crates/acn-conformance" }
 nmesh-wallet = { path = "crates/nmesh-wallet" }
 nmesh-mint = { path = "crates/nmesh-mint" }
 

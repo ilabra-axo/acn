@@ -21,9 +21,22 @@ pub struct AgentConfig {
 pub struct AcnConfig {
     #[serde(default = "yes")]
     pub enabled: bool,
-    /// Minimum price (sat). Only 0 is supported until Cashu (P1) lands.
+    /// Price per call (sat). Above 0, calls are T1 with a hash-locked Cashu token at `mint`.
     #[serde(default)]
     pub price_sat: u64,
+    /// The Cashu mint the agent is paid at (needed when `price_sat` > 0).
+    #[serde(default)]
+    pub mint: Option<String>,
+    /// The mint's rail capabilities, as advertised in `K_SVC` (Core §8.6).
+    #[serde(default = "default_capabilities")]
+    pub mint_capabilities: Vec<String>,
+    /// Where the agent's wallet keeps its state. Omit to keep it in memory.
+    #[serde(default)]
+    pub wallet_dir: Option<PathBuf>,
+    /// Blossom servers for artifacts and derivation records (Core §9). Without any the agent
+    /// reports inline results only and claims no conformance level.
+    #[serde(default)]
+    pub blossom: Vec<String>,
     /// Suggested deadline for requests, seconds from now.
     #[serde(default = "default_deadline")]
     pub deadline_secs: u64,
@@ -42,12 +55,27 @@ impl Default for AcnConfig {
         Self {
             enabled: true,
             price_sat: 0,
+            mint: None,
+            mint_capabilities: default_capabilities(),
+            wallet_dir: None,
+            blossom: vec![],
             deadline_secs: default_deadline(),
             review_window_secs: default_review(),
             operator_key_file: None,
             binding_days: default_binding_days(),
         }
     }
+}
+
+fn default_capabilities() -> Vec<String> {
+    [
+        "hashlock",
+        "timelock_refund",
+        "p2pk",
+        "reveals_preimage_to_payer",
+    ]
+    .map(String::from)
+    .to_vec()
 }
 
 fn yes() -> bool {
