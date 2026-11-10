@@ -32,7 +32,7 @@ Nov 8, 2026 · @ivan Labra
 >   OD-6 → D-36, OD-7 → D-37 (all open); added D-30, D-31 (closed), D-38 (closed), D-39.
 > - **Reference:** `acn-core` (V-24…V-28, `instances`, `template`), `acn-view` (terms card,
 >   template records), demo `/drafted`, `/disqualified` (both from Atlas's `retry-change/v1`),
->   `/held-out`. Not yet: judged held-out instances in `acn-judge`.
+>   `/held-out` (mechanical and judged held-out cases; `acn-judge` feeds the sample to the judges).
 
 CR-003 makes conditions of satisfaction (CoS) authorable inside the negotiation cycle. Either party may draft them, the performer typically in its counter-offer, and no commitment can form until every condition is closed and readable by the performer. It adds explicit disqualifiers, held-out evaluation instances with a two-party seed, and shareable terms templates. It assumes CR-001 and CR-002 are applied.
 

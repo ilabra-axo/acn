@@ -180,6 +180,8 @@ struct State {
     owner: HashMap<String, String>,
     /// commitment id -> payment preimage `s` (hex) for conditional commitments we requested.
     secrets: HashMap<String, String>,
+    /// commitment id -> our requester seed for held-out instances (hex).
+    seeds: HashMap<String, String>,
     /// ACN acts created before this are ignored ("Reset demo").
     demo_epoch: u64,
     /// Commitments the reset cleared that the time cutoff alone can't exclude (same second).
@@ -288,6 +290,7 @@ impl App {
                     svc: HashMap::new(),
                     owner: HashMap::new(),
                     secrets: stored.secrets.clone(),
+                    seeds: stored.seeds.clone(),
                     demo_epoch: stored.demo_epoch,
                     cleared: stored.cleared.iter().cloned().collect(),
                 }),
@@ -699,13 +702,23 @@ impl App {
         }
         if let Some((s, to)) = &seed {
             let runner = PublicKey::parse(to).map_err(|e| AppError::BadKey(e.to_string()))?;
-            let ct = self.inner.session.nip44_encrypt(&runner, s)?;
-            draft = draft.tag(vec!["seed".into(), ct, runner.to_hex()]);
+            // When we run the checks ourselves, the seed stays here (see `held_out`).
+            if runner != self.inner.session.public_key() {
+                let ct = self.inner.session.nip44_encrypt(&runner, s)?;
+                draft = draft.tag(vec!["seed".into(), ct, runner.to_hex()]);
+            }
         }
         let act = self.inner.session.sign_act(&draft, None)?;
         let id = act.id.clone();
-        if let Some(s) = secret {
-            self.inner.state.lock().await.secrets.insert(id.clone(), s);
+        if secret.is_some() || seed.is_some() {
+            let mut st = self.inner.state.lock().await;
+            if let Some(s) = secret {
+                st.secrets.insert(id.clone(), s);
+            }
+            if let Some((s, _)) = seed {
+                st.seeds.insert(id.clone(), s);
+            }
+            drop(st);
             self.persist().await;
         }
         if let (Some(t), Some(w)) = (&token, &self.inner.wallet) {
@@ -1001,6 +1014,48 @@ impl App {
             .chain(st.bindings.get(conv).into_iter().flatten())
             .cloned()
             .collect()
+    }
+
+    /// What a requester-side runner needs to attest an item with held-out instances (CR-003
+    /// §2.3): our seed for the commitment, the performer's seed its REPORT revealed, and the
+    /// pool, which we wrote and keep (it never goes on the wire). Check it against the item's
+    /// terms with `HeldOut::reveal_for` before running anything.
+    pub async fn held_out(
+        &self,
+        pubkey: &str,
+        commitment: &str,
+        pool: Vec<Value>,
+    ) -> Result<acn_core::instances::HeldOut, AppError> {
+        let conv = parse_pk(pubkey)?.to_hex();
+        let requester_seed = self
+            .inner
+            .state
+            .lock()
+            .await
+            .seeds
+            .get(commitment)
+            .cloned()
+            .ok_or_else(|| {
+                AppError::Invalid("no requester seed kept for that commitment".into())
+            })?;
+        let events = self.fold_input(&conv).await;
+        let out = acn_core::fold(&events, &std::collections::BTreeMap::new());
+        let performer_seed = out
+            .commitments
+            .get(commitment)
+            .and_then(|c| c.state.as_ref())
+            .and_then(|s| s.performer_seed.clone())
+            .ok_or_else(|| {
+                AppError::Invalid(
+                    "the performer hasn't revealed its seed yet (no counted REPORT)".into(),
+                )
+            })?;
+        Ok(acn_core::instances::HeldOut {
+            pool,
+            requester_seed,
+            performer_seed,
+            commitment: commitment.to_string(),
+        })
     }
 
     /// Sign and send a requester act built through the act schemas.
@@ -1309,6 +1364,7 @@ impl App {
                 })
                 .collect(),
             secrets: st.secrets.clone(),
+            seeds: st.seeds.clone(),
             demo_epoch: st.demo_epoch,
             cleared: st.cleared.iter().cloned().collect(),
         };

@@ -715,7 +715,13 @@ impl Sim {
         let panel = self.judges.as_ref()?;
         for attempt in 1..=3u64 {
             match panel
-                .evaluate(&job.condition, &job.rubric, &job.task, &job.artifact)
+                .evaluate(
+                    &job.condition,
+                    &job.rubric,
+                    &job.task,
+                    &job.artifact,
+                    job.held_out.as_ref(),
+                )
                 .await
             {
                 Ok(ev) => {

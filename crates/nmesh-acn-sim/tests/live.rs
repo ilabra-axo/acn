@@ -206,6 +206,49 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
                 );
                 assert_eq!(tv.name.as_deref(), Some("retry-change/v1"));
             }
+            // CR-003 §2.3: the judges' attestation on c2 revealed the review cases both seeds
+            // select, and the app (which kept its seed) reproduces exactly that sample, as a
+            // requester-side runner would.
+            "held-out" => {
+                let line = view
+                    .timeline
+                    .iter()
+                    .find(|e| e.act == "ATTEST_JUDGED")
+                    .map(|e| e.summary.clone())
+                    .expect("a judged attestation on c2");
+                let pool: Vec<serde_json::Value> = acn_sim::REVIEW_POOL
+                    .iter()
+                    .map(|s| serde_json::json!(s))
+                    .collect();
+                let held = app.held_out(&pk, &id, pool.clone()).await?;
+                let (mut picked, _) = acn_core::instances::reveal(
+                    &pool,
+                    &held.requester_seed,
+                    &held.performer_seed,
+                    &id,
+                    acn_sim::REVIEW_SAMPLE,
+                )
+                .expect("reveal");
+                picked.sort_unstable();
+                let shown: Vec<String> = picked.iter().map(|i| i.to_string()).collect();
+                assert!(
+                    line.contains(&format!("held-out cases {}", shown.join(", "))) || {
+                        // The attestation lists them in rank order; compare as sets.
+                        let got: std::collections::BTreeSet<u32> = line
+                            .split("held-out cases ")
+                            .nth(1)
+                            .unwrap_or_default()
+                            .split(" with")
+                            .next()
+                            .unwrap_or_default()
+                            .split(", ")
+                            .filter_map(|x| x.parse().ok())
+                            .collect();
+                        got == picked.iter().copied().collect()
+                    },
+                    "{line} vs {picked:?}"
+                );
+            }
             "contingent" => {
                 // Sealed until CLAIM revealed k; now the card shows the decrypted result.
                 let r = view.report.as_ref().expect("report");
@@ -311,7 +354,7 @@ async fn judged_scenarios_with_real_judges() -> anyhow::Result<()> {
     app.add_contact(&pk).await?;
     app.accept_agent(&pk).await?;
 
-    for id in ["judged", "injected"] {
+    for id in ["judged", "injected", "held-out"] {
         let c = app.request(&pk, &format!("/{id} the ACN protocol")).await?;
         let mut done = false;
         // Real judges on a CPU take minutes.
@@ -357,6 +400,18 @@ async fn judged_scenarios_with_real_judges() -> anyhow::Result<()> {
         if id == "injected" {
             assert!(codes.contains(&"injection_detected"), "{codes:?}");
             assert_eq!(view.phase, Some(Phase::Rejected));
+        } else if id == "held-out" {
+            // The judges saw the sampled review cases; the attestation reveals them and counts.
+            assert!(
+                judged.summary.contains("held-out cases"),
+                "{}",
+                judged.summary
+            );
+            assert!(
+                matches!(view.phase, Some(Phase::Satisfied) | Some(Phase::Rejected)),
+                "{:?}",
+                view.phase
+            );
         } else {
             // Real opinions: either released (pass) or rejected as below threshold.
             assert!(

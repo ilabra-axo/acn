@@ -136,6 +136,84 @@ pub fn from_hex(s: &str) -> Option<Hash> {
     hex::decode(s).ok()?.try_into().ok()
 }
 
+/// What a runner holds to attest an item with instances: its whole pool, the requester's seed it
+/// was given, the performer's seed the `REPORT` revealed, and the commitment id (all hex).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct HeldOut {
+    pub pool: Vec<Value>,
+    pub requester_seed: String,
+    pub performer_seed: String,
+    pub commitment: String,
+}
+
+impl HeldOut {
+    /// Check the pool and seed against the item's terms, then [`reveal`]: what V-27 will check,
+    /// so a runner never signs an attestation that doesn't count.
+    pub fn reveal_for(
+        &self,
+        terms: &crate::terms::Instances,
+    ) -> Result<(Vec<u32>, Vec<Value>), String> {
+        if self.pool.len() != terms.pool_size as usize {
+            return Err(format!(
+                "the pool holds {} items, the terms say {}",
+                self.pool.len(),
+                terms.pool_size
+            ));
+        }
+        if pool_root(&self.pool) != terms.pool_root {
+            return Err("the pool doesn't hash to the terms' pool_root".into());
+        }
+        let rs = from_hex(&self.requester_seed).ok_or("requester_seed is not 32-byte hex")?;
+        if crate::jcs::sha256_hex(&rs) != terms.requester_seed_hash {
+            return Err("requester_seed doesn't match requester_seed_hash".into());
+        }
+        reveal(
+            &self.pool,
+            &self.requester_seed,
+            &self.performer_seed,
+            &self.commitment,
+            terms.sample_size,
+        )
+        .ok_or_else(|| "the performer seed or commitment id is not 32-byte hex".into())
+    }
+}
+
+/// `pool_root` for a pool of JSON items, as hex.
+pub fn pool_root(pool: &[Value]) -> String {
+    let b: Vec<Vec<u8>> = pool.iter().map(item_bytes).collect();
+    hex::encode(root(&b))
+}
+
+/// What a runner reveals in its attestation (V-27): the sample both seeds select from `pool`, in
+/// rank order, and `[{index, item, proof}]` for the `instances` field. Seeds and the commitment
+/// id are 32-byte hex. `None` if one doesn't decode or the sample is larger than the pool.
+pub fn reveal(
+    pool: &[Value],
+    requester_seed: &str,
+    performer_seed: &str,
+    commitment: &str,
+    sample_size: u32,
+) -> Option<(Vec<u32>, Vec<Value>)> {
+    let (rs, ps, cid) = (
+        from_hex(requester_seed)?,
+        from_hex(performer_seed)?,
+        from_hex(commitment)?,
+    );
+    if sample_size as usize > pool.len() {
+        return None;
+    }
+    let b: Vec<Vec<u8>> = pool.iter().map(item_bytes).collect();
+    let picked = sample(&rs, &ps, &cid, pool.len() as u32, sample_size);
+    let revealed = picked
+        .iter()
+        .map(|&i| {
+            let proof: Vec<String> = proof(&b, i as usize).iter().map(hex::encode).collect();
+            serde_json::json!({"index": i, "item": pool[i as usize], "proof": proof})
+        })
+        .collect();
+    Some((picked, revealed))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,6 +260,41 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn reveal_proves_against_the_pool_root() {
+        let pool: Vec<Value> = (0..12)
+            .map(|i| serde_json::json!(format!("case {i}")))
+            .collect();
+        let r = from_hex(&pool_root(&pool)).unwrap();
+        let (s, items) = reveal(
+            &pool,
+            &"01".repeat(32),
+            &"02".repeat(32),
+            &"03".repeat(32),
+            3,
+        )
+        .unwrap();
+        assert_eq!(s, sample(&[1; 32], &[2; 32], &[3; 32], 12, 3));
+        for x in &items {
+            let path: Vec<Hash> = x["proof"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|h| from_hex(h.as_str().unwrap()).unwrap())
+                .collect();
+            let leaf = leaf_hash(&item_bytes(&x["item"]));
+            assert!(verify(x["index"].as_u64().unwrap(), 12, &leaf, &path, &r));
+        }
+        assert!(reveal(
+            &pool,
+            &"01".repeat(32),
+            &"02".repeat(32),
+            &"03".repeat(32),
+            13
+        )
+        .is_none());
     }
 
     #[test]

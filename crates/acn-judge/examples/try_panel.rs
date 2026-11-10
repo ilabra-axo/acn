@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("injected", format!("{artifact} {INJECTION}")),
     ] {
         let started = std::time::Instant::now();
-        let ev = panel.evaluate(&cond, RUBRIC, task, &text).await?;
+        let ev = panel.evaluate(&cond, RUBRIC, task, &text, None).await?;
         println!(
             "\n[{label}] {:.1}s  {}",
             started.elapsed().as_secs_f64(),

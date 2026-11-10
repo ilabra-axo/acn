@@ -19,6 +19,7 @@
 use std::path::Path;
 use std::time::Duration;
 
+pub use acn_core::instances::HeldOut;
 use acn_core::jcs::{self, sha256_hex};
 use acn_core::terms::{Aggregation, Condition, JudgeFingerprint, Judged, Scale};
 use serde::Deserialize;
@@ -49,6 +50,28 @@ Reply with only this JSON object:
 /// The user message (pinned by the harness hash). Placeholders: `{task}`, `{nonce}`, `{artifact}`.
 const USER_TEMPLATE: &str =
     "TASK:\n{task}\n\n<<<ARTIFACT {nonce}>>>\n{artifact}\n<<<END ARTIFACT {nonce}>>>";
+
+/// The user message when the condition has held-out instances (CR-003 §2.3): the sampled cases
+/// come from the runner (trusted), before the artifact. Placeholders as above plus `{cases}`.
+const USER_TEMPLATE_CASES: &str = "TASK:\n{task}\n\nHELD-OUT CASES (the performer did not see these; score the ARTIFACT on how well it handles them, according to the RUBRIC):\n{cases}\n\n<<<ARTIFACT {nonce}>>>\n{artifact}\n<<<END ARTIFACT {nonce}>>>";
+
+/// The sampled cases as the judges see them: numbered in rank order, a string as is, anything
+/// else as its JCS encoding.
+fn render_cases(items: &[Value]) -> String {
+    items
+        .iter()
+        .enumerate()
+        .map(|(n, x)| {
+            let item = &x["item"];
+            let text = match item.as_str() {
+                Some(s) => s.to_string(),
+                None => jcs::canonical(item).unwrap_or_default(),
+            };
+            format!("{}. {}", n + 1, text.replace("<<<", "‹‹‹"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 /// Phrases that address the evaluator or try to override it. Matched case-insensitively
 /// (ASCII); a hit fails the condition regardless of the scores (V-17.5).
@@ -90,6 +113,8 @@ pub fn harness_descriptor() -> Value {
         "id": HARNESS_ID,
         "transport": "openai-chat-completions",
         "user_template": USER_TEMPLATE,
+        "user_template_cases": USER_TEMPLATE_CASES,
+        "cases": "the sample in rank order, numbered from 1; a string item as is, others as JCS; <<< -> ‹‹‹",
         "nonce": "first 16 hex of sha256(artifact)",
         "artifact": {"max_chars": MAX_ARTIFACT_CHARS, "neutralize": "<<< -> ‹‹‹"},
         "reply": {"score": "number within the scale", "rationale": "string", "injection": "bool", "injection_span": "string"},
@@ -119,6 +144,10 @@ pub enum Error {
     NotPinned(String),
     #[error("judge `{model}`: {detail}")]
     Judge { model: String, detail: String },
+    /// The held-out input doesn't fit the condition (missing, unexpected, or not matching the
+    /// terms' pool root and seed hash), so an attestation wouldn't count (V-27).
+    #[error("held-out instances: {0}")]
+    Instances(String),
 }
 
 /// One judge in `judges.toml` (`[[judge]]`).
@@ -346,18 +375,42 @@ impl<L: Llm> Panel<L> {
     /// Run the judges the condition pins on `artifact` and build the `K_ATTEST_JUDGED` content.
     /// `rubric` is the rubric text (it must hash to `rubric_hash`); `task` tells the judges what
     /// the artifact was produced for (the deliverable description and the brief).
+    ///
+    /// `held_out` is required exactly when the condition declares `instances` (CR-003 §2.3):
+    /// the runner's pool and the two seeds. The judges see the sampled cases, and the content
+    /// reveals the requester's seed and each case with its proof, as V-27 checks.
     pub async fn evaluate(
         &self,
         condition: &Condition,
         rubric: &str,
         task: &str,
         artifact: &str,
+        held_out: Option<&HeldOut>,
     ) -> Result<Evaluation, Error> {
         let j = condition.judged().map_err(Error::Terms)?;
         let rubric_hash = sha256_hex(rubric.as_bytes());
         if rubric_hash != j.rubric_hash {
             return Err(Error::Rubric);
         }
+        let revealed = match (&j.instances, held_out) {
+            (None, None) => None,
+            (Some(_), None) => {
+                return Err(Error::Instances(format!(
+                    "`{}` declares held-out instances: supply the pool and both seeds",
+                    condition.id
+                )))
+            }
+            (None, Some(_)) => {
+                return Err(Error::Instances(format!(
+                    "`{}` declares no instances",
+                    condition.id
+                )))
+            }
+            (Some(i), Some(h)) => {
+                let (_, items) = h.reveal_for(i).map_err(Error::Instances)?;
+                Some((h.requester_seed.clone(), items))
+            }
+        };
         let pinned: Vec<&Judge> = j
             .judges
             .iter()
@@ -371,10 +424,21 @@ impl<L: Llm> Panel<L> {
 
         let nonce = sha256_hex(artifact.as_bytes())[..16].to_string();
         let shown = prepare_artifact(artifact);
-        let user = fill(
-            USER_TEMPLATE,
-            &[("task", task), ("nonce", &nonce), ("artifact", &shown)],
-        );
+        let user = match &revealed {
+            None => fill(
+                USER_TEMPLATE,
+                &[("task", task), ("nonce", &nonce), ("artifact", &shown)],
+            ),
+            Some((_, items)) => fill(
+                USER_TEMPLATE_CASES,
+                &[
+                    ("task", task),
+                    ("cases", &render_cases(items)),
+                    ("nonce", &nonce),
+                    ("artifact", &shown),
+                ],
+            ),
+        };
         let (min, max) = (num(j.scale.min), num(j.scale.max));
         let outcomes = futures::future::try_join_all(pinned.iter().map(|judge| {
             let system = fill(
@@ -437,6 +501,10 @@ impl<L: Llm> Panel<L> {
         }
         if let Some(span) = &injection {
             content["injection_span_hash"] = json!(sha256_hex(span.as_bytes()));
+        }
+        if let Some((seed, items)) = revealed {
+            content["requester_seed"] = json!(seed);
+            content["instances"] = json!(items);
         }
         let summary = summarize(&judges, &j, aggregate, injection.as_deref());
         Ok(Evaluation {
