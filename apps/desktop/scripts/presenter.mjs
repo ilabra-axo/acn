@@ -165,8 +165,10 @@ await page.locator(".commitment").last().locator("text=disqualified").first().wa
 await run("held-out", { manual: [{ waitFor: ".commitment .terms-card >> text=Held-out: 5 of 20", shot: "p17-held-out-terms" }] });
 await page.locator(".commitment").last().getByRole("button", { name: /signed events/ }).click();
 await page.locator(".commitment").last().locator("text=held-out cases").first().waitFor({ timeout: 10000 });
+// The judged condition too: the judges' attestation reveals its own sample (review cases).
+await page.locator(".commitment").last().locator("text=/judged opinion · held-out cases/").first().waitFor({ timeout: 10000 });
 await shot("p18-held-out-attested");
-console.log("ok   held-out: sample attested with proofs");
+console.log("ok   held-out: tests and judged review cases attested with proofs");
 
 await browser.close();
 if (errors.length) {

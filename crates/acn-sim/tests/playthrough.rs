@@ -273,6 +273,20 @@ fn scenario_outcomes() {
         .as_ref()
         .expect("pool shown on the card");
     assert_eq!((i.pool_size, i.sample_size), (20, 5));
+    // A judged condition with its own held-out pool: the judges' attestation reveals 3 review
+    // cases, drawn by the same seeds, each proved against that pool's root (V-27 counts it).
+    let r = card.done_means[1]
+        .instances
+        .as_ref()
+        .expect("review pool shown on the card");
+    assert_eq!((r.pool_size, r.sample_size), (8, 3));
+    let c2 = p.conditions.iter().find(|c| c.id == "c2").unwrap();
+    assert_eq!(
+        c2.status,
+        Some(acn_core::ConditionStatus::Pass),
+        "{:?}",
+        codes(&p)
+    );
 
     let p = run("rogue");
     assert_eq!(p.phase, Some(Phase::Declined));

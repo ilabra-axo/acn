@@ -420,17 +420,11 @@ fn summary(e: &Event) -> String {
             } else {
                 format!(" ({method})")
             };
-            let sampled = match v["instances"].as_array() {
-                Some(a) => {
-                    let idx: Vec<String> = a.iter().map(|x| x["index"].to_string()).collect();
-                    format!(" · held-out cases {} with proofs", idx.join(", "))
-                }
-                None => String::new(),
-            };
             format!(
-                "{}: {}{m}{sampled}",
+                "{}: {}{m}{}",
                 tag(e, "cond").unwrap_or("?"),
-                s(&v, "result")
+                s(&v, "result"),
+                sampled(&v)
             )
         }
         K_ATTEST_JUDGED => {
@@ -441,7 +435,7 @@ fn summary(e: &Event) -> String {
                 .map(|j| format!("{} {}", s(j, "model_id"), j["median"]))
                 .collect();
             format!(
-                "{}: {} · score {} ({}) · judged opinion{}",
+                "{}: {} · score {} ({}) · judged opinion{}{}",
                 tag(e, "cond").unwrap_or("?"),
                 s(&v, "result"),
                 v["aggregate_score"],
@@ -450,7 +444,8 @@ fn summary(e: &Event) -> String {
                     " · injection detected"
                 } else {
                     ""
-                }
+                },
+                sampled(&v)
             )
         }
         K_INTERP_REPORT => format!(
@@ -464,6 +459,17 @@ fn summary(e: &Event) -> String {
         K_FUND => format!("Funded {} sat against the reported hashlock", v["amount"]),
         K_CLAIM => "Claimed the payment: the key to the deliverable is revealed".to_string(),
         _ => name(e.kind).to_string(),
+    }
+}
+
+/// The held-out cases an attestation revealed (V-27), for its timeline line.
+fn sampled(v: &Value) -> String {
+    match v["instances"].as_array() {
+        Some(a) => {
+            let idx: Vec<String> = a.iter().map(|x| x["index"].to_string()).collect();
+            format!(" · held-out cases {} with proofs", idx.join(", "))
+        }
+        None => String::new(),
     }
 }
 

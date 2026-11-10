@@ -1,7 +1,9 @@
 # Whitepaper ↔ spec ↔ prototype traceability
 
 How each claim in [Agents Accountable for Outcomes](Agents%20Accountable%20for%20Outcomes.md)
-maps to the spec ([Core.md](Core.md) v0.5) and to the code. Status as of Nov 9, 2026.
+maps to the spec ([Core.md](Core.md) v0.5) and to the code. Status as of Nov 10, 2026. A row is ✅
+only when the code path exists and a test exercises it (named in the row or in
+[ARCHITECTURE.md](ARCHITECTURE.md) §6); claims rest on the invariants (INV-n) the row cites.
 
 **✅ built** · **🟡 partial or simulated** · **⬜ specified, not built** · **🧭 aspiration**
 
@@ -26,7 +28,7 @@ maps to the spec ([Core.md](Core.md) v0.5) and to the code. Status as of Nov 9, 
 | 4 | (added) Rejecting work that passed its tests is flagged | V-16 | `contradicted_rejection`; for passed judged conditions, `overruled_judgement` (D-28) | ✅ |
 | 4 | (added, CR-001) An LLM judge may decide payment, labelled as an opinion | INV-8, §7, V-17 | `judged` conditions, `K_ATTEST_JUDGED`, derived assurance label shown before signing; *judged*, *injected* and *judged-auto* demos; real judges with `acn-judge` (`nmesh-acn-sim --judges`) | ✅ live mode with real judges; presenter mode scripted |
 | 4 | (added, CR-002) Payment without the requester's act, for checkable work | §8.2, V-19…V-23 | Verifier trigger (`RELEASE`); contingent trigger (sealed delivery, `FUND`, `CLAIM`); *judged* and *contingent* demos | ✅ test sats |
-| 4 | (added, CR-003) No hidden criteria: everything the work is judged against is readable before the agent signs; `open` conditions are closed before `PROMISE`; disqualifiers; held-out instances drawn by a two-party seed | INV-14, §7, V-24…V-28 | `hidden_criteria`, `unclosed_condition`, `disqualified`, `seed_mismatch` / `seed_withheld` / `instance_mismatch`; the terms card; *drafted*, *disqualified* and *held-out* demos | ✅ mechanical held-out; 🟡 judged held-out: validator only, `acn-judge` doesn't sample cases yet |
+| 4 | (added, CR-003) No hidden criteria: everything the work is judged against is readable before the agent signs; `open` conditions are closed before `PROMISE`; disqualifiers; held-out instances drawn by a two-party seed | INV-14, §7, V-24…V-28 | `hidden_criteria`, `unclosed_condition`, `disqualified`, `seed_mismatch` / `seed_withheld` / `instance_mismatch`; the terms card; *drafted*, *disqualified* and *held-out* demos. Held-out cases for tests and for judges: `acn-judge` shows the judges only the sample both seeds select and reveals it with proofs (`real_panel_judges_held_out_cases`; real Ollama judges in `live -- --ignored`) | ✅ (the requester as its own runner: seed kept, runner not built, P3) |
 | 5 | Not a platform; anyone can implement | INV-13 | Open spec; the validator is a standalone pure crate | ✅ |
 | 5 | Not a judge of quality; parties choose verifiers | §7 `verifiers` | Verifiers listed per class in the terms; unlisted ones flagged `unlisted_verifier` | ✅ |
 | 5 | Not a reputation authority; many scorers | §11 `K_SCORE` | Kind reserved; no scorer built | ⬜ |

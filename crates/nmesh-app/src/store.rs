@@ -25,6 +25,10 @@ pub struct Stored {
     /// Payment preimages `s` for conditional commitments we requested (plaintext; test sats only).
     #[serde(default)]
     pub secrets: std::collections::HashMap<String, String>,
+    /// Our seeds for held-out instances (CR-003 §2.3), per commitment we requested: kept so we
+    /// can be our own runner, or check a runner's reveal.
+    #[serde(default)]
+    pub seeds: std::collections::HashMap<String, String>,
     /// "Reset demo": ACN acts signed before this unix time are ignored (they stay on relays).
     #[serde(default)]
     pub demo_epoch: u64,

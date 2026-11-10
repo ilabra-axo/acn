@@ -35,7 +35,8 @@ of focused work for 1–2 people.
 - [x] D-28: `overruled_judgement` flags rejections of passed judged conditions (V-16)
 - [x] CR-003 Phase A (`acn-terms/0.5`): no hidden criteria (public rubrics and checks), disqualifiers, `open` conditions drafted in `COUNTER` with closure before promise, the terms card; `/drafted`, `/disqualified`
 - [x] CR-003 Phase B: held-out instances and the two-party seed (RFC 6962 pool roots, seeds committed before delivery, sample derived from both, proofs in the attestation); `/held-out`
-- [ ] Complete held-out instances for judged conditions: `acn-judge` must give the judges the sampled cases (and carry the requester seed and proofs into `K_ATTEST_JUDGED`); the validator already checks them. Also a pool-and-seed holder for the requester's own runner (today only a third-party runner receives the seed)
+- [x] Held-out instances for judged conditions: `acn-judge` gives the judges the sampled cases and reveals the requester seed and proofs in `K_ATTEST_JUDGED`; `/held-out` adds a judged condition on a second pool. The app keeps its requester seed and assembles a runner's `HeldOut` (`App::held_out`)
+- [ ] A requester-side runner in the reference binding (the app running checks or judges itself): lands with Phase D / P3
 - [x] CR-003 Phase C: terms templates (`K_TERMS_TEMPLATE`, typed slots, `template_ref` checked by re-instantiation, V-28), template and record on the terms card; best practices and two templates in `docs/acn/cos-templates.md`; Atlas's `/drafted` and `/disqualified` counters come from its published `retry-change/v1`
 - [ ] CR-003 Phase D: drafters and linter in the reference binding (this is where P2's negotiation UI and P3's binding API land)
 - [ ] Template records split by slot range (the template-laundering residual, Core §13)

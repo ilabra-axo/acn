@@ -27,10 +27,23 @@ impl Llm for Scripted {
         user: &str,
     ) -> Result<String, String> {
         assert!(
-            system.contains(acn_sim::RUBRIC),
+            system.contains(acn_sim::RUBRIC) || system.contains(acn_sim::REVIEW_RUBRIC),
             "the rubric reaches the judge"
         );
         assert!(user.contains("<<<ARTIFACT "), "the artifact is delimited");
+        if system.contains(acn_sim::REVIEW_RUBRIC) {
+            // Held-out: exactly the sampled cases, before the artifact.
+            let shown = acn_sim::REVIEW_POOL
+                .iter()
+                .filter(|c| user.contains(*c))
+                .count();
+            assert_eq!(
+                shown as u32,
+                acn_sim::REVIEW_SAMPLE,
+                "only the sample: {user}"
+            );
+            assert!(user.find("HELD-OUT CASES") < user.find("<<<ARTIFACT "));
+        }
         let score = self.scores[judge.model_id.as_str()];
         let span = self.flag.filter(|f| user.contains(f)).unwrap_or("");
         Ok(json!({
@@ -75,6 +88,9 @@ struct World<L: Llm> {
     secret: [u8; 32],
     panel: Panel<L>,
     summaries: Vec<String>,
+    /// The performer's per-commitment secret and the runner's requester seeds (held-out).
+    perf_keys: BTreeMap<String, String>,
+    seeds: BTreeMap<String, String>,
 }
 
 impl<L: Llm> World<L> {
@@ -106,6 +122,8 @@ impl<L: Llm> World<L> {
             secret: [9; 32],
             panel,
             summaries: vec![],
+            perf_keys: BTreeMap::new(),
+            seeds: BTreeMap::new(),
         }
     }
 
@@ -117,19 +135,28 @@ impl<L: Llm> World<L> {
     fn request(&mut self, id: &str) -> String {
         let t = template(id, &self.cast).unwrap();
         let h = acn_core::jcs::sha256_hex(&self.secret);
+        let seed = [7u8; 32];
+        let seed_hash = t
+            .requester_seed_to
+            .as_ref()
+            .map(|_| acn_core::jcs::sha256_hex(&seed));
         let terms = instantiate(
             &t,
             id,
             json!({"brief": "the ACN spec"}),
             self.clock,
             Some(&h),
-            None,
+            seed_hash.as_deref(),
         )
         .unwrap();
         let performer = self.cast.performer.clone();
         let d = Draft::request(&performer, &t.profile, &terms, None).unwrap();
         self.sign(&d, self.me, 0);
         let r = self.events.last().unwrap().id.clone();
+        self.perf_keys.insert(r.clone(), hex(&[5u8; 32]));
+        if seed_hash.is_some() {
+            self.seeds.insert(r.clone(), hex(&seed));
+        }
         if t.terms["settlement_trigger"] == "verifier" {
             self.escrow.insert(r.clone(), hex(&self.secret));
         }
@@ -144,8 +171,8 @@ impl<L: Llm> World<L> {
                 &self.events,
                 &self.escrow,
                 None,
-                &BTreeMap::new(),
-                &BTreeMap::new(),
+                &self.perf_keys,
+                &self.seeds,
             );
             if !moves.is_empty() {
                 for m in moves {
@@ -153,7 +180,13 @@ impl<L: Llm> World<L> {
                     if let Some(job) = &m.judge {
                         let ev = self
                             .panel
-                            .evaluate(&job.condition, &job.rubric, &job.task, &job.artifact)
+                            .evaluate(
+                                &job.condition,
+                                &job.rubric,
+                                &job.task,
+                                &job.artifact,
+                                job.held_out.as_ref(),
+                            )
                             .await
                             .unwrap();
                         self.summaries.push(ev.summary.clone());
@@ -230,6 +263,69 @@ async fn real_panel_passes_and_the_verifier_releases() {
     );
 }
 
+/// CR-003 §2.3 with real judges: the panel scores the report on the review cases both seeds
+/// select, and the attestation reveals them with proofs that the fold accepts (V-27).
+#[tokio::test]
+async fn real_panel_judges_held_out_cases() {
+    let mut w = World::new(panel(8.0, 8.0, None));
+    let c = w.request("held-out");
+    w.play(&c).await;
+    let p = w.view(&c);
+    assert_eq!(p.phase, Some(Phase::Satisfied), "{:?}", w.codes());
+    assert!(w.codes().iter().all(|c| *c == "unbound"), "{:?}", w.codes());
+    let judged = w
+        .events
+        .iter()
+        .find(|e| e.kind == acn_core::kinds::K_ATTEST_JUDGED)
+        .expect("a judged attestation");
+    let content: Value = serde_json::from_str(&judged.content).unwrap();
+    assert_eq!(
+        content["instances"].as_array().unwrap().len(),
+        REVIEW_SAMPLE as usize
+    );
+    assert_eq!(content["requester_seed"], json!(hex(&[7u8; 32])));
+}
+
+/// A runner that holds the wrong pool, or no seed, gets an error instead of an attestation that
+/// wouldn't count.
+#[tokio::test]
+async fn refuses_held_out_input_that_does_not_match_the_terms() {
+    let p = panel(8.0, 8.0, None);
+    let cast = World::new(panel(8.0, 8.0, None)).cast;
+    let t = template("held-out", &cast).unwrap();
+    let terms = instantiate(
+        &t,
+        "held-out",
+        json!({}),
+        1,
+        None,
+        Some(&acn_core::jcs::sha256_hex(&[7u8; 32])),
+    )
+    .unwrap();
+    let cond: acn_core::terms::Condition =
+        serde_json::from_value(terms["conditions"][1].clone()).unwrap();
+    let held = |pool: Vec<Value>, seed: u8| acn_judge::HeldOut {
+        pool,
+        requester_seed: hex(&[seed; 32]),
+        performer_seed: hex(&[2u8; 32]),
+        commitment: hex(&[3u8; 32]),
+    };
+    let pool: Vec<Value> = REVIEW_POOL.iter().map(|s| json!(s)).collect();
+    let mut other = pool.clone();
+    other[0] = json!("a different case");
+    for bad in [None, Some(held(other, 7)), Some(held(pool.clone(), 8))] {
+        assert!(matches!(
+            p.evaluate(&cond, REVIEW_RUBRIC, "x", "y", bad.as_ref())
+                .await,
+            Err(acn_judge::Error::Instances(_))
+        ));
+    }
+    assert!(p
+        .evaluate(&cond, REVIEW_RUBRIC, "x", "y", Some(&held(pool, 7)))
+        .await
+        .is_ok());
+}
+
 #[tokio::test]
 async fn real_panel_judged_auto_ends_satisfied() {
     let mut w = World::new(panel(9.0, 7.0, None));
@@ -259,7 +355,7 @@ async fn model_votes_catch_what_the_scan_misses() {
         serde_json::from_value(t.terms["conditions"][1].clone()).unwrap();
     let artifact = format!("A short summary. {subtle}.");
     let ev = p
-        .evaluate(&cond, RUBRIC, "summary", &artifact)
+        .evaluate(&cond, RUBRIC, "summary", &artifact, None)
         .await
         .unwrap();
     assert!(!ev.pass);
@@ -268,7 +364,7 @@ async fn model_votes_catch_what_the_scan_misses() {
 
     // A quote that isn't in the artifact doesn't count.
     let ev = p
-        .evaluate(&cond, RUBRIC, "summary", "A short summary.")
+        .evaluate(&cond, RUBRIC, "summary", "A short summary.", None)
         .await
         .unwrap();
     assert!(ev.pass, "{}", ev.summary);
@@ -285,7 +381,7 @@ async fn refuses_terms_pinned_to_other_judges_or_rubrics() {
         serde_json::from_value(t.terms["conditions"][1].clone()).unwrap();
     let p = panel(8.0, 8.0, None);
     assert!(matches!(
-        p.evaluate(&cond, RUBRIC, "x", "y").await,
+        p.evaluate(&cond, RUBRIC, "x", "y", None).await,
         Err(acn_judge::Error::NotPinned(_))
     ));
     let real = World::new(panel(1.0, 1.0, None)).cast;
@@ -293,7 +389,7 @@ async fn refuses_terms_pinned_to_other_judges_or_rubrics() {
     let cond: acn_core::terms::Condition =
         serde_json::from_value(t.terms["conditions"][1].clone()).unwrap();
     assert!(matches!(
-        p.evaluate(&cond, "another rubric", "x", "y").await,
+        p.evaluate(&cond, "another rubric", "x", "y", None).await,
         Err(acn_judge::Error::Rubric)
     ));
 }
