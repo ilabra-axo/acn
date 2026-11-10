@@ -66,6 +66,22 @@ impl Session {
         Ok(*self.client().send_event(&ev).await?.id())
     }
 
+    /// [`Session::publish_act`], kept on the relays across reconnects ([`Session::pin`]).
+    pub async fn publish_act_pinned(&self, act: &acn_core::Event) -> Result<EventId, CoreError> {
+        let ev = Event::from_json(act.to_json()).map_err(|e| CoreError::Other(e.to_string()))?;
+        self.publish_pinned(ev).await
+    }
+
+    /// Pin ACN events already on the relays (e.g. an existing binding) so they survive a relay
+    /// restart too.
+    pub fn pin_acts(&self, acts: &[acn_core::Event]) {
+        for a in acts {
+            if let Ok(ev) = Event::from_json(a.to_json()) {
+                self.pin(ev);
+            }
+        }
+    }
+
     /// Authors of `K_SVC` advertisements with the given `d` identifiers (e.g. the demo cast).
     pub async fn find_acn_services(
         &self,

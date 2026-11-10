@@ -229,7 +229,7 @@ pub async fn start(args: Config) -> anyhow::Result<Running> {
     // Public terms templates (CR-003 §2.5); the cast drafts counters against their ids.
     for (name, actor, d) in acn_sim::templates() {
         let ev = sessions[&actor].sign_act(&d, None)?;
-        sessions[&actor].publish_act(&ev).await?;
+        sessions[&actor].publish_act_pinned(&ev).await?;
         cast.templates.insert(name, ev.id);
     }
 
@@ -320,9 +320,7 @@ async fn advertise(s: &Session, agent: Actor, cast: &Cast) -> anyhow::Result<()>
             })
             .collect(),
     };
-    s.client()
-        .send_event_builder(manifest.to_builder()?)
-        .await?;
+    s.publish_pinned_builder(manifest.to_builder()?).await?;
     for x in &scenarios {
         let def = SlashCommandDefinition {
             id: format!("{}:{}", manifest.id, x.id),
@@ -338,7 +336,7 @@ async fn advertise(s: &Session, agent: Actor, cast: &Cast) -> anyhow::Result<()>
             }],
             scopes: vec![format!("kind:{}", nmesh_proto::kinds::ACN_PRIVATE_ACT)],
         };
-        s.client().send_event_builder(def.to_builder()).await?;
+        s.publish_pinned_builder(def.to_builder()).await?;
     }
     let tools: Vec<Value> = scenarios
         .iter()
@@ -377,7 +375,7 @@ async fn advertise(s: &Session, agent: Actor, cast: &Cast) -> anyhow::Result<()>
         ])
         .content(svc);
     let ev = s.sign_act(&d, None)?;
-    s.publish_act(&ev).await?;
+    s.publish_act_pinned(&ev).await?;
     Ok(())
 }
 
@@ -389,6 +387,12 @@ async fn bind(s: &Session, operator: &Keys) -> anyhow::Result<()> {
         acn_core::binding_status(&existing, &me.to_hex(), K_REPORT, 0, None, now),
         acn_core::BindingStatus::Bound { .. }
     ) {
+        // Keep the existing binding on the relays across restarts too.
+        let binding: Vec<_> = existing
+            .into_iter()
+            .filter(|e| matches!(e.kind, K_BIND | K_BIND_ACK | K_BIND_REVOKE))
+            .collect();
+        s.pin_acts(&binding);
         return Ok(());
     }
     let aux = Keys::generate().secret_key().secret_bytes();
@@ -397,9 +401,9 @@ async fn bind(s: &Session, operator: &Keys) -> anyhow::Result<()> {
         now,
         &aux,
     )?;
-    s.publish_act(&bind).await?;
+    s.publish_act_pinned(&bind).await?;
     let ack = s.sign_act(&Draft::bind_ack(&bind.id), Some(now))?;
-    s.publish_act(&ack).await?;
+    s.publish_act_pinned(&ack).await?;
     tracing::info!(
         "Atlas bound to operator {}",
         operator.public_key().to_bech32()?

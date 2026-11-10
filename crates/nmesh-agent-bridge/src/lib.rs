@@ -133,9 +133,9 @@ impl Bridge {
     }
 
     async fn publish_capabilities(&self) -> anyhow::Result<()> {
-        let client = self.session.client();
-        client
-            .send_event_builder(self.manifest().to_builder()?)
+        // Pinned: republished whenever a relay reconnects (an in-memory relay forgets them).
+        self.session
+            .publish_pinned_builder(self.manifest().to_builder()?)
             .await?;
 
         for b in &self.hub.bindings {
@@ -155,7 +155,9 @@ impl Bridge {
                     nmesh_proto::kinds::PRIVATE_DIRECT_MESSAGE
                 )],
             };
-            client.send_event_builder(def.to_builder()).await?;
+            self.session
+                .publish_pinned_builder(def.to_builder())
+                .await?;
         }
         tracing::info!(
             npub = %self.session.public_key().to_bech32().unwrap_or_default(),

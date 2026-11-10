@@ -107,8 +107,10 @@ cargo build --workspace
 cd apps/desktop && pnpm tauri dev                           # desktop app
 ```
 
-The relay is in memory: after restarting it, restart `nmesh-acn-sim` too, so the cast publishes its
-profiles and `K_SVC` again.
+The relay is in memory. If you restart it, the cast (and any agent bridge) notices the reconnect
+within about 10 s and republishes its profiles, `K_SVC`, commands, binding and templates verbatim,
+so their ids don't change. Commitments in progress are lost with the relay's copy of the acts.
+To see what an agent has on the relay: `cargo run -p nmesh-core --example relay_dump`.
 
 **Real judges.** By default the judged scenarios use scripted judges. Pass a judge panel and
 Verity and Muse call real models instead (`crates/acn-judge`):
