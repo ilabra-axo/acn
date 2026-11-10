@@ -7,7 +7,9 @@ use std::collections::BTreeMap;
 
 use acn_core::draft::{instantiate, public_key, Draft};
 use acn_core::{Event, Phase};
-use acn_judge::{HttpLlm, JudgeConfig, Llm, Panel, PanelConfig};
+use std::sync::{Arc, Mutex};
+
+use acn_judge::{Completion, HttpLlm, JudgeConfig, Llm, Panel, PanelConfig};
 use acn_sim::*;
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -25,7 +27,7 @@ impl Llm for Scripted {
         _key: Option<&str>,
         system: &str,
         user: &str,
-    ) -> Result<String, String> {
+    ) -> Result<Completion, String> {
         assert!(
             system.contains(acn_sim::RUBRIC) || system.contains(acn_sim::REVIEW_RUBRIC),
             "the rubric reaches the judge"
@@ -46,11 +48,54 @@ impl Llm for Scripted {
         }
         let score = self.scores[judge.model_id.as_str()];
         let span = self.flag.filter(|f| user.contains(f)).unwrap_or("");
-        Ok(json!({
-            "score": score, "rationale": format!("{} thinks {score}", judge.model_id),
-            "injection": !span.is_empty(), "injection_span": span
+        Ok(Completion {
+            content: json!({
+                "score": score, "rationale": format!("{} thinks {score}", judge.model_id),
+                "injection": !span.is_empty(), "injection_span": span
+            })
+            .to_string(),
+            model: Some(judge.model_id.clone()),
         })
-        .to_string())
+    }
+}
+
+/// Plays back canned completions in order (the same queue for every judge), counting calls.
+struct Canned {
+    queue: Mutex<Vec<Completion>>,
+    calls: Arc<Mutex<u32>>,
+}
+
+impl Canned {
+    fn new(replies: Vec<(&str, Option<&str>)>) -> Self {
+        let mut queue: Vec<Completion> = replies
+            .into_iter()
+            .map(|(c, m)| Completion {
+                content: c.to_string(),
+                model: m.map(str::to_owned),
+            })
+            .collect();
+        queue.reverse();
+        Self {
+            queue: Mutex::new(queue),
+            calls: Arc::new(Mutex::new(0)),
+        }
+    }
+}
+
+impl Llm for Canned {
+    async fn complete(
+        &self,
+        _judge: &JudgeConfig,
+        _key: Option<&str>,
+        _system: &str,
+        _user: &str,
+    ) -> Result<Completion, String> {
+        *self.calls.lock().unwrap() += 1;
+        self.queue
+            .lock()
+            .unwrap()
+            .pop()
+            .ok_or_else(|| "no more canned replies".to_string())
     }
 }
 
@@ -59,7 +104,6 @@ fn config() -> PanelConfig {
         model_id: m.into(),
         model_version: v.into(),
         endpoint: "http://unused".into(),
-        model: None,
         api_key_env: None,
         temperature: 0.0,
         max_tokens: 300,
@@ -394,6 +438,70 @@ async fn refuses_terms_pinned_to_other_judges_or_rubrics() {
     ));
 }
 
+/// A one-judge, one-run condition, a panel answering from `replies`, and its call count.
+fn canned(
+    replies: Vec<(&str, Option<&str>)>,
+) -> (acn_core::terms::Condition, Panel<Canned>, Arc<Mutex<u32>>) {
+    let mut cfg = config();
+    cfg.judges.truncate(1);
+    let llm = Canned::new(replies);
+    let calls = llm.calls.clone();
+    let p = Panel::with_llm(cfg, llm).unwrap();
+    let cast = World::new(panel(1.0, 1.0, None)).cast;
+    let t = template("judged", &cast).unwrap();
+    let mut c = t.terms["conditions"][1].clone();
+    c["judges"] = serde_json::to_value(p.fingerprints()).unwrap();
+    c["repeats"] = json!(1);
+    (serde_json::from_value(c).unwrap(), p, calls)
+}
+
+const GOOD: &str =
+    r#"{"score": 8, "rationale": "clear", "injection": false, "injection_span": ""}"#;
+
+/// Malformed replies and a provider answering with another model fail the attempt; after the
+/// retries the evaluation fails instead of producing a vote from defaults.
+#[tokio::test]
+async fn malformed_replies_and_other_models_fail_closed() {
+    let flagged_without_span =
+        r#"{"score": 9, "rationale": "flagged", "injection": true, "injection_span": ""}"#;
+    for (reply, model) in [
+        (r#"{"score": 8}"#, Some("model-a")),
+        (
+            r#"{"score": 8, "rationale": "ok", "injection": "no", "injection_span": ""}"#,
+            Some("model-a"),
+        ),
+        (flagged_without_span, Some("model-a")),
+        (GOOD, Some("model-b")),
+        (GOOD, Some("model-a:7b")),
+    ] {
+        let (cond, p, calls) = canned(vec![(reply, model); 3]);
+        let got = p
+            .evaluate(&cond, RUBRIC, "summary", "A summary.", None)
+            .await;
+        assert!(
+            matches!(&got, Err(acn_judge::Error::Judge { detail, .. }) if detail.contains("failed 3 times")),
+            "{reply} from {model:?}: {got:?}"
+        );
+        assert_eq!(*calls.lock().unwrap(), 3);
+    }
+}
+
+/// A malformed attempt is retried, and a later well-formed one counts.
+#[tokio::test]
+async fn a_malformed_attempt_is_retried() {
+    let (cond, p, calls) = canned(vec![
+        (r#"{"score": 8}"#, Some("model-a")),
+        (GOOD, Some("model-b")),
+        (GOOD, None),
+    ]);
+    let ev = p
+        .evaluate(&cond, RUBRIC, "summary", "A summary.", None)
+        .await
+        .unwrap();
+    assert_eq!(ev.judges[0].runs, vec![8.0]);
+    assert_eq!(*calls.lock().unwrap(), 3);
+}
+
 /// `HttpLlm` against a one-shot OpenAI-compatible stub: request shape and reply parsing.
 #[tokio::test]
 async fn http_llm_speaks_openai_chat_completions() {
@@ -421,7 +529,7 @@ async fn http_llm_speaks_openai_chat_completions() {
                 }
             }
         };
-        let reply = json!({"choices": [{"message": {"role": "assistant",
+        let reply = json!({"model": "provider/model-a", "choices": [{"message": {"role": "assistant",
             "content": "{\"score\": 8, \"rationale\": \"clear\", \"injection\": false, \"injection_span\": \"\"}"}}]})
         .to_string();
         let resp = format!(
@@ -433,13 +541,14 @@ async fn http_llm_speaks_openai_chat_completions() {
     });
     let mut cfg = config().judges.remove(0);
     cfg.endpoint = format!("http://{addr}/v1/");
-    cfg.model = Some("provider/model-a".into());
+    cfg.model_id = "provider/model-a".into();
     let out = HttpLlm::new()
         .unwrap()
         .complete(&cfg, Some("sk-test"), "system text", "user text")
         .await
         .unwrap();
-    assert!(out.contains("\"score\": 8"));
+    assert!(out.content.contains("\"score\": 8"));
+    assert_eq!(out.model.as_deref(), Some("provider/model-a"));
     let req = server.await.unwrap();
     assert!(req.starts_with("POST /v1/chat/completions "), "{req}");
     assert!(req
@@ -448,6 +557,9 @@ async fn http_llm_speaks_openai_chat_completions() {
     let body: Value = serde_json::from_str(&req[req.find("\r\n\r\n").unwrap() + 4..]).unwrap();
     assert_eq!(body["model"], "provider/model-a");
     assert_eq!(body["seed"], 7);
+    assert_eq!(body["max_tokens"], 300);
+    assert_eq!(body["temperature"], 0.0);
+    assert_eq!(body["stream"], false);
     assert_eq!(body["response_format"]["type"], "json_object");
     assert_eq!(body["messages"][0]["content"], "system text");
 }

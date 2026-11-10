@@ -28,6 +28,9 @@ pub struct PeerInfo {
     pub acn_binding: acn_core::BindingStatus,
     /// The binding events themselves, so commitment folds can evaluate V-8 per act.
     pub acn_binding_events: Vec<acn_core::Event>,
+    /// The relays returned a profile (kind 0). Without one, an empty result says nothing about
+    /// whether the key is an agent: it may simply not have published, or not to our relays.
+    pub found_profile: bool,
 }
 
 impl Default for PeerInfo {
@@ -42,6 +45,7 @@ impl Default for PeerInfo {
             acn_svc: None,
             acn_binding: acn_core::BindingStatus::Unbound,
             acn_binding_events: vec![],
+            found_profile: false,
         }
     }
 }
@@ -93,6 +97,7 @@ impl Session {
                 _ => {}
             }
         }
+        info.found_profile = latest_md.is_some();
         if let Some(ev) = latest_md {
             if let Ok(md) = Metadata::from_json(&ev.content) {
                 info.name = md.display_name.clone().or(md.name.clone());

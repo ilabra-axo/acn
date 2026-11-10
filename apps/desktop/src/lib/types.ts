@@ -73,6 +73,9 @@ export interface Contact {
   about: string | null;
   picture: string | null;
   is_agent: boolean;
+  /** Whether `is_agent` is established: "pending" until discovery runs; "unresolved" when no
+   *  profile was found (treated like an agent with no disclosure). */
+  discovery: "pending" | "resolved" | "unresolved";
   agent: AgentManifest | null;
   commands: CommandView[];
   consented: boolean;
@@ -509,11 +512,14 @@ export interface CastWallet {
 
 /** What a renderer may ask the host to do. Renderers never sign or send anything themselves. */
 export interface RendererHost {
-  /** Button press. `actionId` usually is a slash command, e.g. "/echo hi". */
-  action(actionId: string, label: string): Promise<void>;
-  /** Form submission. */
-  submit(actionId: string | undefined, values: Record<string, unknown>, label?: string): Promise<void>;
+  /** Button press. `actionId` usually is a slash command, e.g. "/echo hi". The host shows the
+   *  actual invocation and asks before sending; resolves false if the user cancelled. */
+  action(actionId: string, label: string): Promise<boolean>;
+  /** Form submission (confirmed the same way). */
+  submit(actionId: string | undefined, values: Record<string, unknown>, label?: string): Promise<boolean>;
   openUrl(url: string): void;
+  /** Load a remote image the user clicked, verified against its sha256 pin; a `data:` URL. */
+  loadImage(url: string, sha256: string): Promise<string>;
 }
 
 export type PaymentDependency =

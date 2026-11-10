@@ -27,6 +27,10 @@
 ```
 Clients MUST show `hosting`, `operator` and `data_handling` before first contact, and show a
 persistent "agent present: sees messages" indicator in any conversation that includes one.
+The gate fails closed. Missing advertisements are not evidence of a human: a client MUST NOT
+send to a key before discovery has run, MUST treat a key with no profile at all as possibly an
+agent (asking the user before first contact, with what is unknown), and MUST NOT downgrade a key
+it once classified as an agent because a later fetch came back incomplete.
 
 ## Invocation
 - NIP-CD: `/<command>[@nostr:<npub>] <args>` as the content of a DM (kind 14 rumor).

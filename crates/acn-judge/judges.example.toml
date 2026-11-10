@@ -3,9 +3,15 @@
 #   nmesh-acn-sim --judges crates/acn-judge/judges.example.toml
 #   cargo run -p acn-judge --example try_panel -- crates/acn-judge/judges.example.toml
 #
-# Every field except endpoint/model/api_key_env/json_mode/timeout_secs is part of the judge's
-# fingerprint, which is pinned in the terms: change one and earlier terms no longer match
-# (judge_mismatch). Use judges from different model families.
+# model_id, model_version, prompt_template, temperature, max_tokens, seed and json_mode make up
+# the judge's fingerprint, which is pinned in the terms: change one and earlier terms no longer
+# match (judge_mismatch). endpoint, api_key_env and timeout_secs are not pinned. Use judges from
+# different model families.
+#
+# model_id is exactly the model name sent to the endpoint (there is no separate override), so
+# use the provider's dated or tagged name. A reply whose reported `model` isn't model_id (or
+# model_id plus a date suffix; see acn_judge::model_matches) fails. model_version is not sent to
+# or reported by the provider: it is your assertion, and the harness can't verify it.
 #
 # Endpoints are OpenAI-compatible chat completions. API keys come from the environment
 # variable named in api_key_env, never from this file.
@@ -13,51 +19,46 @@
 # Two small local models through Ollama (`ollama pull qwen2.5:1.5b`, `ollama pull llama3.2:1b`).
 # Fine for trying the flow on a laptop CPU; too small to be trusted judges.
 [[judge]]
-model_id = "qwen2.5"
+model_id = "qwen2.5:1.5b"
 model_version = "1.5b-instruct-q4_K_M"
 endpoint = "http://127.0.0.1:11434/v1"
-model = "qwen2.5:1.5b"
 temperature = 0.0
-max_tokens = 300
+max_tokens = 600
 seed = 7
 
 [[judge]]
-model_id = "llama3.2"
+model_id = "llama3.2:1b"
 model_version = "1b-instruct-q8_0"
 endpoint = "http://127.0.0.1:11434/v1"
-model = "llama3.2:1b"
 temperature = 0.0
-max_tokens = 300
+max_tokens = 600
 seed = 7
 
-# Hosted judges: pin a dated model version.
+# Hosted judges: pin a dated model name.
 #
 # [[judge]]
-# model_id = "gpt-4.1-mini"
+# model_id = "gpt-4.1-mini-2025-04-14"
 # model_version = "2025-04-14"
 # endpoint = "https://api.openai.com/v1"
-# model = "gpt-4.1-mini-2025-04-14"
 # api_key_env = "OPENAI_API_KEY"
 # temperature = 0.0
-# max_tokens = 300
+# max_tokens = 600
 # seed = 7
 #
 # [[judge]]
-# model_id = "claude-haiku"
+# model_id = "claude-haiku-4-5-20251001"
 # model_version = "4.5-20251001"
 # endpoint = "https://api.anthropic.com/v1"        # Anthropic's OpenAI-compatible endpoint
-# model = "claude-haiku-4-5-20251001"
 # api_key_env = "ANTHROPIC_API_KEY"
 # json_mode = false
 # temperature = 0.0
-# max_tokens = 300
+# max_tokens = 600
 #
 # [[judge]]
-# model_id = "llama-3.3-70b"
+# model_id = "meta-llama/llama-3.3-70b-instruct"
 # model_version = "openrouter-2025-12"
 # endpoint = "https://openrouter.ai/api/v1"
-# model = "meta-llama/llama-3.3-70b-instruct"
 # api_key_env = "OPENROUTER_API_KEY"
 # temperature = 0.0
-# max_tokens = 300
+# max_tokens = 600
 # seed = 7

@@ -312,7 +312,16 @@ Properties of this flow:
 
 - **No component keeps commitment state.** State is recomputed with `fold` over the stored
   signed acts every time (INV-2, INV-12). The shim and the cast decide their next move from the
-  fold, so replays and restarts are idempotent. The bridge replays its own history before acting.
+  fold. Only verified events enter a store: a copy that claims a known id but fails V-1 never
+  replaces the original (`acn_binding::Store`, `nmesh_app::commitments::admit`).
+- **Effects are journaled, not inferred from history.** The reference bindings record each
+  execution intent (commitment, terms hash) in a JSON journal before running the tool, and the
+  signed act before sending it. A restart never re-runs an intent without an outcome (it is
+  declined `execution_uncertain` unless our act for it is in history) and resends unsent acts
+  verbatim. Replayed plain commands are not re-executed (at most once, and only if under 120 s
+  old at startup). The same admission policy (allowlist, `acn.enabled`) applies to history and
+  live events. Deleting the journal falls back to history alone. The demo cast does not journal
+  (a cast restart abandons open commitments, §10).
 - **Third-party acts** (verifier, judge, arbiter, gate) are grouped into the conversation where
   the commitment's REQUEST lives (`owner` map in `nmesh-app`'s internal `State`).
 - **Real judges** (`nmesh-acn-sim --judges judges.toml`): a `Move` with a `judge` job is held
@@ -419,7 +428,12 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | Deterministic fold, sibling resolution | INV-2, §5.4, V-7, V-13 | `acn_core::fold` | `fold_is_order_independent` (all permutations ≤ 6 events, 300 samples above) | ✅ |
 | State machine: 13 acts + `RELEASE`, `FUND`, `CLAIM`; profiles T0 / T1 / N | §6 | `Ctx::step` | `every_act_kind_is_exercised` (every kind in `kinds::ACTS`) | ✅ |
 | Terms binding, counter while promised | INV-4, V-9, §6.1 | `Pending`, `ACCEPT` / `PROMISE` checks | `n_counter_accept`, `counter_while_promised` | ✅ |
-| Operator bindings, scope, revocation | §4, V-8 | `acn_core::binding`; `shim::ensure_binding` | `bindings`, `revoked_binding`, `app_flow` | ✅ |
+| Operator bindings, scope, revocation | §4, V-8 | `acn_core::binding`; V-8 against the terms each act commits to (`Ctx::step`); `DECLINE`/`REVOKE` carry no value; `ensure_binding` (never re-issues a revoked binding); `Performer::authority` checks before work and signing, with binding events in every fold | `bindings`, `revoked_binding`, SC-1…SC-7b, `request_above_operator_scope_is_not_worked`, `revoked_binding_stops_work`, `app_flow` | ✅ |
+| Evidence cutoff at the deciding act | V-20, V-22, V-25 | `verdicts_at` / `conditions_at` / `hits_at` / `reject_disqualifiers` take `until` = the act's `created_at` | C-6g, S-5b, S-7c | ✅ |
+| Durable execution journal and outbox | Binding API rules 10–12 | `acn_binding::journal` (intent before effect, signed act before send, redemption after success); `acn_binding_nostr::run_with` (same admission for history and live) | `restart_does_not_reexecute`, `interrupted_run_is_not_rerun`, `failed_send_is_retried_with_the_same_act`, `failed_redemption_is_retried`, bridge `startup.rs` | ✅ reference bindings; the demo cast doesn't journal |
+| Bounded fetches of other parties' URLs | Binding API rule 15 | `nmesh_blossom::{FetchPolicy, fetch_from, fetch_url, is_public}`; app fetches only in accepted conversations, after V-1 | `untrusted_fetches_are_bounded` | ✅ |
+| Consent fails closed; action confirmation; images on click | ADR 0004, ADR 0006, spec 0003 host responsibilities | `view::Discovery`, `ContactView::needs_consent`, `App::ensure_consent` (discovers first); `ActionConfirm.svelte`; message-bound renderer hosts and backend target check; `App::fetch_image` | `discovery_tests`, `app_flow`, `screenshots.mjs` (05a) | ✅ |
+| Contingent key without `CLAIM` | §8.2 | `App::recover_delivery_keys` (wallet's own `FUND` token, NUT-07 witness), persisted `keys`; `acn_view::project_keys` (checked against the hashlock) | `withheld_claim_key_is_recovered_from_the_mint` (incl. restart) | ✅ |
 | Evidence classes, verifiers | INV-8, V-11 | `Ctx::attestation`, `ConditionStatus` | `evidence` | ✅ |
 | Contradicted rejection, overruled judgement | V-16, D-28 | `fold` post-pass | `evidence`, J-15…J-17, playthrough | ✅ |
 | `judged` condition class, assurance labels | §7, INV-8, CR-001 | `terms::{Judged, Assurance}`, `Terms::assurance`; `Commitment.assurance`; card / tile labels | J-11 | ✅ |
@@ -447,18 +461,19 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | T0 and T1 over MCP (`acn-mcp-shim`), and over any CLI (`acn-cli-shim`) | §6.3, §11 | `acn_binding::Performer` with `shim::McpExecutor` / `acn_cli_shim::CliExecutor` | `app_flow`; the L0 suite, priced and free, in `acn-conformance/tests/l0.rs` and `acn-cli-shim/tests/l0.rs` | ✅ |
 | Hashlock settlement (T1, N) | INV-6, V-10, §8 | preimage in `SATISFY` / `RULING`; `SettlementView` | `t1_preimage`, *paid*, *dispute* | ✅ |
 | HTLC lock at request time, token in `content.token` | §8.2 steps 1–2 | `CashuWallet::lock_htlc`; `App::request` (NIP-44 to the performer) | `htlc`, `live` | ✅ test mint |
-| Performer verifies before work (DLEQ + NUT-07 + terms) | §8.2 step 3, §13 forged token | `CashuWallet::inspect`; `settlement::check_payment`; `acn_sim::react_paid` (waits, or `DECLINE payment_invalid`) | `htlc`, `performer_waits_for_and_obeys_the_payment_check` | ✅ |
+| Performer verifies before work (DLEQ + NUT-07 + the full lock policy + terms) | §8.2 step 3, §8.6 "Received locks", §13 forged token | `CashuWallet::inspect` (distinct proofs, one policy, exact state reply, keysets); `settlement::{check_payment_from, check_lock}` (receiver, refund key = requester, `n_sigs`, flag, locktime, keysets); used by `acn-binding`, the cast (request and `FUND` tokens) and `acn-wasm`; `acn_sim::react_paid` (waits, or `DECLINE payment_invalid`) | `htlc` (`inspect_rejects_hostile_tokens`), `acn-wallet` unit, `performer_waits_for_and_obeys_the_payment_check` | ✅ |
+| Refund recovery and fees | §8.2, §8.6 | `CashuWallet::refund` in prepare / submit / finish steps with NUT-13 outputs and a persisted intent; `recover_refunds` on open (NUT-09 restore); outputs net of `input_fee_ppk`; orphan locks (no published `REQUEST`) refundable from the wallet's record (`App::refund` by lock id); the app saves `s` and the seed before publishing, or stops | `refund_recovers_after_interruption`, `refund_pays_input_fees` | ✅ test mints |
 | Redeem with the revealed preimage | INV-6, §8.2 | `settlement::advise` → `CashuWallet::redeem` (Atlas) | `live` (balances move), `htlc` | ✅ |
 | Refund after the locktime | §8.2, P1 gate | `CashuWallet::refund` (manual NUT-14 refund swap); `App::refund` | `htlc` (real mint), `presenter.mjs` (sim) | ✅ |
 | Double spend rejected | P1 gate | the mint (CDK) | `htlc` | ✅ |
 | Arbiter escrow | §8.4 | NIP-44 `escrow` tag; `nmesh_acn_sim::Sim::ingest` | `live` (*dispute*: Atlas redeems after the RULING) | ✅ |
 | Integrated wallet UI | — | `WalletPanel.svelte`, sidebar chip, Director balances, card token state; `App::{wallet, top_up, refund}`, `AppEvent::Wallet` | `presenter.mjs` | ✅ |
-| T0 paid (unlocked token, swapped before work) | §6.3, §8.3 | — (the shim is free-only) | — | ⬜ |
+| T0 paid (unlocked token, swapped before work) | §6.3, §8.3 | — (the shims do T0 free and T1 hash-locked) | — | ⬜ |
 | Milestones | §8.5 (a sequence of commitments; no multi-token commitments) | composed above the protocol | — | n/a by design |
 | Wallet backup / NIP-60, NWC top-up, real mints | — | — | — | ⬜ |
 | Blossom artifacts, derivation records | §9 | `nmesh-blossom` (dev server, client); `Performer::report` stores artifacts and a derivation record per `REPORT` through `Evidence`; `K_SVC` `blossom` and a BUD-03 list; the demo cast stores each `REPORT`'s result (or decoded sealed payload) and a derivation record (`with_evidence`), shortening the inline copy past 16 KiB | `nmesh-blossom` unit test; the L0 suite fetches and hash-checks every artifact and record; `live` does the same for every scenario | ✅ reference bindings and demo cast |
 | `K_SCORE`, reputation (D-13) | §11 | kind reserved | — | ⬜ |
-| Binding API for external harnesses | §11, D-10; `harness-binding-API.md` | `acn-binding` traits and `Performer`; `acn-binding-nostr` adapters; `binding_level` in `K_SVC` (shown as a claim in the consent dialog); the L0 suite (`acn-conformance`); two bindings at L0 | `acn-binding` unit tests; both L0 suite runs | ✅ L0; ⬜ L1–L3 suites, requester bindings on the traits |
+| Binding API for external harnesses | §11, D-10; `harness-binding-API.md` | `acn-binding` traits and `Performer`; `acn-binding-nostr` adapters; `binding_level` in `K_SVC` (shown as a claim in the consent dialog; claimed only with public evidence and an operator binding); the L0 suite (`acn-conformance`: the paid by-reference case gets the full checks, the wrong-hash decline must be `payment_invalid`, execution counts prove declined requests did no work); two bindings at L0 | `acn-binding` unit tests; both L0 suite runs | ✅ L0; ⬜ L1–L3 suites, requester bindings on the traits |
 | Projections (thread / evidence view) | §12 | `acn_view::project`; `CommitmentCard.svelte` | playthrough, presenter script | ✅ |
 | Board (queue view) across agents and roles | §12 | `acn_view::Lane`, `Projection.{lane, my_role, next, needs_me, pending_endorsement, updated_at}`; `App::board(closed_limit)`; `Board.svelte`, `BoardTile.svelte` | `board_lanes_follow_the_workflow`, `live` (paging, needs_me), `scripts/board.mjs` | ✅ (no drag-and-drop, by design) |
 | Ledger view | §12 | wallet panel history only | — | 🟡 |
@@ -502,7 +517,25 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 - **The validator trusts only signatures and hashes.** UI, app and simulator state carry no
   semantics. A forged or out-of-order act is retained and reported, never applied.
 - **Agents see plaintext.** This is disclosed before first contact and shown in a banner, and the
-  app enforces the consent gate.
+  app enforces the consent gate. The gate fails closed: a contact is `pending` until discovery
+  runs (sending first runs it), a key with no profile at all is `unresolved` and needs the
+  same acceptance as an agent, and a later fetch that misses an agent's advertisements never
+  turns it into a human.
+- **Renderers don't act on their own.** A card button or form submit shows the host's
+  confirmation (`ActionConfirm.svelte`) with the command and values that will actually be sent,
+  and to whom; the sender's label is shown as the sender's words. Each message's renderer host is
+  bound to that message's conversation, and the backend refuses an action whose target isn't a
+  message from that peer. Remote card images don't load by themselves: a hash-pinned image is
+  fetched natively on click (bounded, public addresses only) and shown only if its hash matches;
+  an unpinned one can only be opened in the browser.
+- **Other parties' URLs.** Terms hints, advertised Blossom servers and image URLs are fetched
+  only after the carrying event verifies (and, for terms, only in accepted conversations), only
+  to public addresses (no loopback, private, link-local or CGNAT ranges; DNS answers pinned),
+  without redirects, under time and size bounds (`nmesh_blossom::FetchPolicy`). Servers the
+  user configured may be local.
+- **Evidence is private by default.** The reference bindings upload artifacts and derivation
+  records only with `evidence = "public"`, and only after the gate and the fold accept the
+  `REPORT`.
 - **MCP servers** receive tool arguments from the bridge; the agent manifest lists them in
   `forwards_to`.
 - **Simulation:** the cast's decisions are scripted, but every act it emits is signed and
@@ -513,7 +546,14 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 - **The mint** is trusted for custody and for enforcing spending conditions, as in any Cashu
   deployment. It never sees commitments; tokens reach the performer encrypted, and relays never
   see amounts or the mint. The app accepts only its configured mint (`NMESH_MINT`) and refuses a
-  request whose template names another one.
+  request whose template names another one, and checks the mint's own NUT-06 info before locking.
+  Received tokens are checked against the complete lock policy (Core §8.6 "Received locks"):
+  exactly one receiver key, one refund key (the requester's), `n_sigs` 1, `SIG_INPUTS`, no unknown
+  or repeated tags, distinct proofs, keysets the terms name, and a state reply for exactly those
+  proofs (`nmesh_wallet::lock_policy`, `acn_wallet::settlement::check_lock`).
+- **Judge endpoints are trusted to run the model they name.** The harness requests exactly the
+  pinned `model_id` and fails a run whose response reports another, but can't verify
+  `model_version` or that the provider ran the model.
 
 ## 9. Build, run and test
 
@@ -529,7 +569,7 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 
 | Test suite | Covers |
 |---|---|
-| `acn-core/tests/scenarios.rs` (+ `tests/common/`) | P0 gates: every act, every anomaly, permutation property over 92 scenarios; CR-001 (J-…), CR-002 (S-…) and CR-003 Phase A / B / C (C-…) vectors under every arrival order; terms version and instance-terms checks. Slowest suite (~3 min in debug) |
+| `acn-core/tests/scenarios.rs` (+ `tests/common/`) | P0 gates: every act, every anomaly, permutation property over every scenario; CR-001 (J-…), CR-002 (S-…), CR-003 Phase A / B / C (C-…) and scope / release-cutoff (SC-1…SC-7b, C-6g, S-5b, S-7c) vectors under every arrival order; terms version and instance-terms checks. Slowest suite (~3 min in debug) |
 | `acn-core/tests/nostr_compat.rs` | signature interop with rust-nostr in both directions; sealed payloads are NIP-44 v2 |
 | `acn-core` unit | JCS canonical form; `sealed` round trip and padding; `instances` RFC 6962 vectors, proofs, two-seed sample; `template` parse and typed / textual instantiation |
 | `acn-sim/tests/playthrough.rs` | all sixteen scenarios reach their intended end and outcome; board lanes; payment check; idempotent reactions; a requester counter accepted by Atlas |
@@ -538,15 +578,17 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | `acn-judge/tests/templates.rs` | the published templates (`docs/acn/templates/`) parse, instantiate into terms that parse and close, re-instantiate exactly (V-28); rubric files match their hashes; judges pinned to this harness and `judges.example.toml` |
 | `nmesh-core/tests/dm_roundtrip.rs` | NIP-17 text and structured messages over a mock relay |
 | `nmesh-core/tests/relay_restart.rs` | a relay restarted on the same port gets the pinned events back, with the same ids; unpinned ones stay lost |
-| `nmesh-agent-bridge/tests/app_flow.rs` | app ↔ relay ↔ bridge ↔ MCP: chat, forms, ACN T0 (no Blossom: no level claimed) |
+| `nmesh-agent-bridge/tests/app_flow.rs` | app ↔ relay ↔ bridge ↔ MCP: chat, forms, ACN T0 (no Blossom: no level claimed); an action on a message outside the conversation is refused; a key with no profile is gated until accepted |
+| `nmesh-agent-bridge/tests/startup.rs` | the bridge's startup applies the allowlist and `acn.enabled` to history; a restart repeats no MCP call (counted through `NMESH_ECHO_CALL_LOG`); priced tools refuse direct commands |
 | `acn-conformance/tests/l0.rs`, `acn-cli-shim/tests/l0.rs` | the L0 suite against `acn-mcp-shim` (echo MCP server) and `acn-cli-shim` (`wc -w`), each priced and free (incl. terms by reference), on a local relay, CDK test mint and Blossom server |
-| `acn-binding` unit, `nmesh-blossom` unit | the driver's REPORT evidence and derivation record, idempotence, declines; Blossom upload auth and hash-checked fetch |
-| `nmesh-acn-sim/tests/live.rs` | app ↔ relay ↔ cast ↔ mint: discovery, all sixteen scenarios via hints, real balances (300 → 39 available + 60 locked; Atlas 201), insufficient funds, board paging, reset (incl. restart), the app's `held_out` reproduces the judges' revealed sample; every `REPORT`'s artifacts and derivation record fetch from the cast's Blossom and match; a drafted request answered by a by-reference counter, and a requester counter; opt-in (`--ignored`, `NMESH_JUDGES`): `/judged`, `/injected` and `/held-out` with real judges |
-| `nmesh-wallet/tests/htlc.rs` | real CDK mint: top up, lock, DLEQ/NUT-07 inspect, wrong preimage / wrong key / early refund rejected, redeem, payer reads the preimage, double spend, refund after locktime, insufficient funds, index survives reopen |
+| `acn-binding` unit, `nmesh-blossom` unit | the driver's REPORT evidence and derivation record, idempotence, declines; a corrupt same-id copy changes nothing; above-scope requests declined `out_of_scope` without work, revoked bindings sign nothing; governance declined before work; failed sends resent with the same act; failed redemptions retried; gate denial and private evidence upload nothing; restart and interrupted runs don't re-execute; admission applies to replayed history. Blossom: upload auth, hash-checked fetch, untrusted fetches refused for non-public addresses, redirects, oversize bodies, other schemes |
+| `nmesh-acn-sim/tests/live.rs` | app ↔ relay ↔ cast ↔ mint: `withheld_claim_key_is_recovered_from_the_mint` (Atlas redeems the `FUND` token and withholds `CLAIM`; the app recovers `k` from the mint, opens the delivery, and still does after a restart); discovery, all sixteen scenarios via hints, real balances (300 → 39 available + 60 locked; Atlas 201), insufficient funds, board paging, reset (incl. restart), the app's `held_out` reproduces the judges' revealed sample; every `REPORT`'s artifacts and derivation record fetch from the cast's Blossom and match; a drafted request answered by a by-reference counter, and a requester counter; opt-in (`--ignored`, `NMESH_JUDGES`): `/judged`, `/injected` and `/held-out` with real judges |
+| `nmesh-wallet/tests/htlc.rs` | real CDK mint: top up, lock, DLEQ/NUT-07 inspect, wrong preimage / wrong key / early refund rejected, redeem, payer reads the preimage, double spend, refund after locktime, insufficient funds, index survives reopen; hostile tokens rejected (a repeated proof, mixed locks, an extra receiver, 2-of-2, `SIG_ALL`, two refund keys, a substituted refund key); a refund interrupted after or before submission is recovered on reopen (NUT-13 outputs, NUT-09 restore); refunds pay a fee-bearing mint's input fees |
 | `nmesh-wallet/tests/preimage_visibility.rs` | CR-002 spike: the payer learns the preimage from NUT-07 after the receiver redeems (in-process CDK mint, or `NMESH_SPIKE_MINT`) |
-| `acn-wallet` unit, `acn-wasm` unit | `SimMint` rules; settlement advice (release, contingent); the same through the JSON ABI |
-| `acn-judge` unit | injection scan, single-pass prompt fill, reply parsing, stable `harness_hash` |
-| `nmesh-app` unit | settlement policy filters the verifier trigger; rail capability read from `K_SVC` |
+| `acn-wallet` unit, `acn-wasm` unit | `SimMint` rules; settlement advice (release, contingent); every lock-policy deviation rejected, legacy facts fail closed, named keysets enforced; the same through the JSON ABI |
+| `acn-judge` unit | injection scan, single-pass prompt fill, strict reply parsing (every field required and typed; injection-positive needs a span), the descriptor's reply schema and sampling keys match the parser and fingerprint, the provider's reported model must be the pinned one, every request parameter is in the fingerprint, stable `harness_hash` |
+| `nmesh-app` unit | settlement policy filters the verifier trigger; rail capability read from `K_SVC`; a corrupt same-id act never replaces a verified one; discovery states (pending and unresolved contacts aren't consented; an incomplete fetch never downgrades an agent) |
+| `nmesh-proto` unit, `acn-author` unit | a structured message without an `alt` is malformed; unparseable terms lint as one `L0` error, never as an empty list |
 | `scripts/presenter.mjs`, `screenshots.mjs` | browser end-to-end and screenshots |
 | `scripts/board.mjs` | board: lanes at mixed stages, overdue tile, needs-you filter, satisfy / accept counter from the drawer, open in chat, reset |
 | `scripts/webkit_probe.py` | layout checks in the system WebKitGTK |
@@ -592,7 +634,11 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 - **Kind numbers are provisional** (D-1). nmesh kinds (49xx, 349xx) and ACN kinds (77xx, 37700)
   are not registered.
 - **`K_SVC` and the nmesh agent manifest coexist**; the spec intends `K_SVC` to replace it.
-- **The bridge shim is T0, free only**, and declines anything else with a reason.
+- **Remediated audit findings still have residuals:** the judge provider is trusted to run the
+  named model; `model_version` is a claim. The cast (demo) keeps no journal. The action
+  confirmation's "don't ask again" lasts until restart, per command and conversation; nmesh can't
+  classify what a command does. A requester binding with no `refund_key` in the terms relies on
+  `check_payment_from` to compare the refund key (the reference callers use it).
 - **The commitment card re-projects all of a conversation's acts on every update**, which is
   fine at demo scale and O(n) per event.
 - **Dev-server CSS glitch:** Vite once served raw `.svelte` source as a stylesheet, which

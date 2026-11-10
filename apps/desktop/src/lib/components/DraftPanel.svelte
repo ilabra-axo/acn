@@ -86,7 +86,7 @@
 </div>
 
 <style>
-  .draft { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--surface); }
+  .draft { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--panel); }
   .dh { display: flex; align-items: center; }
   .ttl { font-weight: 650; font-size: 13px; }
   .x { margin-left: auto; background: none; border: 0; color: var(--muted); font-size: 16px; cursor: pointer; }

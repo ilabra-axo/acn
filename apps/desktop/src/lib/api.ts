@@ -18,6 +18,8 @@ export interface Backend {
   ): Promise<Message>;
   onEvent(cb: (ev: AppEvent) => void): Promise<() => void>;
   openUrl(url: string): Promise<void>;
+  /** A card image the user asked to load, as a `data:` URL; only if its sha256 matches the pin. */
+  fetchImage(url: string, sha256: string): Promise<string>;
   // ACN commitments
   commitments(pubkey: string): Promise<Commitment[]>;
   acnRequest(pubkey: string, text: string): Promise<Commitment>;
@@ -79,6 +81,7 @@ async function createTauriBackend(): Promise<Backend> {
       invoke("send_action", { pubkey, target, actionId, values, label }),
     onEvent: async (cb) => listen<AppEvent>(EVENT, (e) => cb(e.payload)),
     openUrl: (url) => openUrl(url),
+    fetchImage: (url, sha256) => invoke("fetch_image", { url, sha256 }),
     commitments: (pubkey) => invoke("commitments", { pubkey }),
     acnRequest: (pubkey, text) => invoke("acn_request", { pubkey, text }),
     acnSatisfy: (pubkey, commitment) => invoke("acn_satisfy", { pubkey, commitment }),

@@ -44,4 +44,5 @@ toml.workspace = true
 
 [dev-dependencies]
 nmesh-app.workspace = true
+nmesh-mint.workspace = true
 nostr-relay-builder.workspace = true

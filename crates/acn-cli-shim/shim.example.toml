@@ -9,6 +9,12 @@ key_file = ".nmesh/cli-shim/agent.nsec"
 operator_key_file = ".nmesh/cli-shim/operator.nsec"
 # Evidence (artifacts, derivation records). `nmesh blossom` runs a dev server on :3400.
 blossom = ["http://127.0.0.1:3400"]
+# "private" (the default) uploads nothing: REPORTs carry stdout inline, no conformance level is
+# claimed. "public" uploads stdout, output files, stderr and the derivation record to the
+# Blossom servers above, UNENCRYPTED, for anyone with the hash (needed to claim L0).
+evidence = "public"
+# Execution journal, so a restart never re-runs a command. Default: next to key_file.
+# journal = ".nmesh/cli-shim/agent.acn-journal.json"
 # Paid calls (T1): a price and the mint you're paid at (nmesh-acn-sim hosts a test mint on :3338).
 price_sat = 0
 # mint = "http://127.0.0.1:3338"

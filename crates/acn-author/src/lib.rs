@@ -22,4 +22,4 @@ pub use draft::{
     draft_counter, draft_request, Capabilities, Change, CounterDraft, Intent, RequestDraft,
     RequesterConfig, TemplateCandidate,
 };
-pub use lint::{lint, Finding, Level, LintContext};
+pub use lint::{lint, lint_value, Finding, Level, LintContext};

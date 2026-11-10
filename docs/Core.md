@@ -748,10 +748,20 @@ commitment (D-8).
 
 ### 8.6 Mint risk
 
-Mints are custodial trust points. The terms MUST name the mint URL and keyset ids. Operators
+Mints are custodial trust points. The terms MUST name the mint URL and SHOULD name keyset ids;
+when they do, a token with a proof from any other keyset doesn't fund them. Operators
 SHOULD set per-mint value caps in bindings. Support for NUT-07, NUT-11, NUT-12 and NUT-14 varies
-and MUST be checked via NUT-06 info at service-advertisement time. A mint that does not support
-NUT-14 may treat HTLC proofs as anyone-can-spend.
+and MUST be checked via NUT-06 info at service-advertisement time, and again by the payer's
+binding before it locks value: a declared capability is a claim, the mint's own info is an
+observation. A mint that does not support NUT-14 may treat HTLC proofs as anyone-can-spend.
+
+**Received locks.** A performer's binding accepts a token only if every proof has the complete
+spending policy §8.1 describes, not just the right hashlock and first key: the HTLC (NUT-14)
+preimage path redeemable by the performer's key alone (exactly one `pubkeys` entry, `n_sigs`
+1, `SIG_INPUTS`), a locktime, and a refund path to exactly one key, the requester's (or the
+terms' `refund_key`), with `n_sigs_refund` 1; no unknown or repeated tags; every proof under the
+same policy; distinct proofs (a repeated secret or `Y` is one input, and its value is not counted
+twice); and a state check that covers exactly the proofs asked about.
 
 **Rail capabilities (CR-002).** A service advertisement declares, per mint, which capabilities it
 offers; a trigger may only be used with a mint that has what it needs.
@@ -838,7 +848,8 @@ endorsement proves a gate signed off, not that the gate is rigorous.
 A validator is a pure function from (event set, document set) to (commitment states, anomaly
 list). Every rule failure produces an anomaly with a code and a severity:
 
-- **reject:** the event is retained, not applied (INV-11);
+- **reject:** the event is retained, not applied (INV-11). A copy that claims a known event id
+  but fails V-1 never replaces the verified original in a reader's store;
 - **flag:** applied, noted for scoring and display;
 - **pending:** a dependency is missing; re-evaluated when more events or documents arrive.
 
@@ -854,7 +865,14 @@ list). Every rule failure produces an anomaly with a code and a severity:
 7. **V-7 Head.** `prev` is on the effective chain and the act won sibling resolution (§5.4).
    `stale` (reject).
 8. **V-8 Binding.** The agent key has an acknowledged binding with `expires > act.created_at`, whose
-   scope covers the act kind and value. A revocation applies to acts with `created_at` ≥ the
+   scope covers the act kind and value. The act's value is the `price.amount` and `payment.mint`
+   of the terms it commits its signer to: for `COUNTER` the terms it offers, for `ACCEPT` the
+   pending terms it accepts, for any other act the terms in force at its `prev`. A `kinds` scope
+   limits the act kind, `max_sat` the price, and `mint` (if any are listed) the mint. `DECLINE`
+   and `REVOKE` commit to no value: they need only an effective, unrevoked binding covering the
+   kind, so a performer can always refuse. V-8 applies to acts signed by the performer; other
+   roles' keys are not binding-checked by the validator (clients MAY show their binding status).
+   A revocation applies to acts with `created_at` ≥ the
    revocation's `created_at`. Bindings and commitments are separate DAGs, so there is no causal
    order between them; disputed ordering is resolved with external anchors (D-11).
    `unbound` (flag), `out_of_scope` (reject), `revoked` (reject).
@@ -924,15 +942,20 @@ list). Every rule failure produces an anomaly with a code and a severity:
     `unauthorized`.
 20. **V-20 Release (new, CR-002).** `RELEASE` is signed by the `settlement_verifier`, its preimage
     hashes to `H`, every condition passes against the current `REPORT` by the evidence rules
-    (V-11, V-17), whoever attested, and no disqualifier has a counted hit (CR-003). `bad_release`
-    (reject).
+    (V-11, V-17), whoever attested, and no disqualifier has a counted hit (CR-003), counting only
+    attestations with `created_at` ≤ the `RELEASE`'s. Later evidence never invalidates an applied
+    `RELEASE`: a later hit is `late` (V-25), and a later failing condition attestation is recorded
+    with no effect on the settlement. The same cutoff applies wherever evidence decides an act's
+    legality: a `REJECT` before settlement (the failing attestation or hit must have
+    `created_at` ≤ the `REJECT`'s) and `premature_fund` (V-22). `bad_release` (reject).
 
 21. **V-21 Contingent attestation (new, CR-002).** Under `contingent`, an attestation names the
     `REPORT`'s `ciphertext` and `hashlock` exactly, and a `plaintext` hash. `attestation_mismatch`
     (flag; not counted).
 22. **V-22 Fund (new, CR-002).** `FUND` is signed by the requester from Offered, and binds the
     `REPORT`'s `hashlock`, at least the price, at the terms' mint. `fund_mismatch` (reject). A `FUND`
-    before every condition passed is valid but flagged `premature_fund` (flag).
+    signed before every condition passed (by attestations with `created_at` ≤ the `FUND`'s) is
+    valid but flagged `premature_fund` (flag).
 23. **V-23 Claim (new, CR-002).** `CLAIM` is signed by the performer from Funded, and
     `sha256(key) = H`. `bad_key` (reject).
 24. **V-24 No hidden criteria (new, CR-003).** Terms on a `REQUEST` or `COUNTER` whose criteria
@@ -946,7 +969,8 @@ list). Every rule failure produces an anomaly with a code and a severity:
     has the disqualifier's class (`wrong_evidence_class` otherwise), is signed by one of its
     `runners` (never the performer), says `hit` or `clear` (`malformed` otherwise; for `judged`,
     as recomputed by V-17, with hit = aggregate ≥ θ or injection, and a score below θ `clear`,
-    not `below_threshold`), and comes before the act that settles the `REPORT`. An unnamed
+    not `below_threshold`), and has `created_at` ≤ that of the act that settles the `REPORT`
+    (`SATISFY`, `RELEASE`, `CLAIM` or a performer-side `RULING`). An unnamed
     signer, or the performer, is `unsupported_disqualification` (flag, on the signer's
     attestation; not counted; on a `judged` disqualifier the performer is `self_judged`, V-17.1);
     a late one is `late` (not counted). A counted hit records `disqualified` on the `REPORT` (flag). A `REJECT`
@@ -1020,6 +1044,8 @@ is reused for the remaining invalid combination.
 | S-6 | `RELEASE` whose secret doesn't hash to `H` | Not applied; `bad_release` |
 | S-7 | `RELEASE` signed by a key other than `settlement_verifier` | Not applied; `bad_release` |
 | S-7b | `RELEASE` before every condition passes | Not applied; `bad_release` |
+| S-7c | `RELEASE`, then the passing attestation, timestamped after it | Not applied; `bad_release` (the verifier signs a new `RELEASE`) |
+| S-5b | `verifier`; pass; `RELEASE`; a failing attestation timestamped after it | Settled; no `bad_release`; the condition shows `Fail` on the record |
 | S-8 | Verifier silent past the review window | Lapsed; verifier fault |
 | S-8b | `verifier`; requester `SATISFY`, then `REJECT` without a failing attestation | Neither applied; `illegal_transition` |
 | S-8c | `verifier`; failing attestation; requester `REJECT` | Reworking |
@@ -1054,6 +1080,7 @@ permutation.
 | C-6f | A hit stands; the requester stays silent past the review window | No lapse (the performer is at fault); the move is still the requester's |
 | C-6b | `verifier` trigger; conditions pass; disqualifier hit | `RELEASE` not applied (`bad_release`); `REJECT` legal; Rejected |
 | C-6c | Hit attested after `SATISFY` | Not counted; `late`; no `disqualified` |
+| C-6g | `verifier`; conditions pass; `RELEASE`; hit attested after the `RELEASE` | Settled; no `bad_release`; the hit `late`; no `disqualified` |
 | C-6j | `judged` disqualifier; judges score ≥ θ | Counted as `hit`; `disqualified` |
 | C-7 | Hit signed by an unnamed key; requester withholds | Hit not counted; `unsupported_disqualification`; requester fault once the review window lapses |
 | C-7b | As C-7; requester rejects naming the disqualifier | `REJECT` applies (Reworking); `unsupported_disqualification` on it |
@@ -1078,6 +1105,19 @@ permutation.
 | C-16d | The template event isn't in the event set | Reference not counted; no anomaly; Promised |
 | C-16e | A template whose placeholder names no slot | The template event is `malformed` |
 | C-8 | A disqualifier with an audit window (`window: until_audit_end`) | Replaced by decision: commitments are atomic, so there is no audit window or holdback; the terms don't parse (`malformed`). The CR's expectation (main settlement stands, holdback refunds) does not apply |
+
+**Scope vectors (V-8).** Each also runs under every arrival-order permutation.
+
+| Id | Setup | Expected |
+| --- | --- | --- |
+| SC-1 | Performer capped at 500 sat; `REQUEST` 100; requester `COUNTER` 1000; performer `ACCEPT` | `out_of_scope` on the `ACCEPT`; Countered |
+| SC-2 | As SC-1, but the performer `COUNTER`s 1000; requester `ACCEPT`s | `out_of_scope` on the `COUNTER`; the `ACCEPT` `stale`; Requested |
+| SC-3 | Binding A (2000, expires 1250), binding B (500); `COUNTER` 1000; `ACCEPT` at 1200 under A; `REPORT` at 1300 | `ACCEPT` applied; `out_of_scope` on the `REPORT`; Promised |
+| SC-4 | Binding scopes one mint; a `COUNTER` moves to another; performer `ACCEPT` | `out_of_scope` |
+| SC-5 | `REQUEST` 1000 (above the cap); performer `COUNTER` 400; `ACCEPT`; `REPORT` | No scope anomaly; Reported |
+| SC-6 | `REQUEST` 1000; requester `COUNTER` 400; performer `ACCEPT`; `REPORT` | No scope anomaly; Reported |
+| SC-7 | `REQUEST` 1000 above the cap; performer `DECLINE` | Applied; no `out_of_scope`; Declined |
+| SC-7b | Binding A (2000, expires 1250), B (500); `REQUEST` 1000; `PROMISE` under A; `REVOKE` after A expired | Applied; no `out_of_scope`; Revoked |
 
 ## 11. Bindings, governance and reputation
 
@@ -1227,7 +1267,7 @@ silence is handled by scoring only. Above it, performers SHOULD require an arbit
   no partial reports; milestones and an up-front portion are separate commitments (§8.5), as
   for staged delivery (D-23).
 - [ ] **D-9 Endorsement timing.**
-- [ ] **D-10 Binding API surface.** Proposal: [harness-binding-API.md](harness-binding-API.md) (eight interfaces, the secrets each party keeps, the lifecycle per settlement trigger, conformance levels L0–L3). **Built (Nov 10):** the interfaces as object-safe Rust traits with a performer driver (`acn-binding`), `binding_level` in `K_SVC` (§4, a claim clients show), and the L0 suite (`acn-conformance`), passed by `acn-mcp-shim` and an independent CLI-harness binding (`acn-cli-shim`). **Open:** the L1–L3 suites, profile N and the Gate and Verifier in the driver, and requester-side bindings on the traits (`nmesh-app` implements the requester role directly).
+- [ ] **D-10 Binding API surface.** Proposal: [harness-binding-API.md](harness-binding-API.md) (eight interfaces, the secrets each party keeps, the lifecycle per settlement trigger, conformance levels L0–L3). **Built (Nov 10):** the interfaces as object-safe Rust traits with a performer driver (`acn-binding`), `binding_level` in `K_SVC` (§4, a claim clients show), and the L0 suite (`acn-conformance`), passed by `acn-mcp-shim` and an independent CLI-harness binding (`acn-cli-shim`). **Hardened (Nov 11, design-alignment audit):** the driver verifies every event before storing it, folds with the operator's binding and revocation events and checks its authority before working or signing, records each execution intent in a durable journal before running it (an interrupted run is never re-run: `execution_uncertain`), resends the same signed act after a failed send, records a redemption only once it succeeds, uploads evidence only after the gate, and keeps evidence private unless configured `public`; L0 also declines performer governance (`governance_unsupported`). **Open:** the L1–L3 suites, profile N and the Gate and Verifier in the driver, and requester-side bindings on the traits (`nmesh-app` implements the requester role directly).
 - [ ] **D-11 External timestamp anchors (new).** NIP-03 (OpenTimestamps) is now marked
   "unrecommended" upstream. Choose an anchoring mechanism, or rely on V-15 and disputes.
 - [ ] **D-12 Open requests (new).** A `REQUEST` addressed to several performers (RFP), with the
@@ -1277,9 +1317,13 @@ From CR-001 (the `judged` condition class; its OD-1…OD-6):
   mid-commitment: renegotiation via `COUNTER`, a named fallback judge in the terms, or lapse.
 - [ ] **D-18 Injection detection standard (CR-001 OD-5).** Harness-defined and pinned by
   `harness_hash` (current text), or a shared reference harness maintained with ACN. A candidate
-  now exists: `acn-judge/1` (`crates/acn-judge`), whose `harness_hash` commits to its artifact
+  now exists: `acn-judge/2` (`crates/acn-judge`), whose `harness_hash` commits to its artifact
   delimiting, a pattern scan, a majority vote of the judges' own flags (verbatim spans only), the
-  reply schema and the retry rule.
+  strict reply schema (every field required and typed; a malformed reply is retried, never read
+  as "no injection"), the request parameters and the retry rule. The hash is a semantic
+  descriptor kept in step with the code by tests and a version bump, not a build identity; the
+  harness requests exactly the pinned `model_id`, fails a run whose provider reports another
+  model, and says that `model_version` is the runner's claim, which no provider lets it verify.
 - [ ] **D-19 Rationale disclosure (CR-001 OD-6).** Whether judge rationales are published by hash
   only or made available to the performer as diagnostics.
 
@@ -1417,5 +1461,6 @@ invent patterns. Kind numbers and tag letters are symbolic until D-1 closes.
 | CR-003 Phase D, authoring aids | 2026-11-10 | §7 (template `notes`), §11 | No protocol change: the drafters and the linter are binding code (`acn-author`). Templates gain optional `notes` (item id → one-line rationale) so a drafter can explain each change | Applied. **Changed from CR-003 by decision:** the reference drafters are deterministic (they match templates and requirements by shared words) and never invent a key: a template's key slots come from the caller's configuration or the request's own mechanical verifier, and a performer drafter that can't close every open condition from one template returns nothing (the performer declines or writes its own counter). A requester draft that adds `open` conditions to a template leaves out `template_ref`, which would not re-instantiate (V-28); the performer's counter can reference the template once it closes them. Linter: L2 runs only when the caller says which references are retrievable (the linter does no I/O); L4 and L5 match quality words; L6 asks only that some disqualifier exists; L7's price threshold is 1,000 sat on the reference card; L3 duplicates the closure rule (V-26) for drafts not yet sent. D-33 and D-34 are not needed for Phase D and stay open |
 | P3 Binding API, L0 | 2026-11-10 | §4 (`binding_level`, `blossom`), §9 (derivation record), §11, §14 (D-10) | The Binding API's interfaces as traits (`acn-binding`) with a performer driver; adapters to the reference stack (`acn-binding-nostr`: session as Signer and Inbox, CDK wallet, Blossom evidence); the L0 conformance suite (`acn-conformance`); `acn-mcp-shim` at L0 (Blossom artifacts, derivation records, T1 paid calls with the CDK wallet); a second binding wrapping any CLI harness (`acn-cli-shim`); a dev Blossom server (`nmesh blossom`) | No wire change. **Decided:** traits are object-safe with boxed futures; `Inbox` only delivers, inbound events go to `Performer::on_event`; `binding_level` is display-only and a claim; an L0 binding declines profile N, non-requester triggers, held-out instances, disqualifiers, requests below its advertised price and other mints, each with a binding reason code (`profile_unsupported`, `trigger_unsupported`, `instances_unsupported`, `disqualifiers_unsupported`, `price_too_low`, `mint_unsupported`, `payment_invalid`, `terms_unclosed`, `unknown_tool`, `expired`), not validator codes; it folds every act it signs before sending (rule 5). The L0 suite passes only if discovery holds (L0 claim, profiles, mint capabilities, Blossom servers in `K_SVC` and as a BUD-03 list, operator binding in force), the evidence of each `REPORT` fetches and matches its hashes, a T1 token is redeemed after `SATISFY` and a mismatched one declined, five must-decline cases are declined for their reason, and no act the binding signs carries any anomaly. Without Blossom a binding reports inline only and claims no level |
 | P2 Negotiation and evidence | 2026-11-10 | §6.2 (`terms` tag hint), §7 (terms by reference), §9 | Terms by reference end to end: the `terms` tag's optional server hint; the app, the demo cast and the binding driver fetch referenced terms and fold with them; terms over the inline limit go to Blossom. The requester's counter-offer (terms editor on the card). The drafting screen (requester drafter and linter, CR-003 Phase D). Attestation details on the card (method, recipe, referent, judges, aggregate, instances) and links from each `REPORT` to its artifacts and derivation record. The demo cast hosts a Blossom server and stores every `REPORT`'s evidence there | No change to the validator. **Decided:** the hint is a server base URL, outside the terms hash; fetch order is hint → performer's `blossom` → the reader's own servers, and a document is kept only if its hash matches. A reader that can't fetch the terms sees the act pending (§7), as before. The demo performer (Atlas) accepts a requester counter only if every condition is closed, there are no held-out instances and, when paid, the price is unchanged; otherwise it declines `counter_unacceptable`. To an unclosed request it answers with `draft_counter` from its template or declines `terms_unclosed`. When a `REPORT`'s inline result would exceed 16 KiB, the cast shortens the inline copy and the artifact on Blossom carries the full result; under `contingent` the artifact is the decoded sealed payload, whose sha256 is `ciphertext`. Conformance gains `t0-terms-by-reference` and `t1-terms-by-reference` |
+| Design-alignment audit | 2026-11-11 | §8.6, §9, §10 (V-8, V-20, V-22, V-25, vectors S-5b, S-7c, C-6g, SC-1…SC-7b), §14 (D-10, D-18) | Remediation of [DESIGN-ALIGNMENT-AUDIT.md](DESIGN-ALIGNMENT-AUDIT.md) A01–A18 | **Validator:** V-8 is checked against the terms the act commits to (the countered or pending terms for `COUNTER` and `ACCEPT`), not the `REQUEST`'s; `DECLINE` and `REVOKE` carry no value, so a performer can always refuse; V-8 stays performer-only. Evidence decides an act's legality only up to that act's `created_at` (`RELEASE`, `REJECT` before settlement, `premature_fund`): later evidence never undoes a settlement, and a `RELEASE` signed before its evidence is `bad_release`. **Bindings and clients (no wire change):** §8.6 now requires the full received-lock policy, distinct proofs, keysets when named, and an observed (NUT-06) capability check by the payer; readers never let a copy that fails V-1 replace a verified event; the reference bindings journal execution and keep evidence private by default; the requester recovers a contingent delivery key from the mint when `CLAIM` is withheld; the judge harness is `acn-judge/2` (strict replies, pinned request) |
 | Contingent sealing format | 2026-11-08 | §6.2 (`REPORT`), §8.2 step 2 | The sealed deliverable `C` is a NIP-44 v2 payload keyed directly by `k`; inline as `content.sealed` or on Blossom; `ciphertext` = sha256 of the payload bytes. Reference: `acn-core::sealed`, interop-tested against rust-nostr | Clarification, no wire version change. Implemented end to end in the demo cast (`/contingent`), with `/judged`, `/injected` and `/judged-auto` for CR-001 |
 | Spec/reference audit | 2026-11-09 | §5.2, §5.4, §6.1, §6.2, §7, §8.5, §10 (V-24, V-25, vectors), §13, §14 (D-8 closed) | Aligned with `acn-core`: `v` tag `acn/0.4`; state record fields (`report_at`, `ruled`, `head_at`, `performer_seed_hash`, `performer_seed`, the counter's seed hash) and contingent/disqualifier transitions; `REJECT` from Offered and gaps naming disqualifiers or `artifact_unavailable`; `governance.party`, judged `instances`, mechanical disqualifier `instances`; V-24 and V-25 codes made explicit; advisory `PROMISE` fields and the `FUND` token marked as not validated; `rubric_ref` optional in judged attestations; permutation sampling stated; V-19 wording. Code fixed to match: unknown fields rejected at every level, supplied documents that fail to parse reported (not left pending), judged disqualifiers with the performer as runner flagged `self_judged`, escrow acks authorized only by this commitment's terms. §8.5 milestones contradicted atomic commitments (§1) and are now separate commitments (D-8 closed, as D-23) | Clarification, no wire change |

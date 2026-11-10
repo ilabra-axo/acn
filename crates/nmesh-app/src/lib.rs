@@ -49,8 +49,8 @@ pub use acn_wallet::WalletView;
 pub use commitments::{BindingView, CommitmentView};
 use nmesh_wallet::CashuWallet;
 pub use view::{
-    AcnPeerView, AcnToolView, ArgView, BodyView, CommandView, ContactView, Identity, MessageView,
-    RenderContext, RendererView,
+    AcnPeerView, AcnToolView, ArgView, BodyView, CommandView, ContactView, Discovery, Identity,
+    MessageView, RenderContext, RendererView,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -188,6 +188,8 @@ struct State {
     seeds: HashMap<String, String>,
     /// Terms documents referenced by hash rather than inlined (Core §7), as fetched.
     docs: BTreeMap<String, Value>,
+    /// Delivery keys recovered from the mint (A10), persisted.
+    keys: BTreeMap<String, String>,
     /// Hashes being fetched or found missing (not retried on every act).
     docs_tried: HashSet<String>,
     /// ACN acts created before this are ignored ("Reset demo").
@@ -228,7 +230,8 @@ struct Inner {
     wallet: Option<CashuWallet>,
     policy: SettlementPolicy,
     blossom: Option<nmesh_blossom::BlossomClient>,
-    http: reqwest::Client,
+    /// Bounds concurrent fetches of referenced documents.
+    fetches: tokio::sync::Semaphore,
 }
 
 #[derive(Clone)]
@@ -271,7 +274,12 @@ impl App {
             if let Ok(pk) = PublicKey::parse(&c.pubkey) {
                 let mut v = ContactView::new(pk);
                 v.is_agent = c.is_agent;
-                v.consented = !c.is_agent || c.accepted;
+                // A classification is only trusted if discovery established it; anything else
+                // is re-checked before the first send (`ensure_consent`).
+                if c.is_agent || c.resolved {
+                    v.discovery = view::Discovery::Resolved;
+                }
+                v.consented = c.accepted || (c.resolved && !c.is_agent);
                 if c.accepted {
                     accepted.insert(v.pubkey.clone());
                 }
@@ -303,6 +311,7 @@ impl App {
                     secrets: stored.secrets.clone(),
                     seeds: stored.seeds.clone(),
                     docs: BTreeMap::new(),
+                    keys: stored.keys.clone(),
                     docs_tried: HashSet::new(),
                     demo_epoch: stored.demo_epoch,
                     cleared: stored.cleared.iter().cloned().collect(),
@@ -314,11 +323,7 @@ impl App {
                 blossom: (!config.blossom.is_empty()).then(|| {
                     nmesh_blossom::BlossomClient::new(config.blossom.clone(), session_keys.clone())
                 }),
-                http: {
-                    // The workspace uses one TLS provider (ring); installing it twice is harmless.
-                    let _ = rustls::crypto::ring::default_provider().install_default();
-                    reqwest::Client::new()
-                },
+                fetches: tokio::sync::Semaphore::new(1),
             }),
         };
 
@@ -350,6 +355,16 @@ impl App {
                 this.ingest(m).await;
             }
         });
+        // Contingent deliveries whose performer redeemed but never sent `CLAIM` (A10).
+        if app.inner.wallet.is_some() {
+            let this = app.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(20)).await;
+                    this.recover_delivery_keys().await;
+                }
+            });
+        }
 
         Ok((app, rx))
     }
@@ -428,6 +443,41 @@ impl App {
         self.refresh(&key).await
     }
 
+    /// A card image the user asked to load (A16: images never load on their own). The payload
+    /// must pin its sha256; the native fetch is bounded and public-addresses-only, and the image
+    /// is returned as a `data:` URL only if the hash matches, so the sender learns at most that
+    /// the user clicked.
+    pub async fn fetch_image(&self, url: &str, sha256: &str) -> Result<String, AppError> {
+        use base64::Engine;
+        if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(AppError::Invalid(
+                "the image has no valid sha256 pin".into(),
+            ));
+        }
+        let policy = nmesh_blossom::FetchPolicy {
+            max_bytes: 5 * 1024 * 1024,
+            ..nmesh_blossom::FetchPolicy::default()
+        };
+        let bytes = nmesh_blossom::fetch_url(url, sha256, &policy)
+            .await
+            .map_err(|e| AppError::Invalid(format!("image: {e}")))?;
+        let mime = match bytes.as_slice() {
+            [0x89, b'P', b'N', b'G', ..] => "image/png",
+            [0xff, 0xd8, 0xff, ..] => "image/jpeg",
+            [b'G', b'I', b'F', b'8', ..] => "image/gif",
+            [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => "image/webp",
+            _ => {
+                return Err(AppError::Invalid(
+                    "image: not a PNG, JPEG, GIF or WebP".into(),
+                ))
+            }
+        };
+        Ok(format!(
+            "data:{mime};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ))
+    }
+
     /// Record that the user has seen and accepted an agent's data-handling disclosure.
     pub async fn accept_agent(&self, pubkey: &str) -> Result<ContactView, AppError> {
         let key = parse_pk(pubkey)?.to_hex();
@@ -442,6 +492,8 @@ impl App {
             c.clone()
         };
         self.persist().await;
+        // Terms referenced by acts that arrived before the user accepted.
+        self.fetch_referenced(&key);
         Ok(c)
     }
 
@@ -470,6 +522,20 @@ impl App {
     ) -> Result<MessageView, AppError> {
         let pk = parse_pk(pubkey)?;
         self.ensure_consent(&pk).await?;
+        // The action answers a message this peer sent us, in this conversation (A11): a stale
+        // UI can't send one message's form values to another peer.
+        {
+            let st = self.inner.state.lock().await;
+            let owned = st
+                .messages
+                .get(&pk.to_hex())
+                .is_some_and(|l| l.iter().any(|m| m.id == target && !m.mine));
+            if !owned {
+                return Err(AppError::Invalid(
+                    "this action belongs to a message from another conversation".into(),
+                ));
+            }
+        }
         let target =
             EventId::parse(target).map_err(|e| AppError::Invalid(format!("bad target id: {e}")))?;
 
@@ -584,7 +650,10 @@ impl App {
                 &self.me().to_hex(),
                 acts,
                 st.bindings.get(conv).map(Vec::as_slice).unwrap_or_default(),
-                &st.docs,
+                &commitments::Known {
+                    documents: &st.docs,
+                    keys: &st.keys,
+                },
                 &self.ctx(),
                 self.now(),
             ),
@@ -803,6 +872,7 @@ impl App {
                     None
                 } else {
                     let w = self.wallet_for(mint)?;
+                    ensure_rail(w, mint, false).await?;
                     let amount = terms["price"]["amount"].as_u64().unwrap_or(0);
                     let tok = w
                         .lock_htlc(
@@ -864,7 +934,15 @@ impl App {
                 st.seeds.insert(id.clone(), s);
             }
             drop(st);
-            self.persist().await;
+            // Without the saved preimage we could never pay this commitment: don't send it. A
+            // lock already made is tagged below and stays refundable after its locktime.
+            if let Err(e) = self.persist_checked().await {
+                if let (Some(t), Some(w)) = (&token, &self.inner.wallet) {
+                    let _ = w.tag(t, &id);
+                    self.emit_wallet().await;
+                }
+                return Err(e);
+            }
         }
         if let (Some(t), Some(w)) = (&token, &self.inner.wallet) {
             let _ = w.tag(t, &id);
@@ -900,10 +978,25 @@ impl App {
 
     /// Fetch terms documents the conversation's acts reference but don't inline (Core §7): from
     /// the tag's URL hint, the agent's Blossom servers, then ours; each checked against its hash.
+    /// Only for conversations the user has accepted (A13): a stranger's act can't make the app
+    /// contact a server. Hints and advertised servers are other parties' URLs, so they are
+    /// fetched under the bounded, public-addresses-only policy; only our configured servers may
+    /// be local. One fetch runs at a time.
     fn fetch_referenced(&self, conv: &str) {
         let this = self.clone();
         let conv = conv.to_string();
         tokio::spawn(async move {
+            let allowed = {
+                let st = this.inner.state.lock().await;
+                st.contacts
+                    .get(&conv)
+                    .is_some_and(|c| !c.needs_consent() && c.discovery != view::Discovery::Pending)
+            };
+            if !allowed {
+                tracing::debug!(%conv, "not fetching referenced terms for a contact not yet accepted");
+                return;
+            }
+            let _permit = this.inner.fetches.acquire().await;
             let events = this.fold_input(&conv).await;
             let wanted: Vec<(String, Option<String>)> = {
                 let mut st = this.inner.state.lock().await;
@@ -933,6 +1026,10 @@ impl App {
                 .as_ref()
                 .map(|b| b.servers.clone())
                 .unwrap_or_default();
+            let policy = nmesh_blossom::FetchPolicy {
+                max_bytes: acn_core::INLINE_LIMIT * 16,
+                ..nmesh_blossom::FetchPolicy::trusting(&ours)
+            };
             let mut got = false;
             for (hash, hint) in wanted {
                 let servers: Vec<String> = hint
@@ -940,7 +1037,7 @@ impl App {
                     .chain(agent_servers.clone())
                     .chain(ours.clone())
                     .collect();
-                let doc = nmesh_blossom::fetch_from(&this.inner.http, &servers, &hash)
+                let doc = nmesh_blossom::fetch_from(&servers, &hash, &policy)
                     .await
                     .ok()
                     .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
@@ -1087,6 +1184,68 @@ impl App {
         }
     }
 
+    /// Recover delivery keys from the mint (Core §8.2): for every contingent commitment we
+    /// funded that has no `CLAIM`, ask the mint whether the `FUND` token was spent; if so its
+    /// witness carries `k`, which opens the sealed `REPORT` (checked against its hashlock by
+    /// the projection). Runs in the background; returns how many keys were recovered.
+    pub async fn recover_delivery_keys(&self) -> usize {
+        let Some(w) = self.inner.wallet.as_ref() else {
+            return 0;
+        };
+        let me = self.me().to_hex();
+        let (convs, docs) = {
+            let st = self.inner.state.lock().await;
+            (st.acts.keys().cloned().collect::<Vec<_>>(), st.docs.clone())
+        };
+        let mut found = 0;
+        for conv in convs {
+            let events = self.fold_input(&conv).await;
+            let out = acn_core::fold(&events, &docs);
+            let mut got = false;
+            for cid in out.commitments.keys() {
+                if self.inner.state.lock().await.keys.contains_key(cid) {
+                    continue;
+                }
+                let Some(acn_wallet::settlement::Advice::LearnKey { .. }) =
+                    acn_wallet::settlement::advise_with(&events, &docs, cid, &me, self.now())
+                else {
+                    continue;
+                };
+                // The FUND act carries the token encrypted to the performer; ours is in the wallet.
+                let Some(token) = w.token_for(cid) else {
+                    continue;
+                };
+                match w.revealed_preimage(&token).await {
+                    Ok(Some(k)) => {
+                        tracing::info!(commitment = %cid, "delivery key recovered from the mint (no CLAIM)");
+                        self.inner.state.lock().await.keys.insert(cid.clone(), k);
+                        got = true;
+                        found += 1;
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::debug!(commitment = %cid, error = %e, "key recovery: mint check failed")
+                    }
+                }
+            }
+            if got {
+                self.persist().await;
+                let views = {
+                    let st = self.inner.state.lock().await;
+                    self.project_locked(&st, &conv)
+                };
+                for v in views {
+                    let _ = self
+                        .inner
+                        .events
+                        .send(AppEvent::Commitment { commitment: v })
+                        .await;
+                }
+            }
+        }
+        found
+    }
+
     /// Mint test sats (the demo mint's Lightning backend is fake and pays itself).
     pub async fn top_up(&self, amount: u64) -> Result<WalletView, AppError> {
         let w = self
@@ -1104,6 +1263,10 @@ impl App {
     /// Reclaim the locked payment of a commitment that closed unsatisfied, once its locktime has
     /// passed (NUT-14 refund path). The mint checks the locktime against its own clock, so the
     /// presentation clock cannot fast-forward this.
+    ///
+    /// `commitment` may also be a wallet lock id. A lock whose commitment isn't in our history
+    /// (its request was never published, or "reset demo" hid it) is refundable from the wallet's
+    /// own record after its locktime (A18): recovering funds never depends on history.
     pub async fn refund(&self, pubkey: &str, commitment: &str) -> Result<WalletView, AppError> {
         let conv = parse_pk(pubkey)?.to_hex();
         let w = self
@@ -1114,23 +1277,45 @@ impl App {
         let events = self.fold_input(&conv).await;
         let me = self.me().to_hex();
         let docs = self.inner.state.lock().await.docs.clone();
-        match acn_wallet::settlement::advise_with(&events, &docs, commitment, &me, self.now()) {
-            Some(acn_wallet::settlement::Advice::Refund { locktime, .. }) => {
-                if Timestamp::now().as_secs() <= locktime {
-                    return Err(AppError::Invalid(format!(
-                        "refundable after the locktime ({locktime}, unix time); the mint enforces it"
-                    )));
-                }
-            }
-            _ => {
-                return Err(AppError::Invalid(
-                    "nothing to refund: the commitment is open or was satisfied".into(),
-                ))
-            }
-        }
         let token = w
             .token_for(commitment)
+            .or_else(|| w.token_of_lock(commitment))
             .ok_or_else(|| AppError::Invalid("no locked token for this commitment".into()))?;
+        let known = acn_core::fold(&events, &docs)
+            .commitments
+            .contains_key(commitment);
+        let locktime = if known {
+            match acn_wallet::settlement::advise_with(&events, &docs, commitment, &me, self.now()) {
+                Some(acn_wallet::settlement::Advice::Refund { locktime, .. }) => locktime,
+                _ => {
+                    return Err(AppError::Invalid(
+                        "nothing to refund: the commitment is open or was satisfied".into(),
+                    ))
+                }
+            }
+        } else {
+            let id = nmesh_wallet::lock_id(&token);
+            let view = w
+                .view()
+                .await
+                .map_err(|e| AppError::Invalid(format!("wallet: {e}")))?;
+            let lock = view
+                .locks
+                .iter()
+                .find(|l| l.id == id)
+                .ok_or_else(|| AppError::Invalid("no such lock".into()))?;
+            if lock.refund != me || lock.state != acn_wallet::LockState::Locked {
+                return Err(AppError::Invalid(
+                    "this lock isn't refundable by you".into(),
+                ));
+            }
+            lock.locktime
+        };
+        if Timestamp::now().as_secs() <= locktime {
+            return Err(AppError::Invalid(format!(
+                "refundable after the locktime ({locktime}, unix time); the mint enforces it"
+            )));
+        }
         w.refund(&token)
             .await
             .map_err(|e| AppError::Invalid(format!("refund: {e}")))?;
@@ -1194,6 +1379,7 @@ impl App {
             .map(|p| p.mint.clone())
             .unwrap_or_default();
         let w = self.wallet_for(&mint)?;
+        ensure_rail(w, &mint, true).await?;
         let amount = terms.price.amount;
         // The performer must claim before this; then the requester can refund. Real time: the
         // mint enforces it, the presentation clock doesn't apply.
@@ -1422,6 +1608,7 @@ impl App {
         let mine = act.pubkey == me;
         let at = act.created_at;
         let kind = act.kind;
+        let valid = act.verify().is_ok();
         let (conv, fresh) = {
             let mut st = self.inner.state.lock().await;
             if at < st.demo_epoch || st.cleared.contains(&cid) {
@@ -1446,18 +1633,13 @@ impl App {
                     .cloned()
                     .unwrap_or_else(|| conv.to_string())
             };
-            let fresh = st
-                .acts
-                .entry(conv.clone())
-                .or_default()
-                .insert(act.id.clone(), act)
-                .is_none();
+            let fresh = commitments::admit(st.acts.entry(conv.clone()).or_default(), act);
             (conv, fresh)
         };
         if !fresh {
             return;
         }
-        if matches!(kind, K_REQUEST | K_COUNTER) {
+        if valid && matches!(kind, K_REQUEST | K_COUNTER) {
             self.fetch_referenced(&conv);
         }
         if is_request {
@@ -1528,14 +1710,34 @@ impl App {
 
     // --- internals ---
 
+    /// The consent gate (ADR 0004). Fails closed: a contact whose kind isn't known yet is
+    /// discovered first, and one that can't be discovered can't be messaged.
     async fn ensure_consent(&self, pk: &PublicKey) -> Result<(), AppError> {
-        let st = self.inner.state.lock().await;
-        match st.contacts.get(&pk.to_hex()) {
-            Some(c) if c.is_agent && !c.consented => Err(AppError::Invalid(
-                "review and accept this agent's data handling first".into(),
-            )),
-            _ => Ok(()),
+        let key = pk.to_hex();
+        let pending = {
+            let st = self.inner.state.lock().await;
+            st.contacts
+                .get(&key)
+                .is_none_or(|c| c.discovery == view::Discovery::Pending)
+        };
+        let contact = if pending {
+            self.refresh(&key).await.map_err(|e| {
+                AppError::Invalid(format!(
+                    "couldn't check whether this contact is an agent ({e}); try again"
+                ))
+            })?
+        } else {
+            let st = self.inner.state.lock().await;
+            st.contacts.get(&key).cloned().expect("checked above")
+        };
+        if contact.needs_consent() {
+            return Err(AppError::Invalid(if contact.is_agent {
+                "review and accept this agent's data handling first".into()
+            } else {
+                "no profile found for this key: review and accept before contacting it".into()
+            }));
         }
+        Ok(())
     }
 
     async fn record_outgoing(&self, to: PublicKey, id: EventId, body: Body) -> MessageView {
@@ -1643,6 +1845,12 @@ impl App {
     }
 
     async fn persist(&self) {
+        let _ = self.persist_checked().await;
+    }
+
+    /// Save, and say if it failed: callers that must not go on without the saved state (a
+    /// payment preimage, a held-out seed) stop before publishing anything (A18).
+    async fn persist_checked(&self) -> Result<(), AppError> {
         let st = self.inner.state.lock().await;
         let data = store::Stored {
             contacts: st
@@ -1652,15 +1860,41 @@ impl App {
                     pubkey: c.pubkey.clone(),
                     is_agent: c.is_agent,
                     accepted: st.accepted.contains(&c.pubkey),
+                    resolved: c.discovery == view::Discovery::Resolved,
                 })
                 .collect(),
             secrets: st.secrets.clone(),
             seeds: st.seeds.clone(),
+            keys: st.keys.clone(),
             demo_epoch: st.demo_epoch,
             cleared: st.cleared.iter().cloned().collect(),
         };
         drop(st);
-        self.inner.store.save(&data);
+        self.inner.store.save(&data).map_err(|e| {
+            AppError::Invalid(format!(
+                "couldn't save the payment secret or seed ({e}); nothing was sent"
+            ))
+        })
+    }
+}
+
+/// Observed, not just declared (Core §8.6): before locking money at a mint, check that the mint
+/// itself (NUT-06 info) supports hash-time locks (NUT-10/11/14) and DLEQ (NUT-12), and for
+/// contingent the state check (NUT-07) that reveals the preimage to the payer.
+async fn ensure_rail(w: &CashuWallet, mint: &str, contingent: bool) -> Result<(), AppError> {
+    let nuts = w
+        .observed_nuts()
+        .await
+        .map_err(|e| AppError::Invalid(format!("rail_incapable: {e}")))?;
+    let mut need = vec![10u8, 11, 12, 14];
+    if contingent {
+        need.push(7);
+    }
+    match need.iter().find(|n| !nuts.contains(n)) {
+        Some(n) => Err(AppError::Invalid(format!(
+            "rail_incapable: mint {mint} doesn't support NUT-{n:02}"
+        ))),
+        None => Ok(()),
     }
 }
 

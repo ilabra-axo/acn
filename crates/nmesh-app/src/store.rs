@@ -16,6 +16,9 @@ pub struct StoredContact {
     /// User accepted this agent's data-handling disclosure.
     #[serde(default)]
     pub accepted: bool,
+    /// Discovery found a profile (or an agent): `is_agent` was established, not assumed.
+    #[serde(default)]
+    pub resolved: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -35,6 +38,10 @@ pub struct Stored {
     /// Commitments cleared by the reset that had acts in the same second as `demo_epoch`.
     #[serde(default)]
     pub cleared: Vec<String>,
+    /// Delivery keys `k` recovered from the mint for contingent commitments whose performer
+    /// redeemed without a `CLAIM` (commitment id → hex), so the deliverable stays readable.
+    #[serde(default)]
+    pub keys: std::collections::BTreeMap<String, String>,
 }
 
 pub struct Store {
@@ -55,7 +62,7 @@ impl Store {
             .unwrap_or_default()
     }
 
-    pub fn save(&self, data: &Stored) {
+    pub fn save(&self, data: &Stored) -> std::io::Result<()> {
         let write = || -> std::io::Result<()> {
             if let Some(dir) = self.path.parent() {
                 std::fs::create_dir_all(dir)?;
@@ -64,8 +71,8 @@ impl Store {
             std::fs::write(&tmp, serde_json::to_vec_pretty(data)?)?;
             std::fs::rename(tmp, &self.path)
         };
-        if let Err(e) = write() {
+        write().inspect_err(|e| {
             tracing::warn!(error = %e, path = %self.path.display(), "failed to save contacts");
-        }
+        })
     }
 }

@@ -23,3 +23,10 @@ rand = "0.8"
 nmesh-mint.workspace = true
 acn-core.workspace = true
 anyhow.workspace = true
+# A fee-bearing test mint (tests/htlc.rs); nmesh-mint already builds these.
+cdk = { workspace = true, features = ["mint"] }
+cdk-fake-wallet.workspace = true
+cdk-axum.workspace = true
+cdk-sqlite = { workspace = true, features = ["mint"] }
+axum = "0.8"
+bip39 = "2"

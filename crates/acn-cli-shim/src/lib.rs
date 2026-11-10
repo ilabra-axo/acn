@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use acn_binding::{Artifact, BoxFut, Executor, Job, Output, Performer, Quote, ServiceAd};
+pub use acn_binding::Disclosure;
+use acn_binding::{Artifact, BoxFut, Executor, Job, Journal, Output, Performer, Quote, ServiceAd};
 use acn_binding_nostr::{BlossomEvidence, MintWallet, SessionBinding};
 use acn_core::{Profile, Terms};
 use anyhow::Context;
@@ -64,8 +65,18 @@ pub struct Config {
     /// no conformance level can be claimed).
     #[serde(default)]
     pub operator_key_file: Option<PathBuf>,
+    /// Blossom servers: terms sent by reference are looked up here, and with
+    /// `evidence = "public"` artifacts and derivation records are stored here.
     #[serde(default)]
     pub blossom: Vec<String>,
+    /// Evidence disclosure: `"private"` (default) uploads nothing (inline results only, no
+    /// conformance level claimed); `"public"` uploads stdout, output files, stderr and the
+    /// derivation record to the Blossom servers, unencrypted, after the REPORT passes the gate.
+    #[serde(default)]
+    pub evidence: Disclosure,
+    /// The durable execution journal (JSON). Default: next to `key_file`.
+    #[serde(default)]
+    pub journal: Option<PathBuf>,
     #[serde(default)]
     pub price_sat: u64,
     #[serde(default)]
@@ -236,6 +247,12 @@ impl CliShim {
         )
         .await?;
         let sb = Arc::new(SessionBinding(session.clone()));
+        let journal = Journal::open(
+            cfg.journal
+                .clone()
+                .unwrap_or_else(|| acn_binding_nostr::default_journal_path(&cfg.key_file)),
+        )
+        .map_err(anyhow::Error::msg)?;
         let mut performer = Performer::new(
             sb.clone(),
             sb,
@@ -244,7 +261,9 @@ impl CliShim {
                 timeout: Duration::from_secs(cfg.timeout_secs),
             }),
         )
-        .with_min_price(cfg.price_sat);
+        .with_min_price(cfg.price_sat)
+        .with_journal(journal)
+        .with_disclosure(cfg.evidence);
         if !cfg.blossom.is_empty() {
             performer = performer.with_evidence(Arc::new(BlossomEvidence(
                 nmesh_blossom::BlossomClient::new(cfg.blossom.clone(), session.keys().clone()),
@@ -337,7 +356,9 @@ impl CliShim {
         acn_binding_nostr::announce(&session, &cfg.id, &ad).await?;
         if let Some(p) = &cfg.operator_key_file {
             let operator = nmesh_core::load_or_create_keys(p)?;
-            acn_binding_nostr::ensure_binding(&session, &operator, cfg.price_sat, 30).await?;
+            let binding =
+                acn_binding_nostr::ensure_binding(&session, &operator, cfg.price_sat, 30).await?;
+            performer.add_context(binding);
         }
         Ok(Self {
             session,
@@ -375,5 +396,21 @@ impl CliShim {
             }
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn example_config_parses_and_evidence_defaults_private() {
+        let c: Config = toml::from_str(include_str!("../shim.example.toml")).unwrap();
+        assert_eq!(c.evidence, Disclosure::Public);
+        let minimal = "id = \"x\"\nname = \"x\"\nrelays = []\nkey_file = \"k\"\n\
+                       [[tool]]\nname = \"t\"\ncommand = \"true\"\n";
+        let c: Config = toml::from_str(minimal).unwrap();
+        assert_eq!(c.evidence, Disclosure::Private);
+        assert_eq!(c.journal, None);
     }
 }

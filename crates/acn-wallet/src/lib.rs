@@ -101,14 +101,40 @@ pub enum MintError {
     InvalidAmount,
 }
 
-/// Facts a performer checks before promising (spec §8.2 step 3).
+/// NUT-11 signature flag of a lock that signs inputs only (the only flag ACN locks use).
+pub const SIG_INPUTS: &str = "SIG_INPUTS";
+
+/// Facts a performer checks before promising (spec §8.2 step 3): the value of the token's
+/// distinct proofs and its complete effective spending policy, which is identical on every proof.
+///
+/// The policy fields default to values [`settlement::check_payment`] rejects, so a producer that
+/// does not establish them fails closed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Verified {
     pub amount: u64,
     pub hashlock: String,
+    /// The key that may redeem with the preimage.
     pub receiver: String,
     pub locktime: u64,
     pub unspent: bool,
+    /// Every key on the preimage path (NUT-11 `pubkeys`). A sound ACN lock lists `receiver` only.
+    #[serde(default)]
+    pub receivers: Vec<String>,
+    /// Signatures required on the preimage path (`n_sigs`; an absent tag means 1).
+    #[serde(default)]
+    pub n_sigs: u64,
+    /// Keys that may reclaim the token after `locktime` (`refund`).
+    #[serde(default)]
+    pub refund: Vec<String>,
+    /// Signatures required on the refund path (`n_sigs_refund`; an absent tag means 1).
+    #[serde(default)]
+    pub n_sigs_refund: u64,
+    /// NUT-11 `sigflag` ([`SIG_INPUTS`] when absent).
+    #[serde(default)]
+    pub sig_flag: String,
+    /// The keyset ids of the token's proofs (Core §8.6: terms may name the keysets they accept).
+    #[serde(default)]
+    pub keysets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -226,6 +252,13 @@ impl SimMint {
             receiver: l.receiver.clone(),
             locktime: l.locktime,
             unspent: l.state == LockState::Locked,
+            // A sim lock has exactly the canonical policy: one receiver, the owner as refund key.
+            receivers: vec![l.receiver.clone()],
+            n_sigs: 1,
+            refund: vec![l.refund.clone()],
+            n_sigs_refund: 1,
+            sig_flag: SIG_INPUTS.into(),
+            keysets: vec![],
         })
     }
 
@@ -384,6 +417,11 @@ mod tests {
         assert_eq!(m.view(alice).locked_out, 21);
         assert_eq!(m.view(bob).incoming, 21);
         assert!(m.verify(&t).unwrap().unspent);
+        let v = m.verify(&t).unwrap();
+        assert_eq!(
+            (v.receivers, v.refund),
+            (vec![bob.into()], vec![alice.into()])
+        );
 
         assert_eq!(m.redeem(&t, alice, &pre, 2), Err(MintError::NotReceiver));
         assert_eq!(

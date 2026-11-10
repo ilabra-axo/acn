@@ -18,7 +18,7 @@ pub enum Level {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Finding {
-    /// `L1` … `L8`.
+    /// `L1` … `L8`; `L0` when the draft isn't valid terms at all.
     pub rule: &'static str,
     pub level: Level,
     /// The condition or disqualifier id, when the finding is about one.
@@ -95,6 +95,20 @@ fn family(model_id: &str) -> String {
 }
 
 /// Lint a terms version. Findings are ordered by level, then rule, then item.
+/// Lint a draft that may not parse: unparseable terms are one `L0` error, never an empty list
+/// (an empty list must mean "valid, nothing to say").
+pub fn lint_value(terms: &serde_json::Value, cx: &LintContext) -> Vec<Finding> {
+    match Terms::check(terms) {
+        Ok(t) => lint(&t, cx),
+        Err((code, e)) => vec![Finding {
+            rule: "L0",
+            level: Level::Error,
+            item: None,
+            message: format!("not valid terms ({}): {e}", code.as_str()),
+        }],
+    }
+}
+
 pub fn lint(terms: &Terms, cx: &LintContext) -> Vec<Finding> {
     let mut out = Vec::new();
     let mut push = |rule, level, item: Option<&str>, message: String| {
@@ -267,6 +281,16 @@ mod tests {
 
     fn rules(f: &[Finding]) -> Vec<&'static str> {
         f.iter().map(|x| x.rule).collect()
+    }
+
+    #[test]
+    fn unparseable_terms_are_an_error_not_silence() {
+        let cx = LintContext::default();
+        let f = lint_value(&json!({"v": "acn-terms/0.5", "conditions": "nope"}), &cx);
+        assert_eq!(rules(&f), ["L0"]);
+        assert_eq!(f[0].level, Level::Error);
+        let ok = serde_json::to_value(terms(|_| {})).unwrap();
+        assert!(lint_value(&ok, &cx).is_empty());
     }
 
     #[test]

@@ -75,7 +75,11 @@ fn text_content(result: &CallToolResult) -> String {
 fn alt_from_payload(v: &Value) -> String {
     ["title", "summary", "label", "name"]
         .iter()
-        .find_map(|k| v.get(*k).and_then(Value::as_str))
+        .find_map(|k| {
+            v.get(*k)
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+        })
         .map(str::to_owned)
         .unwrap_or_else(|| v.to_string())
 }

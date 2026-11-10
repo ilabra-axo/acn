@@ -18,6 +18,4 @@ hex.workspace = true
 base64 = "0.22"
 anyhow.workspace = true
 tracing.workspace = true
-
-[dev-dependencies]
 rustls.workspace = true

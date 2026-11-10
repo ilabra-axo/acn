@@ -10,7 +10,7 @@ use acn_core::terms::{Condition, ConditionClass, Disqualifier, Terms, Verifier};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::lint::{lint, Finding, LintContext};
+use crate::lint::{lint_value, Finding, LintContext};
 
 /// A template the drafter may use: its content and, if published, its event id (then the
 /// drafted terms carry `template_ref`).
@@ -375,9 +375,7 @@ pub fn draft_request(
     if let Some(r) = template_ref {
         terms["template_ref"] = json!(r);
     }
-    let findings = Terms::parse(&terms)
-        .map(|t| lint(&t, &LintContext::default()))
-        .unwrap_or_default();
+    let findings = lint_value(&terms, &LintContext::default());
     RequestDraft {
         terms,
         template: name,
@@ -584,17 +582,13 @@ pub fn draft_counter(terms: &Terms, caps: &Capabilities) -> Option<CounterDraft>
         .map(|c| format!("{}: {}", c.item, c.line))
         .collect::<Vec<_>>()
         .join("; ");
-    let findings = Terms::parse(&t)
-        .map(|x| {
-            lint(
-                &x,
-                &LintContext {
-                    binding: true,
-                    ..Default::default()
-                },
-            )
-        })
-        .unwrap_or_default();
+    let findings = lint_value(
+        &t,
+        &LintContext {
+            binding: true,
+            ..Default::default()
+        },
+    );
     Some(CounterDraft {
         terms: t,
         template: Some(f.template.name.clone()),

@@ -366,13 +366,33 @@ pub fn project_with(
     me: &str,
     now: u64,
 ) -> Vec<Projection> {
+    project_keys(events, documents, &BTreeMap::new(), me, now)
+}
+
+/// [`project_with`], plus delivery keys the requester recovered without a `CLAIM` (commitment
+/// id → hex `k`): under `contingent` the mint reveals `k` when the performer redeems the
+/// `FUND` token, so withholding `CLAIM` gains nothing (Core §8.2). A key is used only if its
+/// sha256 is the `REPORT`'s `hashlock`.
+pub fn project_keys(
+    events: &[Event],
+    documents: &BTreeMap<String, Value>,
+    keys: &BTreeMap<String, String>,
+    me: &str,
+    now: u64,
+) -> Vec<Projection> {
     let out = fold(events, documents);
     let by_id: BTreeMap<&str, &Event> = events.iter().map(|e| (e.id.as_str(), e)).collect();
     let records = template_records(&out);
     let mut list: Vec<Projection> = out
         .commitments
         .values()
-        .map(|c| one(c, &out, &by_id, &records, documents, me, now))
+        .map(|c| {
+            let known = Known {
+                documents,
+                key: keys.get(&c.id),
+            };
+            one(c, &out, &by_id, &records, &known, me, now)
+        })
         .collect();
     list.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
     list
@@ -556,15 +576,23 @@ fn sampled(v: &Value) -> String {
     }
 }
 
+/// What the reader holds beyond the events: referenced terms documents, and a delivery key
+/// recovered from the mint for this commitment.
+struct Known<'a> {
+    documents: &'a BTreeMap<String, Value>,
+    key: Option<&'a String>,
+}
+
 fn one(
     c: &Commitment,
     out: &Output,
     by_id: &BTreeMap<&str, &Event>,
     records: &BTreeMap<String, TemplateRecord>,
-    documents: &BTreeMap<String, Value>,
+    known: &Known<'_>,
     me: &str,
     now: u64,
 ) -> Projection {
+    let (documents, recovered_key) = (known.documents, known.key);
     let status = status_at(c, now);
     let mine = c.requester == me;
     let my_party = if mine {
@@ -649,14 +677,23 @@ fn one(
         (a.created_at, pa, &a.id).cmp(&(b.created_at, pb, &b.id))
     });
 
-    // Contingent (CR-002): the key revealed by CLAIM opens a sealed REPORT.
-    let claimed_key: Option<[u8; 32]> = c.chain.iter().find_map(|id| {
-        let e = by_id.get(id.as_str()).filter(|e| e.kind == K_CLAIM)?;
-        hex::decode(content(e)["key"].as_str()?)
-            .ok()?
-            .try_into()
-            .ok()
-    });
+    // Contingent (CR-002): the key revealed by CLAIM, or recovered from the mint when the
+    // performer redeemed without claiming, opens a sealed REPORT.
+    let decode = |k: &str| -> Option<[u8; 32]> { hex::decode(k).ok()?.try_into().ok() };
+    let claimed_key: Option<[u8; 32]> = c
+        .chain
+        .iter()
+        .find_map(|id| {
+            let e = by_id.get(id.as_str()).filter(|e| e.kind == K_CLAIM)?;
+            decode(content(e)["key"].as_str()?)
+        })
+        .or_else(|| {
+            let k = decode(recovered_key?)?;
+            let r = st
+                .and_then(|s| s.report.as_deref())
+                .and_then(|r| by_id.get(r))?;
+            (content(r)["hashlock"].as_str()? == acn_core::jcs::sha256_hex(&k)).then_some(k)
+        });
     // Current report and its evidence.
     let report = st
         .and_then(|s| s.report.as_deref())

@@ -28,16 +28,13 @@ pub mod shim;
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Duration;
 
-use acn_binding::Performer;
-use acn_binding_nostr::{BlossomEvidence, MintWallet, SessionBinding};
+use acn_binding::{Journal, Performer};
+use acn_binding_nostr::{BlossomEvidence, MintWallet, RunOptions, SessionBinding};
 
 use anyhow::Context;
 use nmesh_contracts::ContractRegistry;
-use nmesh_core::{
-    Body, IdentityKind, Inbound, InboxOptions, PublicKey, Session, SessionConfig, ToBech32,
-};
+use nmesh_core::{Body, IdentityKind, Inbound, PublicKey, Session, SessionConfig, ToBech32};
 use nmesh_proto::command::{bind_args, parse_invocation, SlashCommandDefinition};
 use nmesh_proto::manifest::{AgentManifest, DataHandling};
 
@@ -96,6 +93,14 @@ impl Bridge {
         let registry = Arc::new(registry);
         let acn = &config.acn;
         let sb = Arc::new(SessionBinding(session.clone()));
+        let journal_path = acn
+            .journal
+            .clone()
+            .unwrap_or_else(|| acn_binding_nostr::default_journal_path(&config.agent.key_file));
+        let journal = Journal::open(journal_path).map_err(anyhow::Error::msg)?;
+        // The same admission for history and live acts: ACN on, and the requester allowed.
+        let admit_allow = allow.clone();
+        let enabled = acn.enabled;
         let mut performer = Performer::new(
             sb.clone(),
             sb,
@@ -103,7 +108,15 @@ impl Bridge {
                 hub: hub.clone(),
                 registry: registry.clone(),
             }),
-        );
+        )
+        .with_journal(journal)
+        .with_disclosure(acn.evidence)
+        .with_admission(Arc::new(move |requester: &str| {
+            enabled
+                && admit_allow.as_ref().is_none_or(|a: &HashSet<PublicKey>| {
+                    PublicKey::parse(requester).is_ok_and(|pk| a.contains(&pk))
+                })
+        }));
         if !acn.blossom.is_empty() {
             performer = performer.with_evidence(Arc::new(BlossomEvidence(
                 nmesh_blossom::BlossomClient::new(acn.blossom.clone(), session.keys().clone()),
@@ -138,24 +151,21 @@ impl Bridge {
         if bridge.config.acn.enabled {
             let acn = &bridge.config.acn;
             let dh = serde_json::to_value(&bridge.manifest().data_handling)?;
-            let ad = shim::service_advertisement(
-                &bridge.hub,
-                acn,
-                &dh,
-                &acn.mint_capabilities,
-                bridge.performer.level(),
-            );
+            let level = shim::claimed_level(acn).and(bridge.performer.level());
+            let ad =
+                shim::service_advertisement(&bridge.hub, acn, &dh, &acn.mint_capabilities, level);
             acn_binding_nostr::announce(&bridge.session, &bridge.config.agent.id, &ad).await?;
             match &acn.operator_key_file {
                 Some(path) => {
                     let operator = nmesh_core::load_or_create_keys(path)?;
-                    acn_binding_nostr::ensure_binding(
+                    let binding = acn_binding_nostr::ensure_binding(
                         &bridge.session,
                         &operator,
                         acn.price_sat,
                         acn.binding_days,
                     )
                     .await?;
+                    bridge.performer.add_context(binding);
                 }
                 None => {
                     tracing::warn!("acn: no operator_key_file; agent will be flagged unaccountable")
@@ -229,36 +239,32 @@ impl Bridge {
     }
 
     /// Serve requests until the inbox closes or ctrl-c.
+    ///
+    /// ACN acts go through [`acn_binding_nostr::run_with`]: history is replayed into the
+    /// performer and every admitted commitment driven, with the journal preventing repeated
+    /// work. Plain messages (slash commands, actions) reach [`Self::handle`] only if they are
+    /// not history and haven't been handled before: a restart never re-runs a tool.
     pub async fn run(&self) -> anyhow::Result<()> {
-        // Own messages are included so ACN state survives restarts (our earlier REPORTs are
-        // replayed from relays); non-ACN own messages are ignored in `handle`.
-        let mut inbox = self
-            .session
-            .inbox_with(InboxOptions {
-                include_own: true,
-                ..Default::default()
-            })
-            .await?;
-
-        // Replay history before acting, so a REQUEST we already answered isn't run twice.
-        let settle = Duration::from_millis(1500);
-        while let Ok(Some(m)) = tokio::time::timeout(settle, inbox.recv()).await {
-            if let Body::Act(e) = &m.body {
-                self.performer.ingest((**e).clone());
-            } else if m.sender != self.session.public_key() {
-                self.handle(m).await;
-            }
-        }
-        for c in self.performer.store.ids() {
-            self.performer.drive(&c).await;
-        }
-
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let opts = RunOptions {
+            allow: self.allow.clone(),
+            acn: self.config.acn.enabled,
+            ..Default::default()
+        };
+        let serve =
+            acn_binding_nostr::run_with(&self.session, self.performer.clone(), opts, move |m| {
+                let _ = tx.send(m);
+            });
+        tokio::pin!(serve);
         loop {
             tokio::select! {
-                msg = inbox.recv() => match msg {
-                    Some(m) => self.handle(m).await,
-                    None => break,
-                },
+                r = &mut serve => {
+                    if let Err(e) = r {
+                        tracing::error!(error = %e, "inbox failed");
+                    }
+                    break;
+                }
+                Some(m) = rx.recv() => self.handle(m).await,
                 _ = tokio::signal::ctrl_c() => break,
             }
         }
@@ -266,11 +272,9 @@ impl Bridge {
         Ok(())
     }
 
+    /// A plain (non-ACN) message from an allowed sender.
     async fn handle(&self, msg: Inbound) {
         if msg.sender == self.session.public_key() {
-            if let Body::Act(e) = &msg.body {
-                self.performer.ingest((**e).clone());
-            }
             return;
         }
         if let Some(allow) = &self.allow {
@@ -282,14 +286,6 @@ impl Bridge {
         let result = match &msg.body {
             Body::Text(t) => self.handle_text(&msg, t).await,
             Body::Action(a) => self.handle_action(&msg, a).await,
-            Body::Act(e) if self.config.acn.enabled => {
-                let p = self.performer.clone();
-                let e = (**e).clone();
-                tokio::spawn(async move {
-                    p.on_event(e).await;
-                });
-                Ok(())
-            }
             _ => Ok(()),
         };
         if let Err(e) = result {
@@ -352,6 +348,20 @@ impl Bridge {
                 .await?;
             return Ok(());
         };
+        let acn = &self.config.acn;
+        if acn.enabled && acn.price_sat > 0 {
+            // The tool is priced in the ACN offer: the direct path would run it for free.
+            self.session
+                .send_text(
+                    msg.sender,
+                    &format!(
+                        "/{} costs {} sat: request it as an ACN commitment (turn on \"Request commands as commitments\").",
+                        binding.command, acn.price_sat
+                    ),
+                )
+                .await?;
+            return Ok(());
+        }
         let args = match args {
             Args::Named(m) => m,
             Args::Text(rest) => match bind_args(&binding.args, rest) {

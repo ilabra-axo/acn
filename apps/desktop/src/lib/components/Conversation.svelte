@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { store } from "../store.svelte";
-  import type { Contact, RendererHost } from "../types";
+  import type { Contact, Message, RendererHost } from "../types";
   import { displayName, HOSTING_LABEL } from "../format";
   import Avatar from "./Avatar.svelte";
   import AgentConsent from "./AgentConsent.svelte";
@@ -19,13 +19,17 @@
   let drafting = $state(false);
 
   const a = $derived(contact.agent);
-  const needsConsent = $derived(contact.is_agent && !contact.consented);
+  // Fail closed (ADR 0004): agents, and keys with no profile at all, need the user's acceptance.
+  const needsConsent = $derived(!contact.consented && (contact.is_agent || contact.discovery === "unresolved"));
 
-  // Each message gets a host bound to it, so actions always reference the right target.
-  function hostFor(messageId: string): RendererHost {
+  // Each message gets a host bound to it and to its conversation, so actions always reference
+  // the right target and go to the peer who sent it, whatever is open when the user clicks.
+  function hostFor(m: Message): RendererHost {
+    const conv = m.conversation;
     return {
-      action: (actionId, label) => store.sendAction(messageId, actionId, null, label),
-      submit: (actionId, values, label) => store.sendAction(messageId, actionId ?? null, values, label ?? null),
+      action: (actionId, label) => store.sendAction(conv, m.id, actionId, null, label),
+      submit: (actionId, values, label) => store.sendAction(conv, m.id, actionId ?? null, values, label ?? null),
+      loadImage: (url, sha256) => store.loadImage(url, sha256),
       openUrl: (url) => store.openUrl(url),
     };
   }
@@ -87,7 +91,7 @@
   {:else}
     <div class="messages" bind:this={list}>
       {#each store.messages as m (m.id)}
-        <MessageItem message={m} host={hostFor(m.id)} />
+        <MessageItem message={m} host={hostFor(m)} />
       {:else}
         <div class="empty muted">
           {#if contact.is_agent && contact.commands.length}

@@ -94,8 +94,12 @@ export class AppStore {
     this.messages = [];
     this.commitments = {};
     try {
-      this.messages = await this.backend.openConversation(pubkey);
+      // Another conversation may be opened while these load: drop stale results (A11).
+      const messages = await this.backend.openConversation(pubkey);
+      if (this.active !== pubkey) return;
+      this.messages = messages;
       const list = await this.backend.commitments(pubkey);
+      if (this.active !== pubkey) return;
       this.commitments = Object.fromEntries(list.map((c) => [c.id, c]));
       this.contacts = this.contacts.map((c) => (c.pubkey === pubkey ? { ...c, unread: 0 } : c));
     } catch (e) {
@@ -127,33 +131,74 @@ export class AppStore {
   }
 
   async sendText(text: string) {
-    if (!this.backend || !this.active) return;
+    const to = this.active;
+    if (!this.backend || !to) return;
     try {
-      const m = await this.backend.sendText(this.active, text);
-      this.messages = upsertSorted(this.messages, m);
+      const m = await this.backend.sendText(to, text);
+      if (m.conversation === this.active) this.messages = upsertSorted(this.messages, m);
     } catch (e) {
       this.fail(e);
     }
   }
 
+  /** Answer `target`, a message in `conversation`. The conversation is bound when the message's
+   *  renderer host is created, never read from the active view at click time (A11). The host
+   *  first shows what will actually be sent, and to whom, and asks (A17): a button's label is
+   *  the sender's words, not a description the host can vouch for. Resolves false if the user
+   *  cancelled or sending failed. */
   async sendAction(
+    conversation: string,
     target: string,
     actionId: string | null,
     values: Record<string, unknown> | null,
     label: string | null,
-  ) {
-    if (!this.backend || !this.active) return;
+  ): Promise<boolean> {
+    if (!this.backend) return false;
+    const key = `${conversation} ${actionId ?? ""}`;
+    if (!this.allowedActions.has(key)) {
+      const ok = await new Promise<boolean>((resolve) => {
+        this.pendingAction = { conversation, actionId, values, label, resolve };
+      });
+      this.pendingAction = null;
+      if (!ok) return false;
+    }
     try {
-      const m = await this.backend.sendAction(this.active, target, actionId, values, label);
-      this.messages = upsertSorted(this.messages, m);
+      const m = await this.backend.sendAction(conversation, target, actionId, values, label);
+      if (m.conversation === this.active) this.messages = upsertSorted(this.messages, m);
+      return true;
     } catch (e) {
       this.fail(e);
+      return false;
     }
+  }
+
+  /** The action awaiting the user's confirmation (ActionConfirm.svelte). */
+  pendingAction = $state<{
+    conversation: string;
+    actionId: string | null;
+    values: Record<string, unknown> | null;
+    label: string | null;
+    resolve: (ok: boolean) => void;
+  } | null>(null);
+  /** "conversation actionId" pairs the user chose not to be asked about again (this session). */
+  private allowedActions = new Set<string>();
+
+  answerAction(ok: boolean, always = false) {
+    const p = this.pendingAction;
+    if (!p) return;
+    if (ok && always) this.allowedActions.add(`${p.conversation} ${p.actionId ?? ""}`);
+    p.resolve(ok);
+  }
+
+  async loadImage(url: string, sha256: string): Promise<string> {
+    if (!this.backend) throw "no backend";
+    return this.backend.fetchImage(url, sha256);
   }
 
   // --- ACN ---
 
   private putCommitment(c: Commitment) {
+    if (c.conversation !== this.active) return;
     this.commitments = { ...this.commitments, [c.id]: c };
   }
 
@@ -172,6 +217,7 @@ export class AppStore {
 
   /** A REQUEST we just sent: its card, and its place in the conversation. */
   private putRequest(c: Commitment) {
+    if (c.conversation !== this.active) return;
     this.putCommitment(c);
     this.messages = upsertSorted(this.messages, {
       id: c.id,

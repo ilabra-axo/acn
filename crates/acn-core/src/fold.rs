@@ -440,8 +440,6 @@ impl<'a, 'e> Ctx<'a, 'e> {
             }
             return None;
         }
-        let price = root.price.amount;
-        let mint = root.payment.as_ref().map(|p| p.mint.clone());
 
         // V-28: a terms version's `template_ref` re-instantiates to exactly its conditions and
         // disqualifiers. Provenance only: a mismatch flags the act, the terms still apply.
@@ -558,7 +556,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
             let mut cands: Vec<Candidate<'_, 'e>> = Vec::new();
             let mut awaiting: Vec<&Parsed<'e>> = Vec::new();
             for k in kids {
-                match self.step(&run, &current_terms, &st, k, price, mint.as_deref()) {
+                match self.step(&run, &current_terms, &st, k) {
                     Ok((next, flags)) => {
                         if needs_endorsement(&run, &current_terms, k)
                             && !endorsed(&run, &current_terms, k)
@@ -660,10 +658,15 @@ impl<'a, 'e> Ctx<'a, 'e> {
             }
         }
 
-        // Binding of the performer (V-8 flag at commitment level).
-        commitment.performer_binding =
-            self.bindings
-                .status(&run.performer, K_REPORT, price, mint.as_deref(), st.head_at);
+        // Binding of the performer (V-8 flag at commitment level), for the terms in force.
+        let in_force = run.terms.get(&st.terms).unwrap_or(&root);
+        commitment.performer_binding = self.bindings.status(
+            &run.performer,
+            K_REPORT,
+            in_force.price.amount,
+            in_force.payment.as_ref().map(|p| p.mint.as_str()),
+            st.head_at,
+        );
         if let (Some(first), BindingStatus::Unbound) =
             (first_performer_act, &commitment.performer_binding)
         {
@@ -1243,20 +1246,22 @@ impl<'a, 'e> Ctx<'a, 'e> {
         })
     }
 
-    /// Condition statuses against the REPORT at `st` (for verifier-trigger legality). Uses the
-    /// same evidence rules as the fold's own pass; anomalies are reported there, not here.
+    /// Condition statuses against the REPORT at `st` (for verifier-trigger legality), on the
+    /// evidence signed at or before `until`. Uses the same evidence rules as the fold's own pass;
+    /// anomalies are reported there, not here.
     fn conditions_at(
         &self,
         run: &Run,
         terms: &Terms,
         st: &State,
+        until: u64,
     ) -> BTreeMap<String, ConditionStatus> {
-        self.verdicts_at(run, terms, st).0
+        self.verdicts_at(run, terms, st, until).0
     }
 
-    /// Disqualifiers with a counted `hit` against the REPORT at `st`.
-    fn hits_at(&self, run: &Run, terms: &Terms, st: &State) -> BTreeSet<String> {
-        self.verdicts_at(run, terms, st)
+    /// Disqualifiers with a counted `hit` against the REPORT at `st`, signed at or before `until`.
+    fn hits_at(&self, run: &Run, terms: &Terms, st: &State, until: u64) -> BTreeSet<String> {
+        self.verdicts_at(run, terms, st, until)
             .1
             .into_iter()
             .filter(|(_, s)| *s == DisqualifierStatus::Hit)
@@ -1269,6 +1274,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
         run: &Run,
         terms: &Terms,
         st: &State,
+        until: u64,
     ) -> (
         BTreeMap<String, ConditionStatus>,
         BTreeMap<String, DisqualifierStatus>,
@@ -1279,11 +1285,13 @@ impl<'a, 'e> Ctx<'a, 'e> {
         let snaps = BTreeMap::from([(report.clone(), st.clone())]);
         let mut scratch = Acc::default();
         let mut evidence = BTreeMap::new();
+        // An act is judged on the evidence up to it (INV-3: no clock, so `created_at` order). A
+        // later attestation stays on the record but can't change whether the act was valid.
         for p in self.members.iter().filter(|p| {
             matches!(
                 p.kind(),
                 K_ATTEST_MECH | K_ATTEST_GROUND | K_ATTEST_JUDGED | K_INTERP_REPORT
-            )
+            ) && p.at() <= until
         }) {
             self.attestation(&mut scratch, run, &snaps, p, &mut evidence);
         }
@@ -1315,6 +1323,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
         terms: &Terms,
         st: &State,
         k: &Parsed,
+        until: u64,
         flags: &mut Flags,
     ) -> bool {
         let named: Vec<&str> = k.content["gaps"]
@@ -1327,7 +1336,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
         if named.is_empty() && terms.disqualifiers.is_empty() {
             return false;
         }
-        let hits = self.hits_at(run, terms, st);
+        let hits = self.hits_at(run, terms, st, until);
         for d in named.into_iter().filter(|d| !hits.contains(*d)) {
             flags.push((
                 Code::UnsupportedDisqualification,
@@ -1338,15 +1347,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
     }
 
     /// V-15, V-5, V-6, V-9, V-10, V-8 for one candidate act at the current head.
-    fn step(
-        &self,
-        run: &Run,
-        terms: &Terms,
-        st: &State,
-        k: &Parsed,
-        price: u64,
-        mint: Option<&str>,
-    ) -> Step {
+    fn step(&self, run: &Run, terms: &Terms, st: &State, k: &Parsed) -> Step {
         let kind = k.kind();
         let by = k.ev.pubkey.as_str();
         let n = run.profile == Profile::N;
@@ -1358,6 +1359,17 @@ impl<'a, 'e> Ctx<'a, 'e> {
         next.head = k.id().to_string();
         next.head_at = k.at();
         let mut flags = Vec::new();
+        // V-8: the terms this act commits its signer to. The terms in force, except that a
+        // COUNTER offers its own terms and an ACCEPT takes on the pending ones.
+        let mut committed: &Terms = terms;
+        // Evidence that counts for this act's legality: what was signed up to it, and nothing
+        // after the act that settled the REPORT (V-20, V-25). From Settled the only legal act is the
+        // one judgement, so the head there is still the settling act.
+        let cutoff = if st.phase == Phase::Settled {
+            st.head_at
+        } else {
+            k.at()
+        };
 
         if k.at() < st.head_at {
             return Err((Code::TimeRegress, "created_at precedes prev".into()));
@@ -1400,6 +1412,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
                     ));
                 }
                 run.terms[&h].settlement_combo()?;
+                committed = &run.terms[&h];
                 // A performer's counter binds it once accepted, so it commits its seed here.
                 let seed_hash = if is_perf && run.terms[&h].has_instances() {
                     Some(seed_commitment(k)?)
@@ -1436,6 +1449,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
                     ));
                 }
                 if let Some(t) = run.terms.get(&pending.terms) {
+                    committed = t;
                     require_closed(t)?;
                     self.require_escrow(t)?;
                     // The performer binds by this ACCEPT, or bound in the counter it accepts.
@@ -1581,7 +1595,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 }
                 if kind == K_REJECT {
                     self.check_gaps(terms, k)?;
-                    self.reject_disqualifiers(run, terms, st, k, &mut flags);
+                    self.reject_disqualifiers(run, terms, st, k, cutoff, &mut flags);
                 }
                 next.judged = true;
             }
@@ -1601,10 +1615,10 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 // a requester can't pre-empt the settlement of work that passes.
                 self.check_gaps(terms, k)?;
                 let failing = self
-                    .conditions_at(run, terms, st)
+                    .conditions_at(run, terms, st, cutoff)
                     .values()
                     .any(|s| *s == ConditionStatus::Fail);
-                let hit = !self.hits_at(run, terms, st).is_empty();
+                let hit = !self.hits_at(run, terms, st, cutoff).is_empty();
                 if !failing && !hit {
                     return Err((
                         Code::IllegalTransition,
@@ -1614,7 +1628,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 if late_review(terms, st, k) {
                     flags.push((Code::Late, "REJECT after the review window".into()));
                 }
-                let breach = self.reject_disqualifiers(run, terms, st, k, &mut flags);
+                let breach = self.reject_disqualifiers(run, terms, st, k, cutoff, &mut flags);
                 if n && !breach && st.rework_count < terms.rework_limit {
                     next.rework_count += 1;
                     next.phase = Reworking;
@@ -1646,7 +1660,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
                     ));
                 }
                 let all_pass = self
-                    .conditions_at(run, terms, st)
+                    .conditions_at(run, terms, st, cutoff)
                     .values()
                     .all(|s| *s == ConditionStatus::Pass);
                 if !all_pass {
@@ -1693,14 +1707,14 @@ impl<'a, 'e> Ctx<'a, 'e> {
                 if let Err((_, why)) = check_preimage(terms, k) {
                     return Err((Code::BadRelease, why));
                 }
-                let statuses = self.conditions_at(run, terms, st);
+                let statuses = self.conditions_at(run, terms, st, cutoff);
                 if let Some((c, s)) = statuses.iter().find(|(_, s)| **s != ConditionStatus::Pass) {
                     return Err((
                         Code::BadRelease,
                         format!("condition `{c}` has not passed ({s:?})"),
                     ));
                 }
-                if let Some(d) = self.hits_at(run, terms, st).into_iter().next() {
+                if let Some(d) = self.hits_at(run, terms, st, cutoff).into_iter().next() {
                     return Err((
                         Code::BadRelease,
                         format!("disqualifier `{d}` was attested as hit"),
@@ -1733,7 +1747,7 @@ impl<'a, 'e> Ctx<'a, 'e> {
                     flags.push((Code::Late, "REJECT after the review window".into()));
                 }
                 // With a disqualifier hit, a REJECT fails the commitment: breach, no rework.
-                let breach = self.reject_disqualifiers(run, terms, st, k, &mut flags);
+                let breach = self.reject_disqualifiers(run, terms, st, k, cutoff, &mut flags);
                 if n && !breach && st.rework_count < terms.rework_limit {
                     next.rework_count += 1;
                     next.phase = Reworking;
@@ -1781,9 +1795,19 @@ impl<'a, 'e> Ctx<'a, 'e> {
             _ => return illegal(),
         }
 
-        // V-8 for performer-signed acts.
+        // V-8 for performer-signed acts, against the terms the act commits to. A refusal
+        // (`DECLINE`, `REVOKE`) commits to no value, so a performer can always refuse: only the
+        // binding being in force and covering the kind is checked (no value, no mint).
         if is_perf {
-            match self.bindings.status(by, kind, price, mint, k.at()) {
+            let (sat, mint) = if matches!(kind, K_DECLINE | K_REVOKE) {
+                (0, None)
+            } else {
+                (
+                    committed.price.amount,
+                    committed.payment.as_ref().map(|p| p.mint.as_str()),
+                )
+            };
+            match self.bindings.status(by, kind, sat, mint, k.at()) {
                 BindingStatus::OutOfScope { reason } => return Err((Code::OutOfScope, reason)),
                 BindingStatus::Revoked { binding } => {
                     return Err((Code::Revoked, format!("binding {binding} revoked")))

@@ -263,15 +263,14 @@ pub fn invoke(req: &str) -> Result<Value, String> {
             let c: String = arg(&r, "commitment")?;
             let me: String = arg(&r, "me")?;
             let out = acn_core::fold(&events, &BTreeMap::new());
-            let terms = out
-                .commitments
-                .get(&c)
-                .and_then(|c| c.terms.clone())
-                .ok_or("unknown commitment")?;
+            let cm = out.commitments.get(&c).ok_or("unknown commitment")?;
+            let terms = cm.terms.clone().ok_or("unknown commitment")?;
             let check = acn_wallet::settlement::request_token(&events, &c)
                 .ok_or_else(|| "no token in the request".to_string())
                 .and_then(|t| m.verify(&t).map_err(|e| e.to_string()))
-                .and_then(|v| acn_wallet::settlement::check_payment(&terms, &v, &me));
+                .and_then(|v| {
+                    acn_wallet::settlement::check_payment_from(&terms, &v, &me, &cm.requester)
+                });
             ser(&match check {
                 Ok(()) => PaymentCheck::Ok,
                 Err(reason) => PaymentCheck::Invalid { reason },

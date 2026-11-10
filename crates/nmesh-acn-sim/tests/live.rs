@@ -30,6 +30,7 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
     let url = relay.url().await.to_string();
     let dir = temp_dir("live");
     let cast = start(Config {
+        withhold_claim: false,
         blossom: nmesh_acn_sim::BlossomSetup::Host {
             listen: "127.0.0.1:0".parse()?,
             dir: None,
@@ -187,15 +188,15 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
         // match their hashes.
         if let (Some(r), true) = (&view.report, s.actor == Actor::Performer) {
             let servers = cast.blossom_servers();
-            let http = reqwest::Client::new();
+            let policy = nmesh_blossom::FetchPolicy::trusting(&servers);
             let d = r
                 .derivation
                 .as_deref()
                 .unwrap_or_else(|| panic!("{}: REPORT without a derivation record", s.id));
-            nmesh_blossom::fetch_from(&http, &servers, d).await?;
+            nmesh_blossom::fetch_from(&servers, d, &policy).await?;
             assert!(!r.artifacts.is_empty(), "{}: no artifacts", s.id);
             for h in &r.artifacts {
-                if let Err(e) = nmesh_blossom::fetch_from(&http, &servers, h).await {
+                if let Err(e) = nmesh_blossom::fetch_from(&servers, h, &policy).await {
                     panic!("{}: artifact {h}: {e}; artifacts {:?}", s.id, r.artifacts);
                 }
             }
@@ -392,6 +393,7 @@ async fn judged_scenarios_with_real_judges() -> anyhow::Result<()> {
     let url = relay.url().await.to_string();
     let dir = temp_dir("judges");
     let cast = start(Config {
+        withhold_claim: false,
         blossom: nmesh_acn_sim::BlossomSetup::Host {
             listen: "127.0.0.1:0".parse()?,
             dir: None,
@@ -539,6 +541,7 @@ async fn drafted_terms_by_reference_and_requester_counters() -> anyhow::Result<(
     let url = relay.url().await.to_string();
     let dir = temp_dir("p2");
     let cast = start(Config {
+        withhold_claim: false,
         blossom: nmesh_acn_sim::BlossomSetup::Host {
             listen: "127.0.0.1:0".parse()?,
             dir: None,
@@ -630,5 +633,102 @@ async fn drafted_terms_by_reference_and_requester_counters() -> anyhow::Result<(
     app.shutdown().await;
     cast.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// A10: under `contingent`, a performer that redeems the FUND token but withholds `CLAIM` gains
+/// nothing: the mint reveals `k` to the requester, whose app recovers it and opens the delivery.
+#[tokio::test]
+async fn withheld_claim_key_is_recovered_from_the_mint() -> anyhow::Result<()> {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let relay = LocalRelay::new(RelayBuilder::default().rate_limit(RateLimit {
+        max_reqs: 500,
+        notes_per_minute: 6_000,
+    }));
+    relay.run().await?;
+    let url = relay.url().await.to_string();
+    let dir = temp_dir("withheld-claim");
+    let cast = start(Config {
+        withhold_claim: true,
+        blossom: nmesh_acn_sim::BlossomSetup::None,
+        relays: vec![url.clone()],
+        data: dir.join("cast"),
+        pace: 0.05,
+        mint: MintSetup::Host {
+            listen: "127.0.0.1:0".parse()?,
+            db: None,
+        },
+        judges: None,
+    })
+    .await?;
+    let mut cfg = AppConfig::new(vec![url], dir.join("app"));
+    cfg.mint = Some(cast.mint_url().to_string());
+    let (app, _events) = App::start(cfg).await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    app.top_up(100).await?;
+    let pk = cast.public_key(Actor::Performer).to_hex();
+    app.add_contact(&pk).await?;
+    app.accept_agent(&pk).await?;
+
+    let c = app.request(&pk, "/contingent the demo").await?;
+    let id = c.id.clone();
+    let sealed = |v: &nmesh_app::CommitmentView| {
+        v.report
+            .as_ref()
+            .is_none_or(|r| r.payload["title"] == "🔒 Encrypted delivery")
+    };
+    let mut opened = false;
+    for _ in 0..400 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let hint = app.hint(&pk, &id).await?.expect("hint");
+        if !matches!(hint.action, HintAction::Wait | HintAction::Done) {
+            app.run_hint(&pk, &id).await?;
+            continue;
+        }
+        app.recover_delivery_keys().await;
+        let view = app
+            .commitments(&pk)
+            .await?
+            .into_iter()
+            .find(|v| v.id == id)
+            .unwrap();
+        if view.phase == Some(Phase::Funded) && !sealed(&view) {
+            opened = true;
+            break;
+        }
+    }
+    let view = app
+        .commitments(&pk)
+        .await?
+        .into_iter()
+        .find(|v| v.id == id)
+        .unwrap();
+    assert!(
+        opened,
+        "delivery not opened without CLAIM; phase {:?}, acts {:?}",
+        view.phase,
+        view.timeline.iter().map(|e| e.act).collect::<Vec<_>>()
+    );
+    assert!(
+        !view.timeline.iter().any(|e| e.act == "CLAIM"),
+        "the cast was told to withhold CLAIM"
+    );
+    // The recovered key is persisted: after a restart the delivery opens from history alone,
+    // before the background recovery's first run (20 s).
+    drop(app);
+    let mut cfg = AppConfig::new(vec![relay.url().await.to_string()], dir.join("app"));
+    cfg.mint = Some(cast.mint_url().to_string());
+    let (app, _events) = App::start(cfg).await?;
+    let mut reopened = false;
+    for _ in 0..100 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if let Some(v) = app.commitments(&pk).await?.into_iter().find(|v| v.id == id) {
+            if !sealed(&v) {
+                reopened = true;
+                break;
+            }
+        }
+    }
+    assert!(reopened, "recovered key lost on restart");
     Ok(())
 }

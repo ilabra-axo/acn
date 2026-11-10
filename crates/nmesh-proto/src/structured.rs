@@ -71,11 +71,13 @@ impl ContractRef {
     }
 }
 
-fn alt_from_tags(tags: &Tags) -> String {
+/// The required NIP-31 `alt` tag: a missing or empty one is malformed, not an empty fallback.
+fn alt_from_tags(tags: &Tags) -> Result<String, ProtoError> {
     tags.find(TagKind::Alt)
         .and_then(|t| t.content())
-        .unwrap_or_default()
-        .to_string()
+        .filter(|a| !a.trim().is_empty())
+        .map(str::to_string)
+        .ok_or(ProtoError::MissingTag("alt"))
 }
 
 fn first_e_tag(tags: &Tags) -> Option<EventId> {
@@ -132,7 +134,7 @@ impl StructuredMessage {
         Ok(Self {
             contract: ContractRef::from_tags(tags)?,
             payload: serde_json::from_str(content)?,
-            alt: alt_from_tags(tags),
+            alt: alt_from_tags(tags)?,
             reply_to: first_e_tag(tags),
         })
     }
@@ -168,7 +170,7 @@ impl Action {
             target: first_e_tag(tags).ok_or(ProtoError::MissingTag("e"))?,
             contract: ContractRef::from_tags(tags)?,
             payload: serde_json::from_str(content)?,
-            alt: alt_from_tags(tags),
+            alt: alt_from_tags(tags)?,
         })
     }
 }
@@ -191,6 +193,45 @@ mod tests {
         let parsed =
             StructuredMessage::from_parts(event.kind, &event.tags, &event.content).unwrap();
         assert_eq!(parsed, msg);
+    }
+
+    #[test]
+    fn alt_is_required() {
+        let keys = Keys::generate();
+        let msg = StructuredMessage::new(
+            ContractRef::new("nmesh.card/v1"),
+            json!({"title": "Hello"}),
+            "Hello",
+        );
+        let event = msg.to_builder().sign_with_keys(&keys).unwrap();
+        for tags in [
+            Tags::from_list(
+                event
+                    .tags
+                    .iter()
+                    .filter(|t| t.kind() != TagKind::Alt)
+                    .cloned()
+                    .collect(),
+            ),
+            Tags::from_list(
+                event
+                    .tags
+                    .iter()
+                    .map(|t| {
+                        if t.kind() == TagKind::Alt {
+                            Tag::alt(" ")
+                        } else {
+                            t.clone()
+                        }
+                    })
+                    .collect(),
+            ),
+        ] {
+            assert!(matches!(
+                StructuredMessage::from_parts(event.kind, &tags, &event.content),
+                Err(ProtoError::MissingTag("alt"))
+            ));
+        }
     }
 
     #[test]

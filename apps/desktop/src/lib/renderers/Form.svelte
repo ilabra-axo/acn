@@ -39,7 +39,7 @@
       out[f.name] = f.type === "number" ? Number(v) : v;
     }
     submitted = true;
-    await host.submit(payload.submit_action, out, payload.submit_label);
+    if (!(await host.submit(payload.submit_action, out, payload.submit_label))) submitted = false;
   }
 </script>
 
