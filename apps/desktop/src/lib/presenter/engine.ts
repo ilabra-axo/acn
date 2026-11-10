@@ -226,6 +226,47 @@ export class AcnWorld {
     return e.id;
   }
 
+  /** The requester drafter (acn-author) over the cast's published templates. */
+  draft(intent: any): any {
+    const templates = this.extra
+      .filter((e) => e.kind === 7727)
+      .map((e) => ({ event: e.id, content: JSON.parse(e.content) }));
+    return acn("draft_request", { intent, templates, config: {} });
+  }
+
+  /** Requester: send terms we drafted (free, or priced at the simulated mint). */
+  requestTerms(performer: string, profile: string, terms: any): string {
+    let s: string | undefined;
+    let hashlock: string | null = null;
+    const price = terms?.price?.amount ?? 0;
+    if (price > 0 && terms.payment) {
+      s = randomHex32();
+      hashlock = acn<string>("sha256", { bytes: s });
+      terms = { ...terms, payment: { ...terms.payment, hashlock, locktime: terms.deadline + terms.review_window + 24 * 3600 } };
+    }
+    const draft = acn<Draft>("request_terms", { performer, profile, terms });
+    const content = JSON.parse(draft.content);
+    if (s && price > 0) {
+      const r = acn<any>("mint_lock", {
+        mint: this.mint, owner: this.me, amount: price, hashlock, receiver: performer,
+        locktime: terms.payment.locktime, now: this.now(),
+      });
+      this.mint = r.mint;
+      content.token = r.token;
+      draft.content = JSON.stringify(content);
+    }
+    const e = this.sign(this.mySecret, draft, this.now());
+    if (s) this.preimages[e.id] = s;
+    this.keys[e.id] = randomHex32();
+    if (content.token) {
+      this.tokens[e.id] = content.token;
+      this.mint = acn<any>("mint_tag", { mint: this.mint, token: content.token, commitment: e.id }).mint;
+      this.onWallet();
+    }
+    this.add(e);
+    return e.id;
+  }
+
   /** Requester act through the act schemas (acn-sim's requester_draft). */
   act(commitment: string, action: HintAction) {
     const { draft, not_before } = acn<{ draft: Draft; not_before: number }>("requester_draft", {

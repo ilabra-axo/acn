@@ -72,7 +72,18 @@ pub enum Advice {
 
 /// What `me` should do with the payment of `commitment` at `now`.
 pub fn advise(events: &[Event], commitment: &str, me: &str, now: u64) -> Option<Advice> {
-    let out = fold(events, &BTreeMap::new());
+    advise_with(events, &BTreeMap::new(), commitment, me, now)
+}
+
+/// [`advise`] with terms documents referenced rather than inlined.
+pub fn advise_with(
+    events: &[Event],
+    documents: &BTreeMap<String, Value>,
+    commitment: &str,
+    me: &str,
+    now: u64,
+) -> Option<Advice> {
+    let out = fold(events, documents);
     let c = out.commitments.get(commitment)?;
     let st = c.state.as_ref()?;
     let terms = c.terms.as_ref()?;

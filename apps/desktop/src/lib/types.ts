@@ -132,6 +132,21 @@ export interface Evidence {
   verdict: string;
   counted: boolean;
   why: string | null;
+  /** What the attestation says (protocol content; rationales travel by hash). */
+  detail: AttestationDetail;
+}
+
+export interface AttestationDetail {
+  created_at: number;
+  method: string | null;
+  recipe: string | null;
+  referent: any;
+  judges: { model_id: string; model_version: string; runs: number[]; median: number | null }[];
+  aggregate_score: number | null;
+  rubric_text_hash: string | null;
+  injection_detected: boolean;
+  instances: number[];
+  rationale: string | null;
 }
 
 /** Derived by the validator (spec §7); weakest first: opinion < human < check < grounded. */
@@ -286,6 +301,8 @@ export interface ReportView {
   contract: string | null;
   note: string | null;
   artifacts: string[];
+  /** Hash of the derivation record (Core §9), if the performer stored one. */
+  derivation: string | null;
   version: number;
 }
 
@@ -294,6 +311,8 @@ export interface Allowed {
   reject: boolean;
   withdraw: boolean;
   accept_counter: boolean;
+  /** Propose other terms with a COUNTER (profile N, while negotiating). */
+  counter: boolean;
   dispute: boolean;
   /** Contingent: pay against the reported hashlock (CR-002). */
   fund: boolean;
@@ -328,6 +347,8 @@ export interface Commitment {
   versions: TermsVersionView[];
   terms_card: TermsCard | null;
   pending_card: TermsCard | null;
+  /** The terms under negotiation as a document: what a counter-offer edits. */
+  negotiable_terms: any | null;
   terms_diff: DiffLine[];
   counter: CounterView | null;
   settlement: SettlementView | null;
@@ -361,7 +382,24 @@ export type HintAction =
   | { type: "accept_counter" } | { type: "satisfy" } | { type: "withdraw" } | { type: "wait" } | { type: "done" } | { type: "fund" }
   | { type: "reject"; condition: string; note: string }
   | { type: "dispute"; reason: string }
-  | { type: "advance_clock"; secs: number };
+  | { type: "advance_clock"; secs: number }
+  | { type: "counter"; terms: any; reason: string };
+
+/** The requester drafter's input and output (acn-author, CR-003 §3). */
+export interface Intent {
+  goal: string;
+  requirements: string[];
+  price_sat: number;
+  deadline: number;
+  review_window: number;
+}
+
+export interface RequestDraft {
+  terms: any;
+  template: string | null;
+  notes: string[];
+  findings: LintFinding[];
+}
 
 export interface Hint {
   commitment: string;

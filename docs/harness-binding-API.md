@@ -13,7 +13,7 @@ A binding implements up to eight interfaces. Signer and Inbox are always require
 | Signer | always | Key custody and signing of acts. Enforces binding scope locally. Routes every act draft through the Gate if one is present. Keeps the party's per-commitment secrets (below). |
 | Inbox | always | Relay subscriptions for commitments involving the agent; feeds events to the shared validator; emits state changes and anomalies. |
 | Executor | performers | Maps a commitment to work (MCP tool call, harness task) and returns results. |
-| Evidence | performers | Stores artifacts by hash (Blossom), builds derivation records, replicates. Under `contingent`, seals the deliverable under the key `k` (NIP-44 v2, Core.md §8.2). |
+| Evidence | performers | Stores artifacts by hash (Blossom), builds derivation records, replicates. Fetches blobs by hash (`fetch(hash, hints)`: the hints first, e.g. a `terms` tag's server URL, then its own servers), which is how a binding reads terms sent by reference. Under `contingent`, seals the deliverable under the key `k` (NIP-44 v2, Core.md §8.2). |
 | Wallet | when value moves | Cashu operations: lock, verify, swap, redeem, refund, and reading a revealed preimage from a spent token (NUT-07). |
 | Gate | optional | Pre-signing policy hook: allow, deny, escalate to a human, or allow with endorsement. Emits `K_ENDORSE`. |
 | Verifier | optional | Consumes a `REPORT` and terms; emits attestations, with diagnostics by reference. As a settlement verifier, also acknowledges escrow and releases payment. |
@@ -100,6 +100,7 @@ Passing a level's suite is the only claim a binding may make about its level. **
 - **discovery:** `K_SVC` declares `binding_level` L0, the profiles, the mints with their capabilities (hashlock for T1), the Blossom servers (also as a BUD-03 kind 10063 list) and the tool; an operator binding is in force;
 - **T0:** a free call (if the price is 0) gets a `REPORT` whose derivation record and every `x` artifact fetch from those servers and match their hashes, and `SATISFY` closes it; a priced binding declines a free call instead;
 - **T1** (when offered): a paid call with a hash-locked token gets a `REPORT` with the same evidence checks, and after `SATISFY` the binding redeems the token; a token locked to another hash is declined;
+- **terms by reference:** the same call with its terms on Blossom (only the hash and a server hint in the `terms` tag, Core §7) is fetched, hash-checked and served like an inline one (cases `t0-terms-by-reference`, `t1-terms-by-reference`);
 - **declines:** an `open` condition, profile N, held-out instances, an unknown tool and an expired deadline are each declined, for that reason;
 - **clean acts:** no act the binding signs carries any anomaly from the reference validator.
 

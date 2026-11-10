@@ -3,6 +3,7 @@
   import { store } from "../store.svelte";
   import Structured from "../renderers/Structured.svelte";
   import TermsCard from "./TermsCard.svelte";
+  import TermsEditor from "./TermsEditor.svelte";
 
   let { commitment: c, host }: { commitment: Commitment; host: RendererHost } = $props();
 
@@ -31,7 +32,20 @@
     return { trust: false, text: `Paid by ${c.mine ? "your" : "the requester's"} FUND against a sealed offer; the claim reveals the key.` };
   });
 
-  let mode = $state<"idle" | "reject" | "dispute">("idle");
+  let mode = $state<"idle" | "reject" | "dispute" | "counter">("idle");
+  // Attestation details (P2): which evidence row is open.
+  let openEvidence = $state<string | null>(null);
+  const blossom = $derived(store.contacts.find((x) => x.pubkey === c.performer)?.acn?.blossom ?? []);
+  function blob(hash: string) {
+    if (blossom.length) store.backend?.openUrl(`${blossom[0]}/${hash}`);
+  }
+  async function sendCounter(terms: any, reason: string) {
+    busy = true;
+    const ok = await store.counter(c.id, terms, reason, c.conversation);
+    busy = false;
+    if (ok) mode = "idle";
+    return ok;
+  }
   let note = $state("");
   let condition = $state<string | null>(null);
   let busy = $state(false);
@@ -128,6 +142,37 @@
   }
 </script>
 
+{#snippet evidence(ev: Commitment["conditions"][number]["evidence"][number])}
+  {@const d = ev.detail}
+  <button class="ev" class:not-counted={!ev.counted} onclick={() => (openEvidence = openEvidence === ev.id ? null : ev.id)} title="Show what the attestation says">
+    <span class="who">{ROLE[ev.role]}</span>
+    <span class="mono">{ev.act.toLowerCase()}</span>
+    <span>“{ev.verdict}”</span>
+    {#if ev.counted}<span class="counted">counted</span>{:else}<span class="nc" title={ev.why ?? ""}>not counted · {ev.why}</span>{/if}
+    <span class="more">{openEvidence === ev.id ? "▴" : "▾"}</span>
+  </button>
+  {#if openEvidence === ev.id}
+    <div class="att">
+      <div><span class="k">signed</span> {date(d.created_at)} by <span class="mono">{ev.by.slice(0, 12)}…</span> · event <span class="mono">{ev.id.slice(0, 12)}…</span></div>
+      {#if d.method}<div><span class="k">method</span> {d.method}</div>{/if}
+      {#if d.recipe}<div><span class="k">recipe</span> <span class="mono">{d.recipe}</span></div>{/if}
+      {#if d.referent}<div><span class="k">referent</span> <span class="mono">{JSON.stringify(d.referent)}</span></div>{/if}
+      {#if d.judges.length}
+        <table class="judges">
+          <thead><tr><th>judge</th><th>runs</th><th>median</th></tr></thead>
+          <tbody>
+            {#each d.judges as j}<tr><td>{j.model_id} <span class="muted">{j.model_version}</span></td><td class="mono">{j.runs.join(", ")}</td><td class="mono">{j.median ?? "—"}</td></tr>{/each}
+          </tbody>
+        </table>
+        <div><span class="k">aggregate</span> {d.aggregate_score ?? "—"}{#if d.injection_detected} · <span class="bad">injection detected</span>{/if}</div>
+        {#if d.rubric_text_hash}<div><span class="k">rubric</span> <span class="mono">{d.rubric_text_hash.slice(0, 16)}…</span> (the terms' rubric_hash; rationales are published by hash only)</div>{/if}
+      {/if}
+      {#if d.instances.length}<div><span class="k">held-out cases</span> {d.instances.join(", ")}, each proved against the pool root (V-27)</div>{/if}
+      {#if d.rationale}<div><span class="k">rationale</span> {d.rationale}</div>{/if}
+    </div>
+  {/if}
+{/snippet}
+
 <div class="commitment" data-tone={tone} class:focused={store.focus === c.id}>
   <header>
     <span class="seal" aria-hidden="true">⚖</span>
@@ -221,6 +266,15 @@
     </div>
   {/if}
 
+  {#if c.report && (c.report.artifacts.length || c.report.derivation)}
+    <div class="prov" title="Evidence on Blossom, addressed by sha256 (Core §9): anyone can fetch it and check the hash">
+      <span class="k">evidence</span>
+      {#each c.report.artifacts as h}<button class="blob mono" onclick={() => blob(h)} disabled={!blossom.length} title={blossom.length ? `Open on ${blossom[0]}` : h}>artifact {h.slice(0, 10)}…</button>{/each}
+      {#if c.report.derivation}<button class="blob mono" onclick={() => blob(c.report!.derivation!)} disabled={!blossom.length} title="What the performer says it used and did (W3C PROV-style)">derivation {c.report.derivation.slice(0, 10)}…</button>{/if}
+      {#if !blossom.length}<span class="muted">(no Blossom server advertised)</span>{/if}
+    </div>
+  {/if}
+
   {#if c.conditions.length && c.report}
     <div class="panel conditions">
       <div class="ph">Conditions of satisfaction</div>
@@ -236,12 +290,7 @@
           <span class="desc muted">{cond.description}</span>
         </div>
         {#each cond.evidence as ev}
-          <div class="ev" class:not-counted={!ev.counted}>
-            <span class="who">{ROLE[ev.role]}</span>
-            <span class="mono">{ev.act.toLowerCase()}</span>
-            <span>“{ev.verdict}”</span>
-            {#if ev.counted}<span class="counted">counted</span>{:else}<span class="nc" title={ev.why ?? ""}>not counted · {ev.why}</span>{/if}
-          </div>
+          {@render evidence(ev)}
         {/each}
       {/each}
     </div>
@@ -261,12 +310,7 @@
           <span class="desc muted">{d.description}</span>
         </div>
         {#each d.evidence as ev}
-          <div class="ev" class:not-counted={!ev.counted}>
-            <span class="who">{ROLE[ev.role]}</span>
-            <span class="mono">{ev.act.toLowerCase()}</span>
-            <span>“{ev.verdict}”</span>
-            {#if ev.counted}<span class="counted">counted</span>{:else}<span class="nc" title={ev.why ?? ""}>not counted · {ev.why}</span>{/if}
-          </div>
+          {@render evidence(ev)}
         {/each}
       {/each}
       {#if c.disqualifiers.some((d) => d.status === "hit")}
@@ -331,6 +375,9 @@
       <button class="btn" type="submit" disabled={busy}>Dispute</button>
       <button class="btn" type="button" onclick={() => (mode = "idle")} disabled={busy}>Cancel</button>
     </form>
+  {:else if mode === "counter" && c.negotiable_terms}
+    <TermsEditor terms={c.negotiable_terms} submitLabel="Send counter-offer" reasonLabel="Why (shown to the other side)"
+      lockedPrice={!!c.settlement} onsubmit={sendCounter} oncancel={() => (mode = "idle")} />
   {:else if Object.values(c.allowed).some(Boolean)}
     <div class="actions">
       {#if c.assurance && (c.allowed.accept_counter || c.allowed.satisfy)}
@@ -338,6 +385,7 @@
       {/if}
       {#if c.allowed.fund}<button class="btn primary" onclick={() => act("fund")} disabled={busy} title="Lock the price to the reported hashlock; the performer's claim reveals the key">Fund {c.price_sat} sat</button>{/if}
       {#if c.allowed.accept_counter}<button class="btn primary" onclick={() => act("accept_counter")} disabled={busy}>Accept counter-offer</button>{/if}
+      {#if c.allowed.counter && c.mine && c.negotiable_terms}<button class="btn" onclick={() => (mode = "counter")} disabled={busy} title="Propose other terms: a COUNTER the other side can accept">Counter…</button>{/if}
       {#if c.allowed.satisfy}
         <button class="btn primary" onclick={() => act("satisfy")} disabled={busy}
           title={c.phase === "settled" ? "Already paid; this records your judgement on the outcome (it moves no money)" : undefined}>
@@ -373,6 +421,18 @@
 </div>
 
 <style>
+  button.ev { all: unset; display: flex; gap: 6px; align-items: baseline; cursor: pointer; font-size: 12px; padding-left: 20px; }
+  button.ev:hover .more { color: var(--accent); }
+  .more { color: var(--faint); font-size: 10px; }
+  .att { margin: 2px 0 6px 20px; padding: 6px 8px; border-radius: 8px; background: var(--sunken); font-size: 11.5px; display: flex; flex-direction: column; gap: 3px; }
+  .att .k, .prov .k { color: var(--faint); text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; margin-right: 4px; }
+  .judges { border-collapse: collapse; font-size: 11.5px; }
+  .judges th { text-align: left; color: var(--faint); font-weight: 600; padding-right: 12px; }
+  .judges td { padding-right: 12px; }
+  .att .bad { color: var(--danger); }
+  .prov { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; font-size: 11.5px; }
+  .blob { background: var(--sunken); border: 0; border-radius: 6px; padding: 1px 6px; font-size: 11px; color: var(--accent); cursor: pointer; }
+  .blob:disabled { color: var(--muted); cursor: default; }
   .commitment {
     --tone: var(--accent);
     display: flex;

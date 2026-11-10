@@ -38,7 +38,9 @@ Phases 0 and 0.5 plus the ACN track so far (see [docs/ROADMAP.md](docs/ROADMAP.m
   (deterministic fold, V-1…V-11 and V-13…V-28, order-independence property test, WASM build) drives everything.
   The agent bridge acts as `acn-mcp-shim`: it publishes `K_SVC` and an operator binding, and
   answers T0 `REQUEST`s with signed `REPORT`s. The desktop app shows each commitment as a live
-  card, where you choose Accept (SATISFY) or Reject.
+  card, where you choose Accept (SATISFY) or Reject, counter with your own terms, or draft a
+  request's terms (drafter and linter) before sending it. Terms over 16 KiB travel by reference
+  on Blossom; evidence rows open to what each attester signed.
 - **ACN demo**: 16 scenarios (judged conditions, settlement triggers, disqualifiers, held-out
   tests and more) in live mode with a Cashu test mint, or in presenter mode in the browser
   ([docs/DEMO.md](docs/DEMO.md)); real LLM judges via `acn-judge` (`nmesh-acn-sim --judges`)
@@ -91,7 +93,7 @@ Browser preview without Tauri or a relay (presenter mode: stand-in chat, real AC
 | `crates/nmesh-blossom` | Dev Blossom server (`nmesh blossom`) and client for artifacts and derivation records |
 | `crates/nmesh-wallet` | Cashu wallet (CDK): HTLC lock, DLEQ/NUT-07 verify, redeem, refund |
 | `crates/nmesh-mint` | `nmesh-mint` binary: local Cashu test mint (CDK, fake Lightning, test sats) |
-| `crates/nmesh-acn-sim` | `nmesh-acn-sim` binary: the demo cast as live Nostr peers; hosts the test mint |
+| `crates/nmesh-acn-sim` | `nmesh-acn-sim` binary: the demo cast as live Nostr peers; hosts the test mint and a Blossom server for evidence |
 | `crates/acn-core` | ACN grammar + validator: acts, terms, JCS, fold, anomalies, `status_at`. No I/O, no C deps |
 | `crates/nmesh-app` | UI-facing layer: contacts, history, consent, view models (used by the desktop app; the FFI later) |
 | `crates/nmesh-agent-bridge` | `nmesh-agent` (MCP servers → Nostr agent, and `acn-mcp-shim` at L0) and the `nmesh-echo-mcp` demo server |

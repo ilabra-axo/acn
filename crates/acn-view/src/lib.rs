@@ -77,6 +77,72 @@ pub struct Evidence {
     /// Counted toward the condition (right class, listed verifier).
     pub counted: bool,
     pub why: Option<String>,
+    /// What the attestation says, for the details panel (protocol content only: rationales
+    /// travel by hash, D-19).
+    pub detail: AttestationDetail,
+}
+
+/// The parts of an attestation a reader checks: how it was produced and on what.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct AttestationDetail {
+    pub created_at: u64,
+    pub method: Option<String>,
+    pub recipe: Option<String>,
+    /// Grounding: the external referent.
+    pub referent: Option<Value>,
+    /// Judged: every judge's runs and median, the aggregate and the rubric.
+    pub judges: Vec<JudgeScore>,
+    pub aggregate_score: Option<f64>,
+    pub rubric_text_hash: Option<String>,
+    pub injection_detected: bool,
+    /// Held-out instances revealed with proofs (V-27): the sampled indices.
+    pub instances: Vec<u64>,
+    /// Interpretive verdicts carry a rationale inline.
+    pub rationale: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JudgeScore {
+    pub model_id: String,
+    pub model_version: String,
+    pub runs: Vec<f64>,
+    pub median: Option<f64>,
+}
+
+fn attestation_detail(e: &Event, v: &Value) -> AttestationDetail {
+    let st = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_owned);
+    AttestationDetail {
+        created_at: e.created_at,
+        method: st("method"),
+        recipe: st("recipe"),
+        referent: v.get("referent").cloned(),
+        judges: v["judges"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|j| JudgeScore {
+                model_id: j["model_id"].as_str().unwrap_or_default().to_string(),
+                model_version: j["model_version"].as_str().unwrap_or_default().to_string(),
+                runs: j["runs"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_f64)
+                    .collect(),
+                median: j["median"].as_f64(),
+            })
+            .collect(),
+        aggregate_score: v["aggregate_score"].as_f64(),
+        rubric_text_hash: st("rubric_text_hash"),
+        injection_detected: v["injection_detected"] == true,
+        instances: v["instances"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|x| x["index"].as_u64())
+            .collect(),
+        rationale: st("rationale"),
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -161,6 +227,8 @@ pub struct Allowed {
     pub reject: bool,
     pub withdraw: bool,
     pub accept_counter: bool,
+    /// Propose other terms with a `COUNTER` (profile N, while negotiating).
+    pub counter: bool,
     pub dispute: bool,
     /// Contingent: pay against the REPORT's hashlock (CR-002).
     pub fund: bool,
@@ -186,6 +254,8 @@ pub struct ReportView {
     pub contract: Option<String>,
     pub note: Option<String>,
     pub artifacts: Vec<String>,
+    /// The derivation record's hash (Core §9), when the performer stored one.
+    pub derivation: Option<String>,
     /// 1 for the first report, 2 after one rework, ...
     pub version: u32,
 }
@@ -254,6 +324,9 @@ pub struct Projection {
     pub terms_card: Option<TermsCard>,
     /// The card for a counter awaiting ACCEPT.
     pub pending_card: Option<TermsCard>,
+    /// The terms under negotiation as a document (the pending counter's, else those in force):
+    /// what a counter-offer edits.
+    pub negotiable_terms: Option<Value>,
     /// The pending counter against the version in force; otherwise the version in force against
     /// the one before it.
     pub terms_diff: Vec<DiffLine>,
@@ -283,13 +356,23 @@ pub struct Projection {
 /// Project every commitment in `events` from `me`'s point of view at time `now`.
 /// `events` may include public binding events (they feed V-8) and terms templates (V-28).
 pub fn project(events: &[Event], me: &str, now: u64) -> Vec<Projection> {
-    let out = fold(events, &BTreeMap::new());
+    project_with(events, &BTreeMap::new(), me, now)
+}
+
+/// [`project`] with terms documents the events reference rather than inline (Core §7).
+pub fn project_with(
+    events: &[Event],
+    documents: &BTreeMap<String, Value>,
+    me: &str,
+    now: u64,
+) -> Vec<Projection> {
+    let out = fold(events, documents);
     let by_id: BTreeMap<&str, &Event> = events.iter().map(|e| (e.id.as_str(), e)).collect();
     let records = template_records(&out);
     let mut list: Vec<Projection> = out
         .commitments
         .values()
-        .map(|c| one(c, &out, &by_id, &records, me, now))
+        .map(|c| one(c, &out, &by_id, &records, documents, me, now))
         .collect();
     list.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
     list
@@ -478,6 +561,7 @@ fn one(
     out: &Output,
     by_id: &BTreeMap<&str, &Event>,
     records: &BTreeMap<String, TemplateRecord>,
+    documents: &BTreeMap<String, Value>,
     me: &str,
     now: u64,
 ) -> Projection {
@@ -602,6 +686,10 @@ fn one(
                     .filter(|t| t.first().map(String::as_str) == Some("x"))
                     .filter_map(|t| t.get(1).cloned())
                     .collect(),
+                derivation: v
+                    .get("derivation")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
                 version: c.chain_kinds.iter().filter(|k| **k == K_REPORT).count() as u32,
             }
         });
@@ -634,6 +722,7 @@ fn one(
                     act: name(e.kind),
                     by: e.pubkey.clone(),
                     role: role(&e.pubkey, c),
+                    detail: attestation_detail(e, &v),
                     verdict,
                     // A below-threshold judged attestation still counts, as a fail.
                     counted: notes.iter().all(|n| n.code == "below_threshold")
@@ -677,7 +766,13 @@ fn one(
         let Some(hash) = tag(e, "terms") else {
             continue;
         };
-        if let Ok(t) = acn_core::Terms::parse(&content(e)["terms"]) {
+        // Inline, or by reference (a supplied document, Core §7).
+        let doc = content(e)
+            .get("terms")
+            .filter(|t| !t.is_null())
+            .cloned()
+            .or_else(|| documents.get(hash).cloned());
+        if let Some(Ok(t)) = doc.map(|d| acn_core::Terms::parse(&d)) {
             docs.insert(hash.to_string(), t);
         }
         versions.push(TermsVersionView {
@@ -702,6 +797,11 @@ fn one(
     };
     let terms_card = in_force.and_then(|v| Some(card_for(docs.get(&v.hash).or(terms)?, v)));
     let pending_card = pending_v.and_then(|v| Some(card_for(docs.get(&v.hash)?, v)));
+    let negotiable_terms = pending_v
+        .and_then(|v| docs.get(&v.hash))
+        .or(in_force.and_then(|v| docs.get(&v.hash)))
+        .or(terms)
+        .and_then(|t| serde_json::to_value(t).ok());
     let terms_diff = match (pending_v, in_force) {
         (Some(p), Some(f)) => docs
             .get(&f.hash)
@@ -863,6 +963,9 @@ fn one(
                 Some(Phase::Requested | Phase::Countered | Phase::Promised)
             ),
         accept_counter: is_party && counter.as_ref().is_some_and(|k| !k.mine),
+        counter: is_party
+            && c.profile == Profile::N
+            && matches!(phase, Some(Phase::Requested | Phase::Countered)),
         dispute: is_party
             && c.profile == Profile::N
             && terms.is_some_and(|t| t.arbiter.is_some())
@@ -964,6 +1067,7 @@ fn one(
         versions,
         terms_card,
         pending_card,
+        negotiable_terms,
         terms_diff,
         counter,
         settlement,

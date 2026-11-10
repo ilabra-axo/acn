@@ -8,6 +8,7 @@ use acn_core::Phase;
 use acn_sim::{Actor, HintAction, SCENARIOS};
 use nmesh_acn_sim::{start, Config, MintSetup};
 use nmesh_app::{App, AppConfig};
+use nmesh_core::Timestamp;
 use nostr_relay_builder::prelude::{LocalRelay, RateLimit, RelayBuilder};
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
@@ -29,6 +30,10 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
     let url = relay.url().await.to_string();
     let dir = temp_dir("live");
     let cast = start(Config {
+        blossom: nmesh_acn_sim::BlossomSetup::Host {
+            listen: "127.0.0.1:0".parse()?,
+            dir: None,
+        },
         relays: vec![url.clone()],
         data: dir.join("cast"),
         pace: 0.05,
@@ -177,6 +182,23 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
             assert_eq!(lock.amount, price);
             assert_eq!(lock.state, acn_wallet::LockState::Redeemed, "{}", s.id);
             assert!(atlas >= price, "{}: Atlas has {atlas}", s.id);
+        }
+        // P2: Atlas's evidence is on Blossom: the artifacts and the derivation record fetch and
+        // match their hashes.
+        if let (Some(r), true) = (&view.report, s.actor == Actor::Performer) {
+            let servers = cast.blossom_servers();
+            let http = reqwest::Client::new();
+            let d = r
+                .derivation
+                .as_deref()
+                .unwrap_or_else(|| panic!("{}: REPORT without a derivation record", s.id));
+            nmesh_blossom::fetch_from(&http, &servers, d).await?;
+            assert!(!r.artifacts.is_empty(), "{}: no artifacts", s.id);
+            for h in &r.artifacts {
+                if let Err(e) = nmesh_blossom::fetch_from(&http, &servers, h).await {
+                    panic!("{}: artifact {h}: {e}; artifacts {:?}", s.id, r.artifacts);
+                }
+            }
         }
         let codes: Vec<_> = view.anomalies.iter().map(|a| a.code).collect();
         match s.id {
@@ -370,6 +392,10 @@ async fn judged_scenarios_with_real_judges() -> anyhow::Result<()> {
     let url = relay.url().await.to_string();
     let dir = temp_dir("judges");
     let cast = start(Config {
+        blossom: nmesh_acn_sim::BlossomSetup::Host {
+            listen: "127.0.0.1:0".parse()?,
+            dir: None,
+        },
         relays: vec![url.clone()],
         data: dir.join("cast"),
         pace: 0.05,
@@ -456,6 +482,151 @@ async fn judged_scenarios_with_real_judges() -> anyhow::Result<()> {
             );
         }
     }
+    app.shutdown().await;
+    cast.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
+}
+
+/// Wait until commitment `c` reaches `want` (or panic with its timeline).
+async fn until(app: &App, pk: &str, c: &str, want: Phase) -> nmesh_app::CommitmentView {
+    for _ in 0..200 {
+        let v = app
+            .commitments(pk)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|v| v.id == c);
+        if let Some(v) = v {
+            if v.phase == Some(want) {
+                return v;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let v = app
+        .commitments(pk)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|v| v.id == c)
+        .unwrap();
+    panic!(
+        "stuck in {:?}, wanted {want:?}: anomalies {:?}; {:#?}",
+        v.phase,
+        v.anomalies
+            .iter()
+            .map(|a| (a.act, a.code, &a.detail))
+            .collect::<Vec<_>>(),
+        v.timeline
+            .iter()
+            .map(|e| (e.act, e.status, &e.summary))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// P2 live: terms drafted by the requester, too large to inline, go to Blossom by reference;
+/// Atlas fetches them, its drafter closes the open condition, and the requester accepts. Then
+/// a requester counter-offer on /negotiate, which Atlas accepts.
+#[tokio::test]
+async fn drafted_terms_by_reference_and_requester_counters() -> anyhow::Result<()> {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let relay = LocalRelay::new(RelayBuilder::default().rate_limit(RateLimit {
+        max_reqs: 500,
+        notes_per_minute: 6_000,
+    }));
+    relay.run().await?;
+    let url = relay.url().await.to_string();
+    let dir = temp_dir("p2");
+    let cast = start(Config {
+        blossom: nmesh_acn_sim::BlossomSetup::Host {
+            listen: "127.0.0.1:0".parse()?,
+            dir: None,
+        },
+        relays: vec![url.clone()],
+        data: dir.join("cast"),
+        pace: 0.05,
+        mint: MintSetup::Host {
+            listen: "127.0.0.1:0".parse()?,
+            db: None,
+        },
+        judges: None,
+    })
+    .await?;
+    let mut cfg = AppConfig::new(vec![url], dir.join("app"));
+    cfg.blossom = cast.blossom_servers();
+    let (app, _events) = App::start(cfg).await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let atlas = cast.public_key(Actor::Performer).to_hex();
+    app.add_contact(&atlas).await?;
+    app.accept_agent(&atlas).await?;
+    let verity = cast.public_key(Actor::Verifier).to_hex();
+
+    // Drafted: a closed requirement and one the drafter can't close ("don't make it slower").
+    let draft = app
+        .draft_request(
+            &acn_author::Intent {
+                goal: "Retry with backoff in the relay client".into(),
+                requirements: vec!["Don't make it slower".into()],
+                price_sat: 0,
+                deadline: Timestamp::now().as_secs() + 900,
+                review_window: 3600,
+            },
+            &acn_author::RequesterConfig {
+                slots: Default::default(),
+                verifiers: vec![acn_core::terms::Verifier {
+                    pubkey: verity.clone(),
+                    classes: vec![acn_core::terms::ConditionClass::Mechanical],
+                }],
+            },
+        )
+        .await;
+    let mut terms = draft.terms.clone();
+    assert_eq!(terms["conditions"][0]["class"], "open", "{:?}", draft.notes);
+    // Atlas answers by tool; and pad the brief past the 16 KiB inline limit.
+    terms["deliverable"]["tool"] = serde_json::json!("quick");
+    terms["deliverable"]["input"] = serde_json::json!({"brief": "x".repeat(20_000)});
+    let c = app.request_terms(&atlas, "N", terms).await?;
+    let v = until(&app, &atlas, &c.id, Phase::Countered).await;
+    let card = v
+        .pending_card
+        .as_ref()
+        .expect("Atlas's counter, from the fetched terms");
+    assert!(
+        card.unclosed.is_none(),
+        "the counter closes the open condition"
+    );
+    assert!(
+        card.done_means
+            .iter()
+            .any(|d| d.description.contains("p95 latency")),
+        "{:?}",
+        card.done_means
+    );
+    assert_eq!(card.disqualified_if.len(), 2);
+    app.accept_counter(&atlas, &c.id).await?;
+    let v = until(&app, &atlas, &c.id, Phase::Reported).await;
+    assert!(
+        v.anomalies
+            .iter()
+            .all(|a| a.code == "unbound" || a.severity != acn_core::Severity::Reject),
+        "{:?}",
+        v.anomalies
+    );
+    app.satisfy(&atlas, &c.id).await?;
+    until(&app, &atlas, &c.id, Phase::Satisfied).await;
+
+    // Requester counter: Atlas counters /negotiate, we counter back with two revisions.
+    let c = app.request(&atlas, "/negotiate a logo").await?;
+    let v = until(&app, &atlas, &c.id, Phase::Countered).await;
+    assert!(v.allowed.counter);
+    let mut t = v.negotiable_terms.clone().unwrap();
+    t["rework_limit"] = serde_json::json!(2);
+    app.counter(&atlas, &c.id, t, "Two revision rounds, please")
+        .await?;
+    let v = until(&app, &atlas, &c.id, Phase::Promised).await;
+    assert_eq!(v.terms_card.as_ref().unwrap().pay_if.rework_limit, 2);
+
     app.shutdown().await;
     cast.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);

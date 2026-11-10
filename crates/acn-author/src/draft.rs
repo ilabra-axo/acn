@@ -92,12 +92,54 @@ const STOP: &[&str] = &[
     "your", "their", "there", "these", "those", "only", "also", "more", "less", "over", "under",
 ];
 
-/// Content words (≥ 4 letters, stemmed crudely by trimming a plural `s`).
+/// Words that name the same checkable concept (so "don't make it slower" meets "p95 latency").
+const CONCEPTS: &[(&str, &[&str])] = &[
+    (
+        "perf",
+        &[
+            "slow",
+            "slower",
+            "fast",
+            "faster",
+            "speed",
+            "latency",
+            "performance",
+            "benchmark",
+            "p95",
+            "p99",
+            "throughput",
+        ],
+    ),
+    ("test", &["test", "tests", "suite", "passes", "pass"]),
+    (
+        "cite",
+        &[
+            "cite",
+            "cited",
+            "citation",
+            "citations",
+            "source",
+            "sources",
+        ],
+    ),
+    (
+        "size",
+        &["words", "word", "length", "long", "short", "pages"],
+    ),
+];
+
+/// Content words (≥ 4 letters or a concept word, stemmed crudely by trimming a plural `s`),
+/// with concept synonyms folded together.
 fn content_words(s: &str) -> Vec<String> {
     s.to_lowercase()
         .split(|c: char| !(c.is_alphanumeric() || c == '\''))
-        .filter(|w| w.len() >= 4 && !STOP.contains(w))
-        .map(|w| w.strip_suffix('s').unwrap_or(w).to_string())
+        .filter(|w| !w.is_empty() && !STOP.contains(w))
+        .filter_map(|w| {
+            if let Some((c, _)) = CONCEPTS.iter().find(|(_, ws)| ws.contains(&w)) {
+                return Some(format!("#{c}"));
+            }
+            (w.len() >= 4).then(|| w.strip_suffix('s').unwrap_or(w).to_string())
+        })
         .collect()
 }
 
@@ -389,19 +431,16 @@ fn fit<'a>(terms: &Terms, c: &'a TemplateCandidate, caps: &Capabilities) -> Opti
                 .extra
                 .get("suggested_class")
                 .and_then(|v| serde_json::from_value::<ConditionClass>(v.clone()).ok());
-            // Same id counts only with a compatible suggestion, or shared words without one.
-            let by_id = conditions.iter().position(|x| {
-                x.id == rc.id
-                    && match suggested {
-                        Some(s) => s == x.class,
-                        None => overlap(&rc.description, &x.description) >= 1,
-                    }
-            });
-            let by_words = conditions.iter().position(|x| {
-                overlap(&rc.description, &x.description) >= 2
-                    && suggested.is_none_or(|s| s == x.class)
-            });
-            let i = by_id.or(by_words)?;
+            // The closer shares the most concepts with the open condition (at least one), has
+            // the suggested class if there is one, and wins ties by having the same id.
+            let i = conditions
+                .iter()
+                .enumerate()
+                .filter(|(_, x)| suggested.is_none_or(|s| s == x.class))
+                .map(|(i, x)| (overlap(&rc.description, &x.description), x.id == rc.id, i))
+                .filter(|(n, _, _)| *n >= 1)
+                .max_by_key(|(n, same, _)| (*n, *same))
+                .map(|(_, _, i)| i)?;
             closes.insert(rc.id.clone(), i);
         } else if !conditions.contains(rc) {
             exact = false;

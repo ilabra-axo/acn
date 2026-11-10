@@ -76,11 +76,12 @@ pub fn project(
     me: &str,
     events: &BTreeMap<String, acn_core::Event>,
     extra: &[acn_core::Event],
+    documents: &BTreeMap<String, Value>,
     ctx: &RenderContext<'_>,
     now: u64,
 ) -> Vec<CommitmentView> {
     let list: Vec<acn_core::Event> = events.values().chain(extra).cloned().collect();
-    acn_view::project(&list, me, now)
+    acn_view::project_with(&list, documents, me, now)
         .into_iter()
         .map(|p| CommitmentView {
             conversation: conversation.to_string(),

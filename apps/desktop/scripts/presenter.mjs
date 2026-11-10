@@ -170,6 +170,49 @@ await page.locator(".commitment").last().locator("text=/judged opinion · held-o
 await shot("p18-held-out-attested");
 console.log("ok   held-out: tests and judged review cases attested with proofs");
 
+// P2: attestation details. Open the verified run's evidence and read what the verifier signed.
+await openAgent("Atlas");
+await page.locator(".director .scn", { hasText: TITLES.verified }).click();
+const vcard = page.locator(".commitment").last();
+await vcard.locator("button.ev").first().waitFor({ timeout: 20000 });
+await vcard.locator("button.ev").first().click();
+await vcard.locator(".att >> text=signed").first().waitFor({ timeout: 5000 });
+await vcard.locator(".att >> text=method").first().waitFor({ timeout: 5000 });
+await shot("p19-attestation-details");
+console.log("ok   attestation details");
+
+// P2: the requester counters Atlas's counter (two revisions); Atlas accepts it.
+await page.locator(".director .auto input").uncheck().catch(() => {});
+await page.locator(".director .scn", { hasText: TITLES.negotiate }).click();
+const ncard = page.locator(".commitment").last();
+await ncard.getByRole("button", { name: "Counter…" }).click({ timeout: 20000 });
+await ncard.locator(".editor label", { hasText: "Revisions" }).locator("input").fill("2");
+await ncard.locator(".editor input[placeholder^='Why']").fill("Two revision rounds, please");
+await shot("p20-counter-editor");
+await ncard.getByRole("button", { name: "Send counter-offer" }).click();
+// Atlas answers the requester's counter with ACCEPT (it may report soon after, so read the chain).
+await ncard.locator(".chain .act", { hasText: /^accept$/ }).waitFor({ timeout: 20000 });
+console.log("ok   requester counter accepted by Atlas");
+
+// P2: draft terms with the requester drafter; Atlas's drafter closes the open condition.
+await page.locator(".draft-btn").click();
+await page.locator(".draft input[placeholder^='e.g.']").fill("Retry with backoff in the relay client");
+await page.locator(".draft textarea").fill("Don't make it slower");
+await page.locator(".draft select").selectOption("quick");
+await page.locator(".draft").getByRole("button", { name: "Draft", exact: true }).click();
+await page.locator(".draft .editor select").first().waitFor({ timeout: 5000 });
+await shot("p21-drafted-terms");
+await page.locator(".draft").getByRole("button", { name: "Send request" }).click();
+const dcard = page.locator(".commitment").last();
+await dcard.getByRole("button", { name: "Accept counter-offer" }).waitFor({ timeout: 20000 });
+await dcard.locator(".terms-card >> text=p95 latency").first().waitFor({ timeout: 5000 });
+await shot("p22-drafted-countered");
+await dcard.getByRole("button", { name: "Accept counter-offer" }).click();
+await dcard.getByRole("button", { name: /Accept result|Satisfy/ }).waitFor({ timeout: 30000 });
+await dcard.getByRole("button", { name: /Accept result|Satisfy/ }).click();
+await dcard.locator(".status", { hasText: "Satisfied" }).waitFor({ timeout: 10000 });
+console.log("ok   drafted request: Atlas closes it from its template, satisfied");
+
 await browser.close();
 if (errors.length) {
   console.error("page errors:\n" + errors.join("\n"));

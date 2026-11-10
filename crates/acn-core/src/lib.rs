@@ -28,6 +28,7 @@ mod binding;
 mod fold;
 mod status;
 
+pub use act::INLINE_LIMIT;
 pub use anomaly::{Anomaly, Code, Severity};
 pub use binding::{binding_status, BindingStatus};
 pub use event::Event;

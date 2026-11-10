@@ -1,4 +1,4 @@
-import type { AppEvent, BoardView, BuildInfo, CastWallet, Clock, Commitment, Contact, Hint, Identity, Message, UpdateStatus, Wallet } from "./types";
+import type { AppEvent, BoardView, BuildInfo, CastWallet, Clock, Commitment, Contact, Hint, Identity, Intent, LintFinding, Message, RequestDraft, UpdateStatus, Wallet } from "./types";
 
 export interface Backend {
   /** `tauri`: the real app. `presenter`: in-browser demo (mock chat + real ACN via WASM). */
@@ -25,6 +25,14 @@ export interface Backend {
   acnReject(pubkey: string, commitment: string, condition: string | null, note: string): Promise<Commitment>;
   acnWithdraw(pubkey: string, commitment: string): Promise<Commitment>;
   acnAcceptCounter(pubkey: string, commitment: string): Promise<Commitment>;
+  /** Propose other terms (profile N): a COUNTER carrying `terms`. */
+  acnCounter(pubkey: string, commitment: string, terms: any, reason: string): Promise<Commitment>;
+  /** Request with terms we drafted (requester drafter + edits) rather than the agent's offer. */
+  acnRequestTerms(pubkey: string, profile: string, terms: any): Promise<Commitment>;
+  /** The requester drafter over the published templates of the agents we know. */
+  acnDraft(intent: Intent): Promise<RequestDraft>;
+  /** The terms linter (L1–L8); `binding`: about to accept. Throws if the terms don't parse. */
+  acnLint(terms: any, binding: boolean): Promise<LintFinding[]>;
   acnDispute(pubkey: string, commitment: string, reason: string): Promise<Commitment>;
   /** Contingent settlement: fund an attested, encrypted delivery (CR-002). */
   acnFund(pubkey: string, commitment: string): Promise<Commitment>;
@@ -77,6 +85,10 @@ async function createTauriBackend(): Promise<Backend> {
     acnReject: (pubkey, commitment, condition, note) => invoke("acn_reject", { pubkey, commitment, condition, note }),
     acnWithdraw: (pubkey, commitment) => invoke("acn_withdraw", { pubkey, commitment }),
     acnAcceptCounter: (pubkey, commitment) => invoke("acn_accept_counter", { pubkey, commitment }),
+    acnCounter: (pubkey, commitment, terms, reason) => invoke("acn_counter", { pubkey, commitment, terms, reason }),
+    acnRequestTerms: (pubkey, profile, terms) => invoke("acn_request_terms", { pubkey, profile, terms }),
+    acnDraft: (intent) => invoke("acn_draft", { intent, config: {} }),
+    acnLint: (terms, binding) => invoke("acn_lint", { terms, binding }),
     acnDispute: (pubkey, commitment, reason) => invoke("acn_dispute", { pubkey, commitment, reason }),
     acnFund: (pubkey, commitment) => invoke("acn_fund", { pubkey, commitment }),
     acnHint: (pubkey, commitment) => invoke("acn_hint", { pubkey, commitment }),

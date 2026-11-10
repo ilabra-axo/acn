@@ -150,6 +150,59 @@ impl Draft {
             .content(json!({ "terms": terms, "reason": reason })))
     }
 
+    /// `REQUEST` with the terms by reference: the `terms` tag carries their hash and a URL hint
+    /// (Blossom, Core §5.2, §7), for terms too large to inline. Readers fetch the document and
+    /// supply it to the validator.
+    pub fn request_ref(
+        performer: &str,
+        profile: &str,
+        terms_hash: &str,
+        url: &str,
+        token: Option<&str>,
+    ) -> Self {
+        let mut content = json!({});
+        if let Some(tok) = token {
+            content["token"] = json!(tok);
+        }
+        Self::new(K_REQUEST)
+            .tag(t("p", performer))
+            .tag(t("profile", profile))
+            .tag(vec!["terms".into(), terms_hash.into(), url.into()])
+            .content(content)
+    }
+
+    /// `COUNTER` with the terms by reference (see [`Draft::request_ref`]).
+    pub fn counter_ref(
+        c: &str,
+        prev: &str,
+        parties: &[&str],
+        terms_hash: &str,
+        url: &str,
+        reason: &str,
+    ) -> Self {
+        Self::act(K_COUNTER, c, prev, parties)
+            .tag(vec!["terms".into(), terms_hash.into(), url.into()])
+            .content(json!({ "reason": reason }))
+    }
+
+    /// The same `REQUEST` or `COUNTER` with its inline terms moved out: the `terms` tag gains
+    /// `url` as its hint and the content keeps everything else. Returns the draft, the terms'
+    /// hash and the terms (to store at `url`). `None` if the draft inlines no terms.
+    pub fn with_terms_by_reference(&self, url: &str) -> Option<(Self, String, Value)> {
+        let mut content: Value = serde_json::from_str(&self.content).ok()?;
+        let terms = content
+            .as_object_mut()?
+            .remove("terms")
+            .filter(|t| !t.is_null())?;
+        let hash = jcs::hash(&terms).ok()?;
+        let mut d = self.clone();
+        d.tags
+            .retain(|t| t.first().map(String::as_str) != Some("terms"));
+        d.tags.push(vec!["terms".into(), hash.clone(), url.into()]);
+        d.content = content.to_string();
+        Some((d, hash, terms))
+    }
+
     pub fn accept(c: &str, prev: &str, parties: &[&str], terms_hash: &str) -> Self {
         Self::act(K_ACCEPT, c, prev, parties).terms_hash(terms_hash)
     }
@@ -411,4 +464,72 @@ pub fn instantiate(
 pub fn public_key(secret: &[u8; 32]) -> Result<String, DraftError> {
     let sk = SigningKey::from_bytes(secret).map_err(|_| DraftError::BadKey)?;
     Ok(hex::encode(sk.verifying_key().to_bytes()))
+}
+
+/// Terms documents that `REQUEST`s and `COUNTER`s in `events` reference without inlining:
+/// `(hash, url hint)`. A reader fetches each (from the hint, or the signer's Blossom servers),
+/// checks its hash and passes it to [`crate::fold`] as a document.
+pub fn referenced_terms(events: &[Event]) -> Vec<(String, Option<String>)> {
+    let mut out: Vec<(String, Option<String>)> = Vec::new();
+    for e in events
+        .iter()
+        .filter(|e| e.kind == K_REQUEST || e.kind == K_COUNTER)
+    {
+        let inline = serde_json::from_str::<Value>(&e.content)
+            .ok()
+            .is_some_and(|v| v.get("terms").is_some_and(|t| !t.is_null()));
+        if inline {
+            continue;
+        }
+        if let Some(tag) = e
+            .tags
+            .iter()
+            .find(|t| t.first().map(String::as_str) == Some("terms"))
+        {
+            if let Some(h) = tag.get(1) {
+                if !out.iter().any(|(x, _)| x == h) {
+                    out.push((h.clone(), tag.get(2).cloned().filter(|u| !u.is_empty())));
+                }
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod ref_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn terms_by_reference_fold_once_supplied() {
+        let perf = public_key(&[2; 32]).unwrap();
+        let terms = tool_call_terms("echo", json!({}), u64::MAX / 4, 3600, 0);
+        let h = jcs::hash(&terms).unwrap();
+        let r = Draft::request_ref(&perf, "T0", &h, "http://blossom.example", None)
+            .sign(&[1; 32], 100)
+            .unwrap();
+        assert_eq!(
+            referenced_terms(std::slice::from_ref(&r)),
+            vec![(h.clone(), Some("http://blossom.example".into()))]
+        );
+        let out = crate::fold(std::slice::from_ref(&r), &BTreeMap::new());
+        assert!(
+            out.anomalies
+                .iter()
+                .any(|a| a.code == crate::anomaly::Code::PendingTerms),
+            "{:?}",
+            out.anomalies
+        );
+        let docs = BTreeMap::from([(h, terms)]);
+        let out = crate::fold(std::slice::from_ref(&r), &docs);
+        let c = &out.commitments[&r.id];
+        assert_eq!(
+            c.state.as_ref().unwrap().phase,
+            crate::Phase::Requested,
+            "{:?}",
+            out.anomalies
+        );
+        assert!(c.terms.is_some());
+    }
 }
