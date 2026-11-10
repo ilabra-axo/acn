@@ -15,6 +15,10 @@
     <Generic payload={body.payload} />
   {:else if Renderer}
     <Renderer payload={body.payload} {host} {mine} />
+  {:else if body.renderer.tier === "generic" && !body.valid}
+    <!-- Contractless data: the escaped raw inspector, marked as unvalidated. -->
+    <Generic payload={body.payload} />
+    {#if body.error}<div class="err">{body.error}</div>{/if}
   {:else if body.renderer.tier === "alt" || !body.valid}
     <div class="alt">
       <div>{body.alt || "(no description)"}</div>

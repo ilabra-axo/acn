@@ -109,6 +109,15 @@ async fn desktop_app_talks_to_mcp_agent() -> anyhow::Result<()> {
         .collect();
     assert_eq!(cmds, ["card", "echo", "form", "status"]);
 
+    // A12: a key with no profile at all is unresolved, not "human": gated until accepted.
+    let ghost = nmesh_core::Keys::generate().public_key().to_hex();
+    let g = app.add_contact(&ghost).await?;
+    assert_eq!(g.discovery, nmesh_app::Discovery::Unresolved);
+    assert!(!g.consented);
+    assert!(app.send_text(&ghost, "hello?").await.is_err());
+    app.accept_agent(&ghost).await?;
+    app.send_text(&ghost, "hello?").await?;
+
     // Consent gate: can't message an agent before accepting its data handling.
     assert!(!contact.consented);
     assert!(app.send_text(&agent_pk, "/echo hi").await.is_err());
@@ -135,6 +144,21 @@ async fn desktop_app_talks_to_mcp_agent() -> anyhow::Result<()> {
     assert_eq!(contract, "nmesh.form/v1");
     assert!(valid);
     assert!(matches!(renderer, RendererView::Installed { id } if id == "nmesh.form"));
+
+    // A11: an action must answer a message this peer sent, in this conversation.
+    let stray = app
+        .send_action(
+            &agent_pk,
+            &"00".repeat(32),
+            Some("/card".into()),
+            None,
+            None,
+        )
+        .await;
+    assert!(
+        stray.is_err(),
+        "action on a message outside the conversation"
+    );
 
     // Form submit → action → agent routes to /card with named args.
     app.send_action(

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+pub use acn_binding::Disclosure;
 use nmesh_proto::manifest::Hosting;
 use serde::Deserialize;
 
@@ -33,10 +34,20 @@ pub struct AcnConfig {
     /// Where the agent's wallet keeps its state. Omit to keep it in memory.
     #[serde(default)]
     pub wallet_dir: Option<PathBuf>,
-    /// Blossom servers for artifacts and derivation records (Core §9). Without any the agent
-    /// reports inline results only and claims no conformance level.
+    /// Blossom servers: where terms sent by reference are looked up, and (with
+    /// `evidence = "public"`) where artifacts and derivation records go (Core §9).
     #[serde(default)]
     pub blossom: Vec<String>,
+    /// Evidence disclosure: `"private"` (default) uploads nothing, the REPORT carries the inline
+    /// result only and no conformance level is claimed; `"public"` uploads the whole tool result,
+    /// the derivation record and logs to the Blossom servers, unencrypted, after the REPORT has
+    /// passed the gate.
+    #[serde(default)]
+    pub evidence: Disclosure,
+    /// The durable execution journal (JSON). Default: next to `agent.key_file`
+    /// (`<key>.acn-journal.json`).
+    #[serde(default)]
+    pub journal: Option<PathBuf>,
     /// Suggested deadline for requests, seconds from now.
     #[serde(default = "default_deadline")]
     pub deadline_secs: u64,
@@ -59,6 +70,8 @@ impl Default for AcnConfig {
             mint_capabilities: default_capabilities(),
             wallet_dir: None,
             blossom: vec![],
+            evidence: Disclosure::default(),
+            journal: None,
             deadline_secs: default_deadline(),
             review_window_secs: default_review(),
             operator_key_file: None,
@@ -159,5 +172,13 @@ mod tests {
         assert_eq!(c.servers.len(), 2);
         assert!(matches!(c.servers[0].transport, McpTransport::Stdio { .. }));
         assert!(matches!(c.servers[1].transport, McpTransport::Http { .. }));
+        assert_eq!(c.acn.evidence, Disclosure::Public);
+    }
+
+    #[test]
+    fn evidence_is_private_by_default() {
+        let c: AcnConfig = toml::from_str("price_sat = 0").unwrap();
+        assert_eq!(c.evidence, Disclosure::Private);
+        assert_eq!(AcnConfig::default().evidence, Disclosure::Private);
     }
 }

@@ -2,9 +2,10 @@
 //! (`acn-binding`, docs/harness-binding-API.md §3).
 //!
 //! The shim is the Executor: an MCP tool call per commitment. Signing and delivery are the
-//! session's (`acn-binding-nostr`), evidence goes to Blossom, payment to the CDK wallet, and every
-//! decision comes from `acn_core::fold` over the events seen (INV-12), so it is idempotent
-//! across restarts and relay replays.
+//! session's (`acn-binding-nostr`), evidence goes to Blossom (only with `evidence = "public"`),
+//! payment to the CDK wallet, and every decision comes from `acn_core::fold` over the events seen
+//! (INV-12). Effects are not repeated across restarts and relay replays because the performer's
+//! execution journal records intent before execution (see `acn_binding::journal`).
 
 use std::sync::Arc;
 
@@ -58,7 +59,8 @@ impl Executor for McpExecutor {
                 result: Some(payload),
                 contract,
                 // The whole tool result, as the server returned it: the artifact the inline
-                // result is derived from.
+                // result is derived from. Uploaded only with `evidence = "public"`, and only
+                // after the REPORT referencing it has passed the gate (acn-binding).
                 artifacts: vec![Artifact {
                     role: "tool_result".into(),
                     media_type: "application/json".into(),
@@ -73,6 +75,17 @@ impl Executor for McpExecutor {
             })
         })
     }
+}
+
+/// The conformance level the configuration may claim in `K_SVC`: L0 needs published evidence
+/// (Blossom servers and `evidence = "public"`: the suite fetches the artifacts) and an operator
+/// binding (discovery requires one in force). Hosts also AND this with
+/// [`acn_binding::Performer::level`].
+pub fn claimed_level(cfg: &AcnConfig) -> Option<Level> {
+    (!cfg.blossom.is_empty()
+        && cfg.evidence == acn_binding::Disclosure::Public
+        && cfg.operator_key_file.is_some())
+    .then_some(Level::L0)
 }
 
 /// The terms offer for one tool (`K_SVC` `terms_template`, Core §7).
@@ -161,4 +174,36 @@ fn text_of(r: &CallToolResult) -> String {
         .filter_map(|c| c.as_text().map(|t| t.text.as_str()))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use acn_binding::Disclosure;
+
+    #[test]
+    fn l0_needs_public_evidence_and_an_operator_binding() {
+        let full = AcnConfig {
+            blossom: vec!["http://127.0.0.1:3400".into()],
+            evidence: Disclosure::Public,
+            operator_key_file: Some("operator.nsec".into()),
+            ..Default::default()
+        };
+        assert_eq!(claimed_level(&full), Some(Level::L0));
+        let private = AcnConfig {
+            evidence: Disclosure::Private,
+            ..full.clone()
+        };
+        assert_eq!(claimed_level(&private), None);
+        let unbound = AcnConfig {
+            operator_key_file: None,
+            ..full.clone()
+        };
+        assert_eq!(claimed_level(&unbound), None);
+        let no_store = AcnConfig {
+            blossom: vec![],
+            ..full
+        };
+        assert_eq!(claimed_level(&no_store), None);
+    }
 }

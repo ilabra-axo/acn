@@ -26,9 +26,10 @@
 
   // Result renderers in the drawer: buttons and forms belong to the conversation.
   const host: RendererHost = {
-    action: async () => { if (open) await store.openInChat(open.id); },
-    submit: async () => { if (open) await store.openInChat(open.id); },
+    action: async () => { if (open) await store.openInChat(open.id); return false; },
+    submit: async () => { if (open) await store.openInChat(open.id); return false; },
     openUrl: (url) => store.openUrl(url),
+    loadImage: (url, sha256) => store.loadImage(url, sha256),
   };
 </script>
 

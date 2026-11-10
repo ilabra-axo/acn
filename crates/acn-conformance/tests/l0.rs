@@ -2,12 +2,13 @@
 //! a Blossom server, all local. `acn-mcp-shim` (the agent bridge with the echo MCP server) runs
 //! priced, so T1 is exercised, and free, so T0 is.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
-use acn_conformance::{l0, Env, Target};
+use acn_conformance::{l0, Env, Executions, Target};
 use nmesh_agent_bridge::config::{
-    AcnConfig, AgentConfig, AgentSection, McpServerConfig, McpTransport,
+    AcnConfig, AgentConfig, AgentSection, Disclosure, McpServerConfig, McpTransport,
 };
 use nmesh_agent_bridge::Bridge;
 use nmesh_proto::manifest::Hosting;
@@ -81,6 +82,20 @@ async fn infra() -> anyhow::Result<Infra> {
     })
 }
 
+/// Every MCP tool call the echo server makes is a line here.
+fn call_log(dir: &Path) -> PathBuf {
+    dir.join("calls.log")
+}
+
+fn executions(dir: &Path) -> Executions {
+    let log = call_log(dir);
+    Executions(Arc::new(move || {
+        std::fs::read_to_string(&log)
+            .map(|s| s.lines().count() as u64)
+            .unwrap_or(0)
+    }))
+}
+
 async fn shim(i: &Infra, dir: &std::path::Path, price_sat: u64) -> anyhow::Result<String> {
     let bridge = Bridge::start(AgentConfig {
         agent: AgentSection {
@@ -100,7 +115,11 @@ async fn shim(i: &Infra, dir: &std::path::Path, price_sat: u64) -> anyhow::Resul
             transport: McpTransport::Stdio {
                 command: echo_mcp(),
                 args: vec![],
-                env: Default::default(),
+                env: [(
+                    "NMESH_ECHO_CALL_LOG".to_string(),
+                    call_log(dir).to_string_lossy().into_owned(),
+                )]
+                .into(),
             },
         }],
         acn: AcnConfig {
@@ -108,6 +127,8 @@ async fn shim(i: &Infra, dir: &std::path::Path, price_sat: u64) -> anyhow::Resul
             price_sat,
             mint: (price_sat > 0).then(|| i.mint.url.clone()),
             blossom: vec![i.blossom.url.clone()],
+            // L0 publishes evidence: opt in explicitly (the default is private).
+            evidence: Disclosure::Public,
             ..Default::default()
         },
     })
@@ -135,15 +156,27 @@ async fn mcp_shim_passes_l0_priced_and_free() -> anyhow::Result<()> {
                 agent,
                 tool: "echo".into(),
                 input: json!({"text": "conformance"}),
+                executions: Some(executions(&dir)),
             },
         )
         .await?;
         println!("{}", report.summary());
         assert!(report.passed(), "{name}:\n{}", report.summary());
         let names: Vec<&str> = report.cases.iter().map(|c| c.name.as_str()).collect();
+        // The execution counter was observed, not skipped.
+        assert!(
+            report
+                .cases
+                .iter()
+                .filter(|c| c.name.starts_with("decline-"))
+                .all(|c| c.detail.contains("0 execution(s)")),
+            "{}",
+            report.summary()
+        );
         if price > 0 {
             assert!(
                 names.contains(&"t1-paid-call")
+                    && names.contains(&"t1-terms-by-reference")
                     && names.contains(&"free-call-below-price-declined"),
                 "{names:?}"
             );

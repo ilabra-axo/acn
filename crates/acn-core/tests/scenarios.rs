@@ -593,7 +593,139 @@ const ALL: &[Scenario] = &[
     ("C-16c", common::templates::c16c),
     ("C-16d", common::templates::c16d),
     ("C-16e", common::templates::c16e),
+    // Binding scope against negotiated terms (V-8); RELEASE evidence cutoff (V-20, V-25).
+    ("SC-1", common::scope::sc1),
+    ("SC-2", common::scope::sc2),
+    ("SC-3", common::scope::sc3),
+    ("SC-4", common::scope::sc4),
+    ("SC-5", common::scope::sc5),
+    ("SC-6", common::scope::sc6),
+    ("SC-7", common::scope::sc7),
+    ("SC-7b", common::scope::sc7b),
+    ("S-5b", common::scope::s5b),
+    ("S-7c", common::scope::s7c),
+    ("C-6g", common::scope::c6g),
 ];
+
+// ---------- V-8 scope and RELEASE cutoff vectors ----------
+
+fn check_scope(name: &str, w: &W, out: &acn_core::Output) {
+    let e = &w.events;
+    let req = e.iter().find(|e| e.kind == K_REQUEST).expect("a REQUEST");
+    let ctx = format!("{name}: {:?}", out.anomalies);
+    let has = |i: usize, code: Code| out.has(&e[i].id, code);
+    let c = &out.commitments[&req.id];
+    let st = c.state.as_ref().unwrap();
+    let no_scope_anomaly = || {
+        !out.anomalies
+            .iter()
+            .any(|a| matches!(a.code, Code::OutOfScope | Code::Revoked))
+    };
+    match name {
+        // e: BIND, ACK, REQUEST(100), COUNTER(req, 1000), ACCEPT(perf)
+        "SC-1" => {
+            assert!(has(4, Code::OutOfScope), "{ctx}");
+            assert_eq!(st.phase, Phase::Countered, "{ctx}");
+            assert_eq!(c.chain_kinds.last(), Some(&K_COUNTER), "{ctx}");
+        }
+        // e: BIND, ACK, REQUEST(100), COUNTER(perf, 1000), ACCEPT(req)
+        "SC-2" => {
+            assert!(has(3, Code::OutOfScope), "{ctx}");
+            assert!(has(4, Code::Stale), "{ctx}");
+            assert_eq!(st.phase, Phase::Requested, "{ctx}");
+        }
+        // e: BIND A, ACK A, BIND B, ACK B, REQUEST(100), COUNTER(req, 1000), ACCEPT, REPORT
+        "SC-3" => {
+            assert!(!has(6, Code::OutOfScope), "{ctx}");
+            assert!(has(7, Code::OutOfScope), "{ctx}");
+            assert_eq!(st.phase, Phase::Promised, "{ctx}");
+            assert_eq!(st.terms, e[5].single("terms").unwrap(), "{ctx}");
+        }
+        // e: BIND (mint scope), ACK, REQUEST(scoped mint), COUNTER(req, other mint), ACCEPT
+        "SC-4" => {
+            assert!(
+                out.anomalies_for(&e[4].id)
+                    .any(|a| a.code == Code::OutOfScope && a.detail.contains("mint")),
+                "{ctx}"
+            );
+            assert_eq!(st.phase, Phase::Countered, "{ctx}");
+        }
+        // e: BIND, ACK, REQUEST(1000), COUNTER(400), ACCEPT, REPORT
+        "SC-5" | "SC-6" => {
+            assert!(no_scope_anomaly(), "{ctx}");
+            assert_eq!(st.phase, Phase::Reported, "{ctx}");
+            assert_eq!(st.terms, e[3].single("terms").unwrap(), "{ctx}");
+            assert!(
+                matches!(c.performer_binding, acn_core::BindingStatus::Bound { .. }),
+                "{ctx}"
+            );
+        }
+        // e: BIND, ACK, REQUEST(1000), DECLINE
+        "SC-7" => {
+            assert!(no_scope_anomaly(), "{ctx}");
+            assert_eq!(st.phase, Phase::Declined, "{ctx}");
+        }
+        // e: BIND A, ACK A, BIND B, ACK B, REQUEST(1000), PROMISE, REVOKE
+        "SC-7b" => {
+            assert!(no_scope_anomaly(), "{ctx}");
+            assert_eq!(st.phase, Phase::Revoked, "{ctx}");
+        }
+        // e: REQUEST, ACK, PROMISE, REPORT, ATTEST pass, RELEASE, ATTEST fail
+        "S-5b" => {
+            assert!(!has(5, Code::BadRelease), "{ctx}");
+            assert_eq!(st.phase, Phase::Settled, "{ctx}");
+            assert_eq!(c.chain_kinds.last(), Some(&K_RELEASE), "{ctx}");
+            assert!(status_at(c, 99_999).terminal, "{ctx}");
+            assert!(
+                out.anomalies.iter().all(|a| a.code == Code::Unbound),
+                "{ctx}"
+            );
+            // The later evidence stays on the record; it doesn't undo the settlement.
+            assert_eq!(c.conditions.get("tests"), Some(&ConditionStatus::Fail));
+        }
+        // e: REQUEST, ACK, PROMISE, REPORT, RELEASE, ATTEST pass (after the RELEASE)
+        "S-7c" => {
+            assert!(has(4, Code::BadRelease), "{ctx}");
+            assert_eq!(st.phase, Phase::Reported, "{ctx}");
+            assert_eq!(c.conditions.get("tests"), Some(&ConditionStatus::Pass));
+        }
+        // e: REQUEST, ESCROW_ACK, PROMISE, REPORT, c1 pass, RELEASE, d1 hit (after the RELEASE)
+        "C-6g" => {
+            assert!(!has(5, Code::BadRelease), "{ctx}");
+            assert_eq!(st.phase, Phase::Settled, "{ctx}");
+            assert!(has(6, Code::Late), "{ctx}");
+            assert!(!has(3, Code::Disqualified) && !c.disqualified(), "{ctx}");
+        }
+        other => panic!("no expectation for {other}"),
+    }
+}
+
+const SCOPE: &[Scenario] = &[
+    ("SC-1", common::scope::sc1),
+    ("SC-2", common::scope::sc2),
+    ("SC-3", common::scope::sc3),
+    ("SC-4", common::scope::sc4),
+    ("SC-5", common::scope::sc5),
+    ("SC-6", common::scope::sc6),
+    ("SC-7", common::scope::sc7),
+    ("SC-7b", common::scope::sc7b),
+    ("S-5b", common::scope::s5b),
+    ("S-7c", common::scope::s7c),
+    ("C-6g", common::scope::c6g),
+];
+
+/// Audit A05 / A15: scope follows the terms each act commits to, and RELEASE is decided on the
+/// evidence up to it, under every arrival order.
+#[test]
+fn scope_and_release_cutoff_vectors_under_every_arrival_order() {
+    for (name, build) in SCOPE {
+        let w = build();
+        for order in orders(w.events.len()) {
+            let shuffled: Vec<_> = order.iter().map(|&i| w.events[i].clone()).collect();
+            check_scope(name, &w, &acn_core::fold(&shuffled, &w.docs));
+        }
+    }
+}
 
 // ---------- CR-003 vectors (spec §10 conformance table) ----------
 

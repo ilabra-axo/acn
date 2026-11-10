@@ -25,8 +25,8 @@
       "id": "c3", "class": "judged",
       "description": "Accurate, clear for a {{reader}} reader, covers obligations and timeline",
       "judges": [
-        {"model_id": "qwen2.5", "model_version": "1.5b-instruct-q4_K_M", "prompt_template_hash": "e081952dc83f4e1a23f000ac1cdf6ac2305974ab5f94c50b0213d8cde21daa53", "harness_hash": "bdeaf34ff353a9a59cd2e16d1ab7de23f62a1875832c799421b362eb16f7ff58", "sampling": {"max_tokens": 300, "seed": 7, "temperature": 0.0}},
-        {"model_id": "llama3.2", "model_version": "1b-instruct-q8_0", "prompt_template_hash": "e081952dc83f4e1a23f000ac1cdf6ac2305974ab5f94c50b0213d8cde21daa53", "harness_hash": "bdeaf34ff353a9a59cd2e16d1ab7de23f62a1875832c799421b362eb16f7ff58", "sampling": {"max_tokens": 300, "seed": 7, "temperature": 0.0}}
+        {"model_id": "qwen2.5:1.5b", "model_version": "1.5b-instruct-q4_K_M", "prompt_template_hash": "7e91987f879f6a03b251b304dda3b3b3c63745c048479123c0bc53449d9b27c8", "harness_hash": "b3c26c16536fc5fbca384eb8180f412129c15fd8db4ebb7aa38ba6eb0da24681", "sampling": {"json_mode": true, "max_tokens": 600, "seed": 7, "temperature": 0.0}},
+        {"model_id": "llama3.2:1b", "model_version": "1b-instruct-q8_0", "prompt_template_hash": "7e91987f879f6a03b251b304dda3b3b3c63745c048479123c0bc53449d9b27c8", "harness_hash": "b3c26c16536fc5fbca384eb8180f412129c15fd8db4ebb7aa38ba6eb0da24681", "sampling": {"json_mode": true, "max_tokens": 600, "seed": 7, "temperature": 0.0}}
       ],
       "rubric_hash": "532f1c291b537866d721062ab760d021d4ca78aa61a8c5ed2b22974895438c13",
       "rubric_ref": "blossom:532f1c291b537866d721062ab760d021d4ca78aa61a8c5ed2b22974895438c13",
@@ -42,8 +42,8 @@
       "id": "d1", "class": "judged",
       "description": "A citation does not support the claim it is attached to, or the cited source does not exist",
       "judges": [
-        {"model_id": "qwen2.5", "model_version": "1.5b-instruct-q4_K_M", "prompt_template_hash": "e081952dc83f4e1a23f000ac1cdf6ac2305974ab5f94c50b0213d8cde21daa53", "harness_hash": "bdeaf34ff353a9a59cd2e16d1ab7de23f62a1875832c799421b362eb16f7ff58", "sampling": {"max_tokens": 300, "seed": 7, "temperature": 0.0}},
-        {"model_id": "llama3.2", "model_version": "1b-instruct-q8_0", "prompt_template_hash": "e081952dc83f4e1a23f000ac1cdf6ac2305974ab5f94c50b0213d8cde21daa53", "harness_hash": "bdeaf34ff353a9a59cd2e16d1ab7de23f62a1875832c799421b362eb16f7ff58", "sampling": {"max_tokens": 300, "seed": 7, "temperature": 0.0}}
+        {"model_id": "qwen2.5:1.5b", "model_version": "1.5b-instruct-q4_K_M", "prompt_template_hash": "7e91987f879f6a03b251b304dda3b3b3c63745c048479123c0bc53449d9b27c8", "harness_hash": "b3c26c16536fc5fbca384eb8180f412129c15fd8db4ebb7aa38ba6eb0da24681", "sampling": {"json_mode": true, "max_tokens": 600, "seed": 7, "temperature": 0.0}},
+        {"model_id": "llama3.2:1b", "model_version": "1b-instruct-q8_0", "prompt_template_hash": "7e91987f879f6a03b251b304dda3b3b3c63745c048479123c0bc53449d9b27c8", "harness_hash": "b3c26c16536fc5fbca384eb8180f412129c15fd8db4ebb7aa38ba6eb0da24681", "sampling": {"json_mode": true, "max_tokens": 600, "seed": 7, "temperature": 0.0}}
       ],
       "rubric_hash": "54205b8bad17c5341d2fad86a2744cf8cfd192c9da84367e39219006da07e7ec",
       "rubric_ref": "blossom:54205b8bad17c5341d2fad86a2744cf8cfd192c9da84367e39219006da07e7ec",
@@ -63,8 +63,8 @@
       "id": "d3", "class": "judged",
       "description": "Repeats rubric terms without substance to raise the score",
       "judges": [
-        {"model_id": "qwen2.5", "model_version": "1.5b-instruct-q4_K_M", "prompt_template_hash": "e081952dc83f4e1a23f000ac1cdf6ac2305974ab5f94c50b0213d8cde21daa53", "harness_hash": "bdeaf34ff353a9a59cd2e16d1ab7de23f62a1875832c799421b362eb16f7ff58", "sampling": {"max_tokens": 300, "seed": 7, "temperature": 0.0}},
-        {"model_id": "llama3.2", "model_version": "1b-instruct-q8_0", "prompt_template_hash": "e081952dc83f4e1a23f000ac1cdf6ac2305974ab5f94c50b0213d8cde21daa53", "harness_hash": "bdeaf34ff353a9a59cd2e16d1ab7de23f62a1875832c799421b362eb16f7ff58", "sampling": {"max_tokens": 300, "seed": 7, "temperature": 0.0}}
+        {"model_id": "qwen2.5:1.5b", "model_version": "1.5b-instruct-q4_K_M", "prompt_template_hash": "7e91987f879f6a03b251b304dda3b3b3c63745c048479123c0bc53449d9b27c8", "harness_hash": "b3c26c16536fc5fbca384eb8180f412129c15fd8db4ebb7aa38ba6eb0da24681", "sampling": {"json_mode": true, "max_tokens": 600, "seed": 7, "temperature": 0.0}},
+        {"model_id": "llama3.2:1b", "model_version": "1b-instruct-q8_0", "prompt_template_hash": "7e91987f879f6a03b251b304dda3b3b3c63745c048479123c0bc53449d9b27c8", "harness_hash": "b3c26c16536fc5fbca384eb8180f412129c15fd8db4ebb7aa38ba6eb0da24681", "sampling": {"json_mode": true, "max_tokens": 600, "seed": 7, "temperature": 0.0}}
       ],
       "rubric_hash": "29219e8b7fadc8d6c4e203f65dbf1f736083617082c65fe3ae39d1f5387165af",
       "rubric_ref": "blossom:29219e8b7fadc8d6c4e203f65dbf1f736083617082c65fe3ae39d1f5387165af",

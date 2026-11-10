@@ -10,7 +10,13 @@
 <div class="consent" role="dialog" aria-labelledby="consent-title">
   <Avatar pubkey={contact.pubkey} name={displayName(contact)} agent size={56} />
   <h2 id="consent-title">Talk to {displayName(contact)}?</h2>
+  {#if !contact.is_agent}
   <p class="lede">
+    <strong>No profile was found for this key</strong>, so we can't tell whether it is a person or
+    an agent. If it is an agent, it reads everything you send it, and so does whatever it uses.
+  </p>
+  {/if}
+  <p class="lede" class:hidden={!contact.is_agent}>
     This is an <strong>agent</strong>. Messages are end-to-end encrypted to it — which means
     <strong>the agent itself reads everything you send it</strong>, and so does whatever it uses.
   </p>
@@ -60,6 +66,7 @@
 </div>
 
 <style>
+  .hidden { display: none; }
   .consent {
     margin: auto;
     max-width: 460px;

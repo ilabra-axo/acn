@@ -27,9 +27,11 @@
     }
   }
 
-  /** Refund is possible only for my own lock on a commitment that closed unsatisfied. */
+  /** Refund is possible only for my own lock on a commitment that closed unsatisfied, or on one
+   *  whose request was never published (no commitment): the backend checks which. */
   function refundable(l: WalletLock) {
-    if (l.state !== "locked" || l.refund !== me || !l.commitment) return false;
+    if (l.state !== "locked" || l.refund !== me) return false;
+    if (!l.commitment) return true;
     const c = store.commitments[l.commitment];
     // Not on screen: offer it once the locktime passed; the backend checks the commitment.
     return c ? c.settlement?.status === "refundable" : nowSecs > l.locktime;
@@ -106,7 +108,7 @@
           {#if refundable(l)}
             <button class="btn" disabled={store.walletBusy || nowSecs <= l.locktime}
               title={nowSecs <= l.locktime ? (presenter ? "Fast-forward the presentation clock past the locktime" : "The mint only allows the refund after the locktime") : "Reclaim with your refund key (NUT-14)"}
-              onclick={() => store.refund(l.receiver, l.commitment!)}>
+              onclick={() => store.refund(l.receiver, l.commitment ?? l.id)}>
               {nowSecs <= l.locktime ? "Refund after locktime" : "↩ Refund"}
             </button>
           {/if}

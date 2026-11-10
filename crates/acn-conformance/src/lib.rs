@@ -10,12 +10,15 @@
 //!   an operator binding in force.
 //! - **T0** (when the price is 0): a `REPORT` whose artifacts and derivation record can be
 //!   fetched from those servers and match their hashes; `SATISFY` closes it. A priced binding
-//!   must decline a free request instead.
-//! - **T1** (when offered): a hash-locked token in the `REQUEST`; the `REPORT`; `SATISFY` with
-//!   the preimage; the binding redeems the token. A token whose lock doesn't match the terms is
-//!   declined.
+//!   must decline a free request instead. The same with the terms sent by reference.
+//! - **T1** (when offered): a hash-locked token in the `REQUEST`; the `REPORT` with the same
+//!   evidence checks; `SATISFY` with the preimage; the binding redeems the token. The same with
+//!   the terms sent by reference. A token whose lock doesn't match the terms is declined
+//!   `payment_invalid`.
 //! - **Declines:** an `open` condition, profile N, held-out instances, an unknown tool and an
-//!   expired deadline are each answered with `DECLINE`, never with work.
+//!   expired deadline are each answered with `DECLINE`, never with work (no `REPORT`).
+//! - **Executions** (when the harness exposes a counter, [`Target::executions`]): every served
+//!   request ran the executor exactly once, every declined one not at all.
 //! - **Clean acts:** no act the binding signs carries any anomaly from the reference validator.
 
 use std::collections::BTreeMap;
@@ -45,6 +48,38 @@ pub struct Target {
     pub agent: String,
     pub tool: String,
     pub input: Value,
+    /// How many times the binding's executor has run so far, if the harness can tell (e.g. a
+    /// test executor's call log). With it the suite also checks that every declined request
+    /// caused no work and every served one exactly one run.
+    pub executions: Option<Executions>,
+}
+
+/// A counter of executor runs, read by the suite (see [`Target::executions`]).
+#[derive(Clone)]
+pub struct Executions(pub Arc<dyn Fn() -> u64 + Send + Sync>);
+
+impl std::fmt::Debug for Executions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Executions({})", (self.0)())
+    }
+}
+
+impl Target {
+    fn executions(&self) -> Option<u64> {
+        self.executions.as_ref().map(|e| (e.0)())
+    }
+
+    /// `want` runs since `before` (a count taken before the request), if the count is known.
+    fn ran(&self, before: Option<u64>, want: u64) -> Result<String, String> {
+        match (before, self.executions()) {
+            (Some(b), Some(n)) if n.saturating_sub(b) == want => Ok(format!("{want} execution(s)")),
+            (Some(b), Some(n)) => Err(format!(
+                "the executor ran {} time(s), expected {want}",
+                n.saturating_sub(b)
+            )),
+            _ => Ok("execution count not observable".into()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,6 +128,8 @@ struct Requester {
     sent: Mutex<Vec<Event>>,
     /// The binding's public events (operator binding, templates): folded with every commitment.
     public: Mutex<Vec<Event>>,
+    /// Terms documents the suite sent by reference, folded with every commitment.
+    docs: Mutex<BTreeMap<String, Value>>,
 }
 
 impl Requester {
@@ -125,6 +162,7 @@ impl Requester {
             acts,
             sent: Mutex::new(Vec::new()),
             public: Mutex::new(Vec::new()),
+            docs: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -187,8 +225,21 @@ impl Requester {
         None
     }
 
+    fn docs(&self) -> BTreeMap<String, Value> {
+        self.docs.lock().unwrap().clone()
+    }
+
+    /// The binding's acts of `kind` in `c`.
+    fn agent_acts(&self, c: &str, kind: u16) -> usize {
+        let agent = self.agent.to_hex();
+        self.events(c)
+            .iter()
+            .filter(|e| e.pubkey == agent && e.kind == kind)
+            .count()
+    }
+
     fn state(&self, c: &str) -> Option<(acn_core::Commitment, acn_core::State)> {
-        let out = fold(&self.events(c), &BTreeMap::new());
+        let out = fold(&self.events(c), &self.docs());
         let cm = out.commitments.get(c)?.clone();
         let st = cm.state.clone()?;
         Some((cm, st))
@@ -210,7 +261,7 @@ impl Requester {
             .filter(|e| e.pubkey == agent && !public.contains(&e.id))
             .map(|e| e.id.as_str())
             .collect();
-        fold(&events, &BTreeMap::new())
+        fold(&events, &self.docs())
             .anomalies
             .into_iter()
             .filter(|a| mine.contains(&a.event.as_str()))
@@ -243,12 +294,13 @@ fn reason(e: &Event) -> String {
 /// The `REPORT`'s evidence: the derivation record and every `x` artifact fetch from the
 /// binding's Blossom servers and match their hashes; the record lists the artifacts.
 async fn check_evidence(report: &Event, servers: &[String]) -> Result<String, String> {
-    let http = reqwest::Client::new();
+    // The binding's own advertised servers (local ones in a test setup).
+    let policy = nmesh_blossom::FetchPolicy::trusting(servers);
     let content: Value = serde_json::from_str(&report.content).map_err(|e| e.to_string())?;
     let d = content["derivation"]
         .as_str()
         .ok_or("the REPORT carries no derivation record")?;
-    let bytes = nmesh_blossom::fetch_from(&http, servers, d)
+    let bytes = nmesh_blossom::fetch_from(servers, d, &policy)
         .await
         .map_err(|e| format!("derivation record: {e}"))?;
     let record: Value =
@@ -277,7 +329,7 @@ async fn check_evidence(report: &Event, servers: &[String]) -> Result<String, St
         if !listed.contains(h) {
             return Err(format!("artifact {h} is not in the derivation record"));
         }
-        nmesh_blossom::fetch_from(&http, servers, h)
+        nmesh_blossom::fetch_from(servers, h, &policy)
             .await
             .map_err(|e| format!("artifact: {e}"))?;
     }
@@ -409,6 +461,7 @@ pub async fn l0(env: &Env, target: &Target) -> anyhow::Result<Report> {
 
     // ---- T0 ----
     let free = base_terms(&target.tool, &target.input, 0);
+    let before = target.executions();
     let c = r.request("T0", &free, None).await?;
     if min_price == 0 {
         let res = async {
@@ -423,17 +476,20 @@ pub async fn l0(env: &Env, target: &Target) -> anyhow::Result<Report> {
                 ));
             }
             let ev = check_evidence(&rep, &blossom).await?;
+            let runs = target.ran(before, 1)?;
             let phase = r.satisfy(&c, None).await.map_err(|e| e.to_string())?;
             if phase != Phase::Satisfied {
                 return Err(format!("SATISFY left it {phase:?}"));
             }
-            Ok(format!("REPORT; {ev}; Satisfied"))
+            Ok(format!("REPORT; {ev}; {runs}; Satisfied"))
         }
         .await;
         case("t0-call", res);
     } else {
         let res = match r.answer(&c, &[K_REPORT, K_DECLINE]).await {
-            Some(e) if e.kind == K_DECLINE => Ok(format!("declined ({})", reason(&e))),
+            Some(e) if e.kind == K_DECLINE => target
+                .ran(before, 0)
+                .map(|runs| format!("declined ({}); {runs}", reason(&e))),
             Some(_) => Err(format!("did work for 0 sat below its price of {min_price}")),
             None => Err("no answer".into()),
         };
@@ -452,6 +508,8 @@ pub async fn l0(env: &Env, target: &Target) -> anyhow::Result<Report> {
                 .upload(bytes.as_bytes(), "application/json")
                 .await
                 .map_err(|e| e.to_string())?;
+            r.docs.lock().unwrap().insert(h.clone(), terms);
+            let before = target.executions();
             let d = Draft::request_ref(&target.agent, "T0", &h, server, None);
             let ev = r.send(&d, None).await.map_err(|e| e.to_string())?;
             let rep = r
@@ -464,25 +522,11 @@ pub async fn l0(env: &Env, target: &Target) -> anyhow::Result<Report> {
                     reason(&rep)
                 ));
             }
-            let events = r.events(&ev.id);
-            let docs = BTreeMap::from([(h.clone(), terms)]);
-            let out = fold(&events, &docs);
-            let mine: Vec<&str> = events
-                .iter()
-                .filter(|e| e.pubkey == target.agent && e.kind != K_BIND_ACK)
-                .map(|e| e.id.as_str())
-                .collect();
-            let bad: Vec<String> = out
-                .anomalies
-                .iter()
-                .filter(|a| mine.contains(&a.event.as_str()))
-                .map(|a| a.code.as_str().to_string())
-                .collect();
-            if !bad.is_empty() {
-                return Err(format!("anomalies on the binding's acts: {bad:?}"));
-            }
+            let evidence = check_evidence(&rep, &blossom).await?;
+            let runs = target.ran(before, 1)?;
+            clean(&r, &ev.id)?;
             Ok(format!(
-                "fetched terms {}… from the hint and REPORTed against them",
+                "fetched terms {}… from the hint and REPORTed against them; {evidence}; {runs}",
                 &h[..12]
             ))
         }
@@ -521,108 +565,29 @@ pub async fn l0(env: &Env, target: &Target) -> anyhow::Result<Report> {
                 None => anyhow::bail!("the tool has no T1 terms offer"),
             }
         };
+        let call = Paid {
+            r: &r,
+            wallet: &wallet,
+            target,
+            blossom: &blossom,
+        };
         // A paid call.
         let s = Keys::generate().secret_key().to_secret_hex();
         let h = acn_core::jcs::sha256_hex(&hex_bytes(&s));
         let res = async {
             let terms = paid(&h).map_err(|e| e.to_string())?;
-            let amount = terms["price"]["amount"].as_u64().unwrap_or(0);
-            let locktime = terms["payment"]["locktime"].as_u64().unwrap_or(0);
-            let token = wallet
-                .lock_htlc(amount, &h, &target.agent, locktime, None)
-                .await
-                .map_err(|e| e.to_string())?;
-            let ct = r
-                .session
-                .nip44_encrypt(&r.agent, &token)
-                .map_err(|e| e.to_string())?;
-            let c = r
-                .request("T1", &terms, Some(&ct))
-                .await
-                .map_err(|e| e.to_string())?;
-            let rep = r
-                .answer(&c, &[K_REPORT, K_DECLINE])
-                .await
-                .ok_or("no answer to a paid T1 request")?;
-            if rep.kind != K_REPORT {
-                return Err(format!("declined a valid paid call: {}", reason(&rep)));
-            }
-            let ev = check_evidence(&rep, &blossom).await?;
-            let phase = r.satisfy(&c, Some(&s)).await.map_err(|e| e.to_string())?;
-            if phase != Phase::Satisfied {
-                return Err(format!("SATISFY left it {phase:?}"));
-            }
-            let deadline = tokio::time::Instant::now() + WAIT;
-            loop {
-                if !wallet
-                    .inspect(&token)
-                    .await
-                    .map(|v| v.unspent)
-                    .unwrap_or(true)
-                {
-                    break;
-                }
-                if tokio::time::Instant::now() > deadline {
-                    return Err(
-                        "SATISFY revealed the preimage, but the binding didn't redeem the token"
-                            .into(),
-                    );
-                }
-                tokio::time::sleep(Duration::from_millis(200)).await;
-            }
-            clean(&r, &c)?;
-            Ok(format!(
-                "{amount} sat locked, REPORT; {ev}; Satisfied; token redeemed"
-            ))
+            call.run(terms, &s, &h, None).await
         }
         .await;
         case("t1-paid-call", res);
-        // The same, with the terms on the requester's Blossom server (Core §7).
+        // The same, with the terms on the requester's Blossom server (Core §7): the same
+        // evidence, settlement and redemption checks.
         if let Some(server) = &env.blossom {
             let s2 = Keys::generate().secret_key().to_secret_hex();
             let h2 = acn_core::jcs::sha256_hex(&hex_bytes(&s2));
             let res = async {
                 let terms = paid(&h2).map_err(|e| e.to_string())?;
-                let amount = terms["price"]["amount"].as_u64().unwrap_or(0);
-                let locktime = terms["payment"]["locktime"].as_u64().unwrap_or(0);
-                let token = wallet
-                    .lock_htlc(amount, &h2, &target.agent, locktime, None)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let ct = r
-                    .session
-                    .nip44_encrypt(&r.agent, &token)
-                    .map_err(|e| e.to_string())?;
-                let client = nmesh_blossom::BlossomClient::new(
-                    vec![server.clone()],
-                    r.session.keys().clone(),
-                );
-                let bytes = acn_core::jcs::canonical(&terms).map_err(|e| e.to_string())?;
-                let (th, _) = client
-                    .upload(bytes.as_bytes(), "application/json")
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let ev = r
-                    .send(
-                        &Draft::request_ref(&target.agent, "T1", &th, server, Some(&ct)),
-                        None,
-                    )
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let rep = r
-                    .answer(&ev.id, &[K_REPORT, K_DECLINE])
-                    .await
-                    .ok_or("no answer to a by-reference paid request")?;
-                if rep.kind != K_REPORT {
-                    return Err(format!(
-                        "declined a paid call with terms by reference: {}",
-                        reason(&rep)
-                    ));
-                }
-                Ok(format!(
-                    "fetched terms {}… from the hint, verified the token and REPORTed",
-                    &th[..12]
-                ))
+                call.run(terms, &s2, &h2, Some(server)).await
             }
             .await;
             case("t1-terms-by-reference", res);
@@ -641,6 +606,7 @@ pub async fn l0(env: &Env, target: &Target) -> anyhow::Result<Report> {
                 .session
                 .nip44_encrypt(&r.agent, &token)
                 .map_err(|e| e.to_string())?;
+            let before = target.executions();
             let c = r
                 .request("T1", &terms, Some(&ct))
                 .await
@@ -650,16 +616,21 @@ pub async fn l0(env: &Env, target: &Target) -> anyhow::Result<Report> {
                 .await
                 .ok_or("no answer")?;
             clean(&r, &c)?;
-            if ans.kind == K_DECLINE {
-                Ok(format!("declined ({})", reason(&ans)))
-            } else {
-                Err("did the work against a token locked to another hash".into())
+            if ans.kind != K_DECLINE {
+                return Err("did the work against a token locked to another hash".into());
             }
+            if reason(&ans) != "payment_invalid" {
+                return Err(format!(
+                    "declined for `{}`, expected `payment_invalid`",
+                    reason(&ans)
+                ));
+            }
+            let runs = target.ran(before, 0)?;
+            Ok(format!("declined (payment_invalid); {runs}"))
         }
         .await;
         case("t1-bad-token-declined", res);
     }
-
     // ---- what L0 must decline, each for its own reason ----
     // Otherwise valid terms: the tool's paid offer when priced (the refusal comes before the
     // token is looked at), else a free call.
@@ -715,14 +686,15 @@ pub async fn l0(env: &Env, target: &Target) -> anyhow::Result<Report> {
         }),
     ];
     for (name, profile, want, terms) in declines {
+        let before = target.executions();
         let c = r.request(profile, &terms, None).await?;
         let res = match r
             .answer(&c, &[K_REPORT, K_DECLINE, K_PROMISE, K_COUNTER])
             .await
         {
-            Some(e) if e.kind == K_DECLINE && reason(&e) == want => {
-                clean(&r, &c).map(|_| format!("declined ({want})"))
-            }
+            Some(e) if e.kind == K_DECLINE && reason(&e) == want => clean(&r, &c)
+                .and_then(|_| no_work(&r, target, &c, before))
+                .map(|runs| format!("declined ({want}); {runs}")),
             Some(e) if e.kind == K_DECLINE => {
                 Err(format!("declined for `{}`, expected `{want}`", reason(&e)))
             }
@@ -740,6 +712,114 @@ pub async fn l0(env: &Env, target: &Target) -> anyhow::Result<Report> {
         agent: target.agent.clone(),
         cases,
     })
+}
+
+/// A declined request caused no work: no REPORT, and (when observable) no executor run.
+fn no_work(r: &Requester, target: &Target, c: &str, before: Option<u64>) -> Result<String, String> {
+    if r.agent_acts(c, K_REPORT) > 0 {
+        return Err("declined, but also REPORTed".into());
+    }
+    target.ran(before, 0)
+}
+
+/// A paid T1 call, end to end: lock a token to the hashlock, request (terms inline, or on
+/// `by_ref`'s Blossom server), check the REPORT's evidence and that the work ran once, SATISFY
+/// with the preimage, wait for the binding to redeem, and check its acts are clean.
+struct Paid<'a> {
+    r: &'a Requester,
+    wallet: &'a nmesh_wallet::CashuWallet,
+    target: &'a Target,
+    blossom: &'a [String],
+}
+
+impl Paid<'_> {
+    async fn run(
+        &self,
+        terms: Value,
+        preimage: &str,
+        hashlock: &str,
+        by_ref: Option<&String>,
+    ) -> Result<String, String> {
+        let (r, target) = (self.r, self.target);
+        let amount = terms["price"]["amount"].as_u64().unwrap_or(0);
+        let locktime = terms["payment"]["locktime"].as_u64().unwrap_or(0);
+        let token = self
+            .wallet
+            .lock_htlc(amount, hashlock, &target.agent, locktime, None)
+            .await
+            .map_err(|e| e.to_string())?;
+        let ct = r
+            .session
+            .nip44_encrypt(&r.agent, &token)
+            .map_err(|e| e.to_string())?;
+        let before = target.executions();
+        let (c, how) = match by_ref {
+            None => (
+                r.request("T1", &terms, Some(&ct))
+                    .await
+                    .map_err(|e| e.to_string())?,
+                "terms inline".to_string(),
+            ),
+            Some(server) => {
+                let client = nmesh_blossom::BlossomClient::new(
+                    vec![server.clone()],
+                    r.session.keys().clone(),
+                );
+                let bytes = acn_core::jcs::canonical(&terms).map_err(|e| e.to_string())?;
+                let (th, _) = client
+                    .upload(bytes.as_bytes(), "application/json")
+                    .await
+                    .map_err(|e| e.to_string())?;
+                r.docs.lock().unwrap().insert(th.clone(), terms.clone());
+                let ev = r
+                    .send(
+                        &Draft::request_ref(&target.agent, "T1", &th, server, Some(&ct)),
+                        None,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                (ev.id, format!("terms {}… by reference", &th[..12]))
+            }
+        };
+        let rep = r
+            .answer(&c, &[K_REPORT, K_DECLINE])
+            .await
+            .ok_or("no answer to a paid T1 request")?;
+        if rep.kind != K_REPORT {
+            return Err(format!("declined a valid paid call: {}", reason(&rep)));
+        }
+        let ev = check_evidence(&rep, self.blossom).await?;
+        let runs = target.ran(before, 1)?;
+        let phase = r
+            .satisfy(&c, Some(preimage))
+            .await
+            .map_err(|e| e.to_string())?;
+        if phase != Phase::Satisfied {
+            return Err(format!("SATISFY left it {phase:?}"));
+        }
+        let deadline = tokio::time::Instant::now() + WAIT;
+        loop {
+            if !self
+                .wallet
+                .inspect(&token)
+                .await
+                .map(|v| v.unspent)
+                .unwrap_or(true)
+            {
+                break;
+            }
+            if tokio::time::Instant::now() > deadline {
+                return Err(
+                    "SATISFY revealed the preimage, but the binding didn't redeem the token".into(),
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        clean(r, &c)?;
+        Ok(format!(
+            "{amount} sat locked, {how}, REPORT; {ev}; {runs}; Satisfied; token redeemed"
+        ))
+    }
 }
 
 fn clean(r: &Requester, c: &str) -> Result<String, String> {

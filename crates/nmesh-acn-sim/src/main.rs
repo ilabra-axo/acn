@@ -60,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
         .transpose()?;
     let relays = a.relays.join(", ");
     let running = start(Config {
+        withhold_claim: false,
         relays: a.relays,
         data: a.data.clone(),
         pace: a.pace,

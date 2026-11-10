@@ -30,6 +30,11 @@ pub const AUTH_KIND: u16 = 24242;
 /// User server list (BUD-03): where an identity's blobs are.
 pub const SERVER_LIST_KIND: u16 = 10063;
 
+/// The workspace uses one TLS provider (ring); installing it twice is harmless.
+fn install_tls() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 pub fn sha256_hex(b: &[u8]) -> String {
     hex::encode(Sha256::digest(b))
 }
@@ -218,6 +223,7 @@ pub struct BlossomClient {
 
 impl BlossomClient {
     pub fn new(servers: Vec<String>, keys: Keys) -> Self {
+        install_tls();
         Self {
             servers: servers
                 .into_iter()
@@ -272,35 +278,223 @@ impl BlossomClient {
         Ok((sha, ok))
     }
 
-    /// Fetch a blob from the first server that has it, verifying its hash.
+    /// Fetch a blob from the first of this client's (configured, so trusted) servers that has
+    /// it, verifying its hash.
     pub async fn fetch(&self, sha: &str) -> anyhow::Result<Vec<u8>> {
-        fetch_from(&self.http, &self.servers, sha).await
+        fetch_from(&self.servers, sha, &FetchPolicy::trusting(&self.servers)).await
     }
 }
 
-/// Fetch `sha` from any of `servers` (no key needed), verifying its hash.
-pub async fn fetch_from(
-    http: &reqwest::Client,
-    servers: &[String],
-    sha: &str,
-) -> anyhow::Result<Vec<u8>> {
-    for s in servers {
-        let Ok(r) = http
-            .get(format!("{}/{sha}", s.trim_end_matches('/')))
-            .send()
-            .await
-        else {
-            continue;
-        };
-        if !r.status().is_success() {
-            continue;
-        }
-        let b = r.bytes().await?.to_vec();
-        if sha256_hex(&b) == sha {
-            return Ok(b);
+/// How far a fetch may reach. Server URLs can come from other parties (a `terms` tag hint, an
+/// agent's advertised servers), so by default a fetch only goes to public addresses, follows no
+/// redirects, and is bounded in time and size. Servers the user configured are listed in
+/// `trusted` and may be anywhere (e.g. a dev server on loopback).
+#[derive(Clone, Debug)]
+pub struct FetchPolicy {
+    /// Server base URLs (normalised without a trailing `/`) exempt from the address check.
+    pub trusted: Vec<String>,
+    /// Allow loopback, private, link-local and other non-public addresses for every server.
+    pub allow_private: bool,
+    /// Largest body accepted; a longer one is abandoned before it is fully read.
+    pub max_bytes: usize,
+    /// Per-server deadline for connecting and reading the whole body.
+    pub timeout: std::time::Duration,
+}
+
+impl Default for FetchPolicy {
+    fn default() -> Self {
+        Self {
+            trusted: Vec::new(),
+            allow_private: false,
+            max_bytes: MAX_BLOB,
+            timeout: std::time::Duration::from_secs(10),
         }
     }
-    anyhow::bail!("blob {sha} is not retrievable from {servers:?}")
+}
+
+impl FetchPolicy {
+    /// Trust `servers` (the caller's own configuration); everything else must be public.
+    pub fn trusting(servers: &[String]) -> Self {
+        Self {
+            trusted: servers
+                .iter()
+                .map(|s| s.trim_end_matches('/').to_string())
+                .collect(),
+            ..Self::default()
+        }
+    }
+
+    /// Any destination (tests and fully local setups).
+    pub fn local() -> Self {
+        Self {
+            allow_private: true,
+            ..Self::default()
+        }
+    }
+}
+
+/// Whether `ip` is a globally routable unicast address.
+pub fn is_public(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            !(v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+                || o[0] == 0
+                || (o[0] == 100 && (o[1] & 0xc0) == 64) // 100.64/10 shared address space
+                || (o[0] == 192 && o[1] == 0 && o[2] == 0) // 192.0.0/24
+                || (o[0] == 198 && (o[1] & 0xfe) == 18) // 198.18/15 benchmarking
+                || o[0] >= 240)
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_public(IpAddr::V4(v4));
+            }
+            let seg = v6.segments();
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || (seg[0] & 0xfe00) == 0xfc00 // unique local
+                || (seg[0] & 0xffc0) == 0xfe80 // link local
+                || (seg[0] == 0x2001 && seg[1] == 0x0db8)) // documentation
+        }
+    }
+}
+
+/// Resolve `server` and check it against `policy`; returns the host and the address to pin the
+/// connection to (so a second DNS answer can't redirect it), or why it is refused.
+async fn destination(
+    server: &str,
+    policy: &FetchPolicy,
+) -> Result<(reqwest::Url, Option<(String, SocketAddr)>), String> {
+    let url = reqwest::Url::parse(server).map_err(|e| format!("{server}: {e}"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(format!("{server}: only http and https are fetched"));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(format!("{server}: credentials in the URL"));
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| format!("{server}: no host"))?
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| format!("{server}: no port"))?;
+    if policy.allow_private
+        || policy
+            .trusted
+            .iter()
+            .any(|t| t == server.trim_end_matches('/'))
+    {
+        return Ok((url, None));
+    }
+    let addrs: Vec<SocketAddr> = tokio::time::timeout(
+        policy.timeout,
+        tokio::net::lookup_host((host.as_str(), port)),
+    )
+    .await
+    .map_err(|_| format!("{server}: name resolution timed out"))?
+    .map_err(|e| format!("{server}: {e}"))?
+    .collect();
+    if addrs.is_empty() {
+        return Err(format!("{server}: no address"));
+    }
+    if let Some(a) = addrs.iter().find(|a| !is_public(a.ip())) {
+        return Err(format!(
+            "{server}: resolves to a non-public address ({})",
+            a.ip()
+        ));
+    }
+    Ok((url, Some((host, addrs[0]))))
+}
+
+/// Fetch one blob from one server under `policy`.
+async fn fetch_one(server: &str, sha: &str, policy: &FetchPolicy) -> Result<Vec<u8>, String> {
+    let url = format!("{}/{sha}", server.trim_end_matches('/'));
+    fetch_checked(server, &url, sha, policy).await
+}
+
+/// Fetch `url` under `policy` and return its body if its sha256 is `sha` (e.g. a card image
+/// whose payload pins its hash).
+pub async fn fetch_url(url: &str, sha: &str, policy: &FetchPolicy) -> anyhow::Result<Vec<u8>> {
+    let base = reqwest::Url::parse(url)?;
+    let origin = base.origin().ascii_serialization();
+    fetch_checked(&origin, url, &sha.to_ascii_lowercase(), policy)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))
+}
+
+/// GET `url` (on `server`, whose destination is checked) under `policy`, hash-checked.
+async fn fetch_checked(
+    server: &str,
+    url: &str,
+    sha: &str,
+    policy: &FetchPolicy,
+) -> Result<Vec<u8>, String> {
+    let (_, pin) = destination(server, policy).await?;
+    install_tls();
+    let mut b = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(policy.timeout);
+    if let Some((host, addr)) = &pin {
+        b = b.resolve(host, *addr);
+    }
+    let http = b.build().map_err(|e| e.to_string())?;
+    let work = async {
+        let mut r = http
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("{server}: {e}"))?;
+        if !r.status().is_success() {
+            return Err(format!("{server}: {}", r.status()));
+        }
+        if r.content_length()
+            .is_some_and(|n| n > policy.max_bytes as u64)
+        {
+            return Err(format!("{server}: larger than {} bytes", policy.max_bytes));
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = r.chunk().await.map_err(|e| format!("{server}: {e}"))? {
+            if body.len() + chunk.len() > policy.max_bytes {
+                return Err(format!("{server}: larger than {} bytes", policy.max_bytes));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        if sha256_hex(&body) != sha {
+            return Err(format!("{server}: hash mismatch"));
+        }
+        Ok(body)
+    };
+    tokio::time::timeout(policy.timeout, work)
+        .await
+        .map_err(|_| format!("{server}: timed out"))?
+}
+
+/// Fetch `sha` from the first of `servers` that has it under `policy` (destination, redirects,
+/// size and time bounds), verifying its hash.
+pub async fn fetch_from(
+    servers: &[String],
+    sha: &str,
+    policy: &FetchPolicy,
+) -> anyhow::Result<Vec<u8>> {
+    let mut why = Vec::new();
+    for s in servers {
+        match fetch_one(s, sha, policy).await {
+            Ok(b) => return Ok(b),
+            Err(e) => why.push(e),
+        }
+    }
+    anyhow::bail!("blob {sha} is not retrievable: {}", why.join("; "))
 }
 
 /// The BUD-03 server list event for `servers`.
@@ -344,5 +538,76 @@ mod tests {
         assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
         assert!(c.fetch(&"00".repeat(32)).await.is_err());
         srv.stop();
+    }
+
+    #[tokio::test]
+    async fn untrusted_fetches_are_bounded() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let srv = serve("127.0.0.1:0".parse().unwrap(), None).await.unwrap();
+        let c = BlossomClient::new(vec![srv.url.clone()], Keys::generate());
+        let big = vec![7u8; 4096];
+        let (sha, _) = c.upload(&big, "application/octet-stream").await.unwrap();
+        let servers = vec![srv.url.clone()];
+        // A hint pointing at loopback isn't fetched unless the server is trusted.
+        let e = fetch_from(&servers, &sha, &FetchPolicy::default())
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("non-public"), "{e}");
+        assert_eq!(
+            fetch_from(&servers, &sha, &FetchPolicy::trusting(&servers))
+                .await
+                .unwrap(),
+            big
+        );
+        // Size bound: abandoned, not buffered.
+        let small = FetchPolicy {
+            max_bytes: 1024,
+            ..FetchPolicy::local()
+        };
+        let e = fetch_from(&servers, &sha, &small).await.unwrap_err();
+        assert!(e.to_string().contains("larger than"), "{e}");
+        // Schemes and credentials.
+        for bad in ["file:///etc", "ftp://example.com", "http://u:p@example.com"] {
+            assert!(fetch_from(&[bad.to_string()], &sha, &FetchPolicy::local())
+                .await
+                .is_err());
+        }
+        srv.stop();
+
+        // Redirects aren't followed, even to a trusted server.
+        let target = srv_with(&big).await;
+        let app = Router::new().route(
+            "/{sha}",
+            get({
+                let to = target.url.clone();
+                move |Path(p): Path<String>| async move {
+                    (StatusCode::FOUND, [(header::LOCATION, format!("{to}/{p}"))]).into_response()
+                }
+            }),
+        );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let redir = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(l, app).await });
+        let e = fetch_from(&[redir], &sha, &FetchPolicy::local())
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("302"), "{e}");
+        target.stop();
+
+        assert!(!is_public("10.1.2.3".parse().unwrap()));
+        assert!(!is_public("169.254.169.254".parse().unwrap()));
+        assert!(!is_public("::1".parse().unwrap()));
+        assert!(!is_public("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(!is_public("fd00::1".parse().unwrap()));
+        assert!(is_public("93.184.216.34".parse().unwrap()));
+    }
+
+    async fn srv_with(b: &[u8]) -> RunningServer {
+        let srv = serve("127.0.0.1:0".parse().unwrap(), None).await.unwrap();
+        BlossomClient::new(vec![srv.url.clone()], Keys::generate())
+            .upload(b, "application/octet-stream")
+            .await
+            .unwrap();
+        srv
     }
 }

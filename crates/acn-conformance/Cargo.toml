@@ -13,7 +13,6 @@ nmesh-core.workspace = true
 nmesh-wallet.workspace = true
 nmesh-blossom.workspace = true
 nostr-sdk.workspace = true
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

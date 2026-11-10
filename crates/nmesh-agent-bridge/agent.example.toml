@@ -24,11 +24,19 @@ retention = "none"
 [acn]
 enabled = true
 price_sat = 0                  # > 0: calls are T1, paid with a hash-locked Cashu token at `mint`
+                               #      (and direct `/tool` DMs are refused: tools are paid for)
 # mint = "http://127.0.0.1:3338"   # the test mint nmesh-acn-sim hosts
 # wallet_dir = ".nmesh/agent-wallet"
-# Evidence (Core §9): artifacts and derivation records on Blossom. With at least one server the
-# agent can claim conformance level L0 (it passes the L0 suite). Dev server: `nmesh blossom`.
+# Evidence (Core §9): artifacts and derivation records on Blossom. Dev server: `nmesh blossom`.
 # blossom = ["http://127.0.0.1:3400"]
+# Evidence disclosure. "private" (the default) uploads nothing: REPORTs carry the inline result
+# only and no conformance level is claimed. "public" uploads every tool result, its derivation
+# record and logs to the Blossom servers above, UNENCRYPTED, for anyone with the hash; with an
+# operator binding and a Blossom server the agent then claims conformance level L0.
+evidence = "public"
+# Execution journal (what ran, what was sent, what was redeemed), so a restart never repeats
+# work. Default: next to the key file.
+# journal = ".nmesh/agents/echo.acn-journal.json"
 deadline_secs = 600
 review_window_secs = 86400
 # Self-hosted: issue an operator binding for this agent key so clients see it as accountable.

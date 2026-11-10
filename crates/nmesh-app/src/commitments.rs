@@ -70,18 +70,25 @@ impl std::ops::Deref for CommitmentView {
     }
 }
 
+/// What the reader holds beyond the acts: referenced terms documents, and delivery keys
+/// recovered from the mint (commitment id → hex `k`).
+pub struct Known<'a> {
+    pub documents: &'a BTreeMap<String, Value>,
+    pub keys: &'a BTreeMap<String, String>,
+}
+
 /// `extra`: public events the fold also needs (the performer's operator bindings, V-8).
 pub fn project(
     conversation: &str,
     me: &str,
     events: &BTreeMap<String, acn_core::Event>,
     extra: &[acn_core::Event],
-    documents: &BTreeMap<String, Value>,
+    known: &Known<'_>,
     ctx: &RenderContext<'_>,
     now: u64,
 ) -> Vec<CommitmentView> {
     let list: Vec<acn_core::Event> = events.values().chain(extra).cloned().collect();
-    acn_view::project_with(&list, documents, me, now)
+    acn_view::project_keys(&list, known.documents, known.keys, me, now)
         .into_iter()
         .map(|p| CommitmentView {
             conversation: conversation.to_string(),
@@ -122,12 +129,27 @@ fn render(ctx: &RenderContext<'_>, payload: &Value, contract: Option<&str>) -> B
                 schema_hash: None,
                 alt: "Result".into(),
                 payload: payload.clone(),
-                valid: true,
-                error: None,
+                // Displayable, not validated: no contract names a schema to check it against.
+                valid: false,
+                error: Some("no contract: raw data, not checked against a schema".into()),
                 renderer: RendererView::Generic,
                 reply_to: None,
             },
         },
+    }
+}
+
+/// Store an act by id. A copy that claims a known id never replaces a verified original
+/// (INV-11, V-1): a corrupted duplicate is dropped, and only a verified copy replaces an invalid
+/// one. An invalid act with a new id is kept, so the fold can report it. Returns whether the
+/// stored set changed.
+pub fn admit(acts: &mut BTreeMap<String, acn_core::Event>, act: acn_core::Event) -> bool {
+    match acts.get(&act.id) {
+        Some(old) if old.verify().is_ok() || act.verify().is_err() => false,
+        _ => {
+            acts.insert(act.id.clone(), act);
+            true
+        }
     }
 }
 
@@ -141,4 +163,40 @@ pub fn commitment_of(e: &acn_core::Event) -> String {
         .find(|t| t.first().map(String::as_str) == Some("c"))
         .and_then(|t| t.get(1).cloned())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod admit_tests {
+    use super::*;
+
+    #[test]
+    fn a_corrupt_copy_never_replaces_a_verified_act() {
+        let good = acn_core::draft::Draft::act(
+            acn_core::kinds::K_PROGRESS,
+            &"cc".repeat(32),
+            &"cc".repeat(32),
+            &[],
+        )
+        .content(serde_json::json!({"note": "half way"}))
+        .sign(&[7; 32], 100)
+        .unwrap();
+        let mut bad = good.clone();
+        bad.content = "{\"tampered\":true}".into();
+        assert!(bad.verify().is_err());
+
+        let mut acts = BTreeMap::new();
+        assert!(admit(&mut acts, good.clone()));
+        assert!(
+            !admit(&mut acts, bad.clone()),
+            "corrupt same-id copy is dropped"
+        );
+        assert_eq!(acts[&good.id], good);
+
+        // The other way round: a verified copy replaces an invalid one.
+        let mut acts = BTreeMap::new();
+        assert!(admit(&mut acts, bad));
+        assert!(admit(&mut acts, good.clone()));
+        assert_eq!(acts[&good.id], good);
+        assert!(!admit(&mut acts, good));
+    }
 }

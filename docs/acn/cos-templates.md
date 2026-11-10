@@ -91,7 +91,7 @@ Both files are in [`templates/`](templates/), with their rubrics in
 `rubric_ref` is `blossom:<hash>`, so upload the file to your Blossom server). The judges are
 pinned to the two local Ollama models of
 [`crates/acn-judge/judges.example.toml`](../../crates/acn-judge/judges.example.toml) under the
-`acn-judge/1` harness: fine for trying the flow, too small to be trusted judges. For real work,
+`acn-judge/2` harness: fine for trying the flow, too small to be trusted judges. For real work,
 re-pin to a hosted panel (`cargo run -p acn-judge --example try_panel -- <judges.toml>` prints
 the panel's fingerprints before it tries the judges). `crates/acn-judge/tests/templates.rs` checks that every file parses, instantiates
 into terms that parse and close, re-instantiates exactly, and pins the harness's current

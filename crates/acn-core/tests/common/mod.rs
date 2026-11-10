@@ -3,6 +3,7 @@
 pub mod cos;
 pub mod held_out;
 pub mod judged;
+pub mod scope;
 pub mod settlement;
 pub mod templates;
 

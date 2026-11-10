@@ -43,9 +43,14 @@ await shot("04-table-and-form");
 await page.locator(".messages form input.field").first().fill("Launch checklist");
 await page.locator(".messages form textarea").fill("Relays up, bridge healthy, ship it.");
 await page.getByRole("button", { name: "Create card" }).click();
+// The host shows what the form will actually invoke, and asks (A17).
+await page.locator(".confirm").waitFor({ timeout: 5000 });
+await shot("05a-action-confirm");
+await page.locator(".confirm").getByRole("button", { name: "Send", exact: true }).click();
 await page.waitForSelector("text=Launch checklist >> nth=0");
 await page.waitForTimeout(700);
 await page.getByRole("button", { name: "Press me" }).last().click();
+await page.locator(".confirm").getByRole("button", { name: "Send", exact: true }).click();
 await page.waitForTimeout(700);
 await shot("05-form-submitted-card");
 

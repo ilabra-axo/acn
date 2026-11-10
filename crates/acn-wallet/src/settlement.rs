@@ -21,26 +21,131 @@ pub fn request_token(events: &[Event], commitment: &str) -> Option<String> {
 }
 
 /// Spec §8.2 step 3: a performer MUST NOT rely on an unverified token.
+///
+/// Checks the token's value and its complete spending policy against the §8.1 lock spec: only
+/// `me` may redeem, with one signature, signing inputs only, and exactly one refund key (one
+/// signature) opens after a locktime no earlier than the terms'. The refund key is compared with
+/// `payment.refund_key` when the terms carry one; without it this function cannot tell a
+/// substituted refund key from the requester's, so callers that know the requester should use
+/// [`check_payment_from`].
 pub fn check_payment(terms: &Terms, v: &Verified, me: &str) -> Result<(), String> {
+    check(terms, v, me, None)
+}
+
+/// [`check_payment`], also requiring the refund key to be `requester`'s (x-only hex) when the
+/// terms name no `payment.refund_key`.
+pub fn check_payment_from(
+    terms: &Terms,
+    v: &Verified,
+    me: &str,
+    requester: &str,
+) -> Result<(), String> {
+    check(terms, v, me, Some(requester))
+}
+
+/// A key as x-only hex: Cashu writes compressed keys (`02`/`03` prefix), Nostr x-only ones.
+fn xonly(k: &str) -> String {
+    let k = k.to_ascii_lowercase();
+    match k.len() {
+        66 if k.starts_with("02") || k.starts_with("03") => k[2..].to_string(),
+        _ => k,
+    }
+}
+
+fn check(terms: &Terms, v: &Verified, me: &str, requester: Option<&str>) -> Result<(), String> {
     let Some(pay) = &terms.payment else {
         return Err("terms carry no payment".into());
     };
+    check_lock(
+        v,
+        &LockSpec {
+            me,
+            hashlock: pay.hashlock.as_deref().unwrap_or_default(),
+            amount: terms.price.amount,
+            refund_to: pay.refund_key.as_deref().or(requester),
+            min_locktime: pay.locktime,
+            keysets: &pay.keysets,
+        },
+    )
+}
+
+/// What a received lock must be (Core §8.1): every proof redeemable by `me` alone with the
+/// preimage of `hashlock`, refundable to `refund_to` alone after a locktime of at least
+/// `min_locktime`, worth at least `amount`.
+pub struct LockSpec<'a> {
+    pub me: &'a str,
+    pub hashlock: &'a str,
+    pub amount: u64,
+    /// The requester's key; `None` skips the refund-key comparison (not the shape checks).
+    pub refund_to: Option<&'a str>,
+    pub min_locktime: Option<u64>,
+    /// Keyset ids the terms accept; empty accepts any keyset of the mint.
+    pub keysets: &'a [String],
+}
+
+/// Check verified token facts against a [`LockSpec`]: the full spending policy, not just the
+/// hashlock and first key. Used for request tokens (through the terms) and `FUND` tokens.
+pub fn check_lock(v: &Verified, spec: &LockSpec<'_>) -> Result<(), String> {
+    let me = spec.me;
     if !v.unspent {
         return Err("token already spent".into());
     }
-    if v.amount < terms.price.amount {
+    if v.amount < spec.amount {
         return Err(format!(
             "token is {} sat, terms say {}",
-            v.amount, terms.price.amount
+            v.amount, spec.amount
         ));
     }
-    if Some(v.hashlock.as_str()) != pay.hashlock.as_deref() {
+    if spec.hashlock.is_empty() || v.hashlock != spec.hashlock {
         return Err("token hashlock differs from the terms".into());
     }
-    if v.receiver != me {
+    if xonly(&v.receiver) != xonly(me) {
         return Err("token is not locked to me".into());
     }
-    if let Some(l) = pay.locktime {
+    if v.receivers.len() != 1 || xonly(&v.receivers[0]) != xonly(me) {
+        return Err(format!(
+            "token lets {} key(s) redeem; only the performer may",
+            v.receivers.len()
+        ));
+    }
+    if v.n_sigs != 1 {
+        return Err(format!(
+            "token requires {} signature(s) to redeem; the lock spec needs exactly 1",
+            v.n_sigs
+        ));
+    }
+    if v.sig_flag != crate::SIG_INPUTS {
+        return Err(format!(
+            "token signature flag is {:?}, the lock spec uses {}",
+            v.sig_flag,
+            crate::SIG_INPUTS
+        ));
+    }
+    if v.refund.len() != 1 || v.n_sigs_refund != 1 {
+        return Err(format!(
+            "token refund path has {} key(s) and needs {} signature(s); the lock spec has one \
+             requester key",
+            v.refund.len(),
+            v.n_sigs_refund
+        ));
+    }
+    if let Some(expected) = spec.refund_to {
+        if xonly(&v.refund[0]) != xonly(expected) {
+            return Err("token refunds to a key other than the requester's".into());
+        }
+    }
+    if v.locktime == 0 {
+        return Err("token has no locktime, so its refund path never opens".into());
+    }
+    if !spec.keysets.is_empty() {
+        if v.keysets.is_empty() {
+            return Err("the token's keysets aren't known, and the terms name keysets".into());
+        }
+        if let Some(k) = v.keysets.iter().find(|k| !spec.keysets.contains(k)) {
+            return Err(format!("token uses keyset {k}, which the terms don't name"));
+        }
+    }
+    if let Some(l) = spec.min_locktime {
         if v.locktime < l {
             return Err("token locktime is earlier than the terms".into());
         }
@@ -64,7 +169,8 @@ pub enum Advice {
     /// `k`, then sign `CLAIM` with `k`.
     Claim { token: String },
     /// Contingent requester: funded and waiting. Once the performer redeems, the mint reveals
-    /// `k` (NUT-07 witness), with or without a `CLAIM`.
+    /// `k` (NUT-07 witness), with or without a `CLAIM`. `token` is the `FUND` act's field, which
+    /// is encrypted to the performer: the requester checks its own wallet's copy.
     LearnKey { token: String },
     /// Contingent requester: the performer's `CLAIM` revealed `k`; decrypt the deliverable.
     Key { key: String },
@@ -164,6 +270,150 @@ fn advise_contingent(
             chain_field(events, c, K_CLAIM, "key").map(|key| Advice::Key { key })
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod payment_tests {
+    use super::*;
+    use serde_json::json;
+
+    const ME: &str = "aa00000000000000000000000000000000000000000000000000000000000001";
+    const REQ: &str = "bb00000000000000000000000000000000000000000000000000000000000002";
+    const OTHER: &str = "cc00000000000000000000000000000000000000000000000000000000000003";
+
+    fn terms(refund_key: Option<&str>) -> Terms {
+        serde_json::from_value(json!({
+            "v": acn_core::terms::TERMS_VERSION, "deliverable": {"description": "x"},
+            "conditions": [], "deadline": 5000, "review_window": 500, "rework_limit": 0,
+            "price": {"amount": 10, "unit": "sat"},
+            "payment": {"mint": "https://m", "hashlock": "ab".repeat(32), "locktime": 9000,
+                        "refund_key": refund_key},
+            "verifiers": [], "arbiter": null, "subcontracting": false, "disclosure": "private",
+            "governance": null
+        }))
+        .unwrap()
+    }
+
+    fn good() -> Verified {
+        Verified {
+            amount: 10,
+            hashlock: "ab".repeat(32),
+            receiver: ME.into(),
+            locktime: 9000,
+            unspent: true,
+            receivers: vec![ME.into()],
+            n_sigs: 1,
+            refund: vec![REQ.into()],
+            n_sigs_refund: 1,
+            sig_flag: crate::SIG_INPUTS.into(),
+            keysets: vec![],
+        }
+    }
+
+    fn rejects(v: Verified, why: &str) {
+        let t = terms(None);
+        let e = check_payment_from(&t, &v, ME, REQ).expect_err(why);
+        assert!(!e.is_empty(), "{why}");
+    }
+
+    #[test]
+    fn canonical_lock_passes() {
+        let t = terms(None);
+        check_payment(&t, &good(), ME).unwrap();
+        check_payment_from(&t, &good(), ME, REQ).unwrap();
+        // Compressed (Cashu) and x-only (Nostr) forms of a key are the same key.
+        let mut v = good();
+        v.refund = vec![format!("02{REQ}")];
+        check_payment_from(&t, &v, ME, REQ).unwrap();
+        check_payment_from(&terms(Some(&format!("03{REQ}"))), &good(), ME, REQ).unwrap();
+    }
+
+    #[test]
+    fn keysets_named_by_the_terms_are_enforced() {
+        let mut t = terms(None);
+        t.payment.as_mut().unwrap().keysets = vec!["00aa".into()];
+        // Unknown keysets with named ones: not established.
+        assert!(check_payment_from(&t, &good(), ME, REQ).is_err());
+        let mut v = good();
+        v.keysets = vec!["00aa".into()];
+        check_payment_from(&t, &v, ME, REQ).unwrap();
+        v.keysets = vec!["00aa".into(), "00bb".into()];
+        assert!(check_payment_from(&t, &v, ME, REQ)
+            .unwrap_err()
+            .contains("00bb"));
+        // No keysets named: any keyset of the mint.
+        check_payment_from(&terms(None), &v, ME, REQ).unwrap();
+    }
+
+    #[test]
+    fn every_policy_deviation_is_rejected() {
+        let mut v = good();
+        v.unspent = false;
+        rejects(v, "spent");
+        let mut v = good();
+        v.amount = 9;
+        rejects(v, "short");
+        let mut v = good();
+        v.hashlock = "cd".repeat(32);
+        rejects(v, "hashlock");
+        let mut v = good();
+        v.receiver = OTHER.into();
+        v.receivers = vec![OTHER.into()];
+        rejects(v, "receiver");
+        let mut v = good();
+        v.receivers.push(OTHER.into());
+        rejects(v, "extra beneficiary");
+        let mut v = good();
+        v.receivers.clear();
+        rejects(v, "no beneficiary list");
+        let mut v = good();
+        v.n_sigs = 2;
+        rejects(v, "threshold");
+        let mut v = good();
+        v.sig_flag = "SIG_ALL".into();
+        rejects(v, "SIG_ALL");
+        let mut v = good();
+        v.refund.clear();
+        rejects(v, "no refund key");
+        let mut v = good();
+        v.refund.push(OTHER.into());
+        rejects(v, "extra refund key");
+        let mut v = good();
+        v.n_sigs_refund = 2;
+        rejects(v, "refund threshold");
+        let mut v = good();
+        v.refund = vec![OTHER.into()];
+        rejects(v, "substituted refund key");
+        let mut v = good();
+        v.locktime = 8999;
+        rejects(v, "early locktime");
+        let mut v = good();
+        v.locktime = 0;
+        rejects(v, "no locktime");
+    }
+
+    #[test]
+    fn refund_key_from_terms_or_requester() {
+        let mut v = good();
+        v.refund = vec![OTHER.into()];
+        // Without the requester or a terms refund key, substitution is undetectable here.
+        check_payment(&terms(None), &v, ME).unwrap();
+        assert!(check_payment(&terms(Some(REQ)), &v, ME).is_err());
+        assert!(check_payment_from(&terms(None), &v, ME, REQ).is_err());
+        // The agreed terms win over the requester's identity key.
+        check_payment_from(&terms(Some(OTHER)), &v, ME, REQ).unwrap();
+    }
+
+    #[test]
+    fn legacy_facts_fail_closed() {
+        // A `Verified` serialized before the policy fields existed establishes no policy.
+        let mut j = serde_json::to_value(good()).unwrap();
+        for f in ["receivers", "n_sigs", "refund", "n_sigs_refund", "sig_flag"] {
+            j.as_object_mut().unwrap().remove(f);
+        }
+        let v: Verified = serde_json::from_value(j).unwrap();
+        assert!(check_payment(&terms(None), &v, ME).is_err());
     }
 }
 

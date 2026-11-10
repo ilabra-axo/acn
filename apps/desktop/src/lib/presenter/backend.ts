@@ -49,6 +49,7 @@ function agentContact(pubkey: string, name: string, about: string, extra: Partia
     about,
     picture: null,
     is_agent: true,
+    discovery: "resolved",
     agent: {
       id: name.toLowerCase(),
       name,
@@ -135,7 +136,7 @@ export async function createPresenterBackend(): Promise<Backend> {
       ],
     })],
     [ALICE, {
-      pubkey: ALICE, npub: fakeNpub("alice"), name: "Alice", about: null, picture: null, is_agent: false, agent: null,
+      pubkey: ALICE, npub: fakeNpub("alice"), name: "Alice", about: null, picture: null, is_agent: false, discovery: "resolved", agent: null,
       commands: [], consented: true, last_message: "Shall we meet at the usual place?", last_at: now() - 3600, unread: 1, acn: null,
     }],
   ]);
@@ -263,6 +264,9 @@ export async function createPresenterBackend(): Promise<Backend> {
     },
     sendAction: async (pubkey, target, actionId, values, label) => {
       requireConsent(pubkey);
+      if (!(history.get(pubkey) ?? []).some((x) => x.id === target && !x.mine)) {
+        throw "this action belongs to a message from another conversation";
+      }
       const payload: any = {};
       if (actionId) payload.action_id = actionId;
       if (values) payload.values = values;
@@ -275,6 +279,9 @@ export async function createPresenterBackend(): Promise<Backend> {
     onEvent: async (cb) => {
       listeners.add(cb);
       return () => listeners.delete(cb);
+    },
+    fetchImage: async () => {
+      throw "presenter mode loads no remote images";
     },
     openUrl: async (url) => {
       window.open(url, "_blank", "noopener");

@@ -6,13 +6,45 @@
 
   async function press(a: { id: string; label: string }) {
     pressed = a.id;
-    await host.action(a.id, a.label);
+    if (!(await host.action(a.id, a.label))) pressed = null;
+  }
+
+  // Remote images never load on their own (A16): the sender would learn when you read the
+  // message. On click, the host fetches a hash-pinned image natively and checks it; an unpinned
+  // one can only be opened in the browser.
+  let img = $state<string | null>(null);
+  let imgError = $state<string | null>(null);
+  const imgHost = $derived.by(() => {
+    try {
+      return new URL(payload.image?.url ?? "").host;
+    } catch {
+      return "an unknown host";
+    }
+  });
+  async function loadImage() {
+    imgError = null;
+    try {
+      img = await host.loadImage(payload.image.url, payload.image.sha256);
+    } catch (e) {
+      imgError = String(e);
+    }
   }
 </script>
 
 <div class="card">
   {#if payload.image?.url}
-    <img src={payload.image.url} alt={payload.image.alt ?? ""} />
+    {#if img}
+      <img src={img} alt={payload.image.alt ?? ""} />
+    {:else if payload.image.sha256}
+      <button class="img-gate" onclick={loadImage} title={payload.image.url}>
+        🖼 Load image from {imgHost}{payload.image.alt ? ` · ${payload.image.alt}` : ""}
+      </button>
+      {#if imgError}<div class="img-err">{imgError}</div>{/if}
+    {:else}
+      <button class="img-gate" onclick={() => host.openUrl(payload.image.url)} title={payload.image.url}>
+        🖼 Image on {imgHost} (not hash-pinned) · open in browser
+      </button>
+    {/if}
   {/if}
   <div class="head">
     <div class="title">{payload.title}</div>
@@ -45,6 +77,8 @@
 </div>
 
 <style>
+  .img-gate { margin: 0 0 8px; padding: 10px; width: 100%; text-align: left; border: 1px dashed var(--border); border-radius: var(--radius-sm); background: var(--sunken); color: var(--muted); cursor: pointer; font-size: 12px; }
+  .img-err { color: var(--warn); font-size: 11px; margin-bottom: 6px; }
   .card {
     display: flex;
     flex-direction: column;

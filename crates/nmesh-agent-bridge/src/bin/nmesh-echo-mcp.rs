@@ -6,6 +6,9 @@
 //!   with a button that triggers `/echo`
 //! - `form`                  → structured `nmesh.form/v1` whose submission calls `/card`
 //! - `status`                → structured `nmesh.table/v1`
+//!
+//! With `NMESH_ECHO_CALL_LOG=<path>` every tool call appends one line (the tool name) to `path`,
+//! so tests can count executions, across restarts too.
 
 use std::sync::Arc;
 
@@ -92,6 +95,16 @@ impl ServerHandler for Echo {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        if let Ok(path) = std::env::var("NMESH_ECHO_CALL_LOG") {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = writeln!(f, "{}", request.name);
+            }
+        }
         let args = request.arguments.unwrap_or_default();
         let get = |k: &str| {
             args.get(k)

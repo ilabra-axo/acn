@@ -5,6 +5,7 @@
   import Conversation from "./lib/components/Conversation.svelte";
   import WalletPanel from "./lib/components/WalletPanel.svelte";
   import Board from "./lib/components/Board.svelte";
+  import ActionConfirm from "./lib/components/ActionConfirm.svelte";
 
   onMount(() => {
     store.init().then(() => store.startTicker());
@@ -38,6 +39,7 @@
     <WalletPanel />
   {/if}
 
+  <ActionConfirm />
   {#if store.error}
     <div class="toast" role="alert">{store.error}</div>
   {/if}

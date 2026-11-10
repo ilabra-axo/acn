@@ -8,12 +8,12 @@ license.workspace = true
 
 [dependencies]
 reqwest.workspace = true
-rustls.workspace = true
 nmesh-proto.workspace = true
 nmesh-contracts.workspace = true
 nmesh-core.workspace = true
 acn-core.workspace = true
 nmesh-blossom.workspace = true
+base64 = "0.22"
 acn-author.workspace = true
 acn-view.workspace = true
 acn-sim.workspace = true

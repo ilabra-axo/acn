@@ -21,7 +21,7 @@ use std::time::Duration;
 use acn_core::draft::Draft;
 use acn_core::kinds::*;
 use acn_sim::{Actor, Cast, PaymentCheck, SCENARIOS};
-use acn_wallet::settlement::{check_payment, Advice};
+use acn_wallet::settlement::{check_lock, check_payment_from, Advice, LockSpec};
 use nmesh_core::{
     Body, IdentityKind, InboxOptions, Keys, PublicKey, Session, SessionConfig, Timestamp, ToBech32,
 };
@@ -42,6 +42,9 @@ pub struct Config {
     pub judges: Option<acn_judge::Panel>,
     /// Where Atlas stores its artifacts and derivation records (Core §9).
     pub blossom: BlossomSetup,
+    /// Misbehaviour for tests: Atlas redeems a `FUND` token but never sends `CLAIM`, so the
+    /// requester must recover `k` from the mint (Core §8.2).
+    pub withhold_claim: bool,
 }
 
 /// Where the cast's Blossom server comes from.
@@ -177,6 +180,7 @@ struct Sim {
     judges: Option<acn_judge::Panel>,
     /// Atlas's evidence store (artifacts and derivation records on Blossom).
     blossom: Option<nmesh_blossom::BlossomClient>,
+    withhold_claim: bool,
 }
 
 /// Connect the cast, publish profiles / `K_SVC` / bindings, and start reacting.
@@ -294,6 +298,7 @@ pub async fn start(args: Config) -> anyhow::Result<Running> {
         blossom: (!blossom_urls.is_empty()).then(|| {
             nmesh_blossom::BlossomClient::new(blossom_urls.clone(), sessions_keys.clone())
         }),
+        withhold_claim: args.withhold_claim,
     });
 
     for agent in [Actor::Performer, Actor::Rogue] {
@@ -487,7 +492,17 @@ impl Sim {
                 continue;
             }
             let servers: Vec<String> = hint.into_iter().collect();
-            let doc = nmesh_blossom::fetch_from(&reqwest::Client::new(), &servers, &hash)
+            // A requester's hint is fetched only if public, unless it is the cast's own server.
+            let own = self
+                .blossom
+                .as_ref()
+                .map(|b| b.servers.clone())
+                .unwrap_or_default();
+            let policy = nmesh_blossom::FetchPolicy {
+                max_bytes: acn_core::INLINE_LIMIT * 16,
+                ..nmesh_blossom::FetchPolicy::trusting(&own)
+            };
+            let doc = nmesh_blossom::fetch_from(&servers, &hash, &policy)
                 .await
                 .ok()
                 .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
@@ -600,10 +615,19 @@ impl Sim {
                 .cloned()
                 .ok_or("no key")?;
             let h = acn_core::jcs::sha256_hex(&from_hex(&k).ok_or("bad key")?);
-            if !v.unspent || v.hashlock != h || v.receiver != me {
-                return Err("token does not match the offer".to_string());
-            }
-            if Some(v.amount) != content["amount"].as_u64() {
+            let amount = content["amount"].as_u64().ok_or("FUND names no amount")?;
+            check_lock(
+                &v,
+                &LockSpec {
+                    me: &me,
+                    hashlock: &h,
+                    amount,
+                    refund_to: Some(&sender.to_hex()),
+                    min_locktime: None,
+                    keysets: &[],
+                },
+            )?;
+            if v.amount != amount {
                 return Err(format!("token is {} sat", v.amount));
             }
             self.wallet.note_incoming(&token, &v, &sender.to_hex(), &c);
@@ -656,7 +680,7 @@ impl Sim {
                 .inspect(&token)
                 .await
                 .map_err(|e| e.to_string())?;
-            check_payment(&terms, &v, &me)?;
+            check_payment_from(&terms, &v, &me, &sender.to_hex())?;
             self.wallet
                 .note_incoming(&token, &v, &sender.to_hex(), &e.id);
             self.store
@@ -712,6 +736,8 @@ impl Sim {
                     format!("Redeemed {n} sat with the revealed preimage. My balance: {bal} sat.")
                 }
                 Err(e) => {
+                    // In flight, not done: the next act on this commitment retries.
+                    this.store.redeemed.lock().unwrap().remove(&c);
                     tracing::error!(commitment = %c, error = %e, "redeem failed");
                     format!("I could not redeem the payment: {e}")
                 }
@@ -789,12 +815,17 @@ impl Sim {
                     let (Some(token), Some(k)) = (token, k) else {
                         return;
                     };
-                    this.store.redeemed.lock().unwrap().insert(c.clone());
                     match this.wallet.redeem(&token, &k, Some(&c)).await {
-                        Ok(n) => tracing::info!(commitment = %c, "Atlas claimed {n} sat with k"),
+                        Ok(n) => {
+                            this.store.redeemed.lock().unwrap().insert(c.clone());
+                            tracing::info!(commitment = %c, "Atlas claimed {n} sat with k")
+                        }
                         Err(e) => {
                             return tracing::error!(commitment = %c, error = %e, "claim redeem failed")
                         }
+                    }
+                    if this.withhold_claim {
+                        return tracing::warn!(commitment = %c, "test misbehaviour: redeemed, CLAIM withheld");
                     }
                 }
                 if draft.kind == K_REPORT && m.actor == Actor::Performer {

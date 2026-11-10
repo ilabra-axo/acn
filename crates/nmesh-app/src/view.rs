@@ -64,16 +64,32 @@ pub struct ContactView {
     pub about: Option<String>,
     pub picture: Option<String>,
     pub is_agent: bool,
+    /// How sure we are of `is_agent` (ADR 0004: disclosure before first contact).
+    pub discovery: Discovery,
     /// Agent manifest including hosting + data handling. UIs MUST show it before first contact.
     pub agent: Option<AgentManifest>,
     pub commands: Vec<CommandView>,
-    /// User has acknowledged the agent's data handling (always true for humans).
+    /// User has acknowledged the agent's data handling, or the contact is a known human. False
+    /// while discovery is pending, and for unresolved identities until the user accepts.
     pub consented: bool,
     pub last_message: Option<String>,
     pub last_at: Option<u64>,
     pub unread: u32,
     /// Present if the peer offers ACN commitments (`K_SVC`).
     pub acn: Option<AcnPeerView>,
+}
+
+/// Whether a contact's kind (human or agent) is known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Discovery {
+    /// Not fetched yet: nothing may be sent until it is.
+    Pending,
+    /// A profile was found (or the key is a known agent); `is_agent` is reliable.
+    Resolved,
+    /// No profile found: possibly an agent that published nowhere we look. Treated like an
+    /// agent with no disclosure, so the user must accept before anything is sent.
+    Unresolved,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -172,9 +188,10 @@ impl ContactView {
             about: None,
             picture: None,
             is_agent: false,
+            discovery: Discovery::Pending,
             agent: None,
             commands: vec![],
-            consented: true,
+            consented: false,
             last_message: None,
             last_at: None,
             unread: 0,
@@ -182,8 +199,15 @@ impl ContactView {
         }
     }
 
-    pub fn apply_peer_info(&mut self, info: PeerInfo, consented: bool) {
-        self.is_agent = info.is_agent();
+    /// Apply a discovery result. An established agent stays an agent: a later fetch that misses
+    /// its advertisements is not evidence of a human. `accepted` is the user's consent record.
+    pub fn apply_peer_info(&mut self, info: PeerInfo, accepted: bool) {
+        self.is_agent = self.is_agent || info.is_agent();
+        self.discovery = if self.is_agent || info.found_profile {
+            Discovery::Resolved
+        } else {
+            Discovery::Unresolved
+        };
         self.name = info
             .name
             .or_else(|| info.agent.as_ref().map(|a| a.name.clone()));
@@ -194,8 +218,15 @@ impl ContactView {
             .acn_svc
             .as_ref()
             .map(|svc| AcnPeerView::from_svc(svc, &info.acn_binding));
-        self.agent = info.agent;
-        self.consented = !self.is_agent || consented;
+        if info.agent.is_some() {
+            self.agent = info.agent;
+        }
+        self.consented = accepted || (self.discovery == Discovery::Resolved && !self.is_agent);
+    }
+
+    /// The user must accept a disclosure before anything is sent.
+    pub fn needs_consent(&self) -> bool {
+        !self.consented && (self.is_agent || self.discovery == Discovery::Unresolved)
     }
 }
 
@@ -338,6 +369,72 @@ impl RenderContext<'_> {
             mine: &m.sender == me,
             created_at: m.created_at.as_secs(),
             body: self.body(&m.body),
+        }
+    }
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    fn pk() -> PublicKey {
+        nmesh_core::Keys::generate().public_key()
+    }
+
+    #[test]
+    fn an_unknown_contact_is_not_consented() {
+        let c = ContactView::new(pk());
+        assert_eq!(c.discovery, Discovery::Pending);
+        assert!(!c.consented);
+    }
+
+    #[test]
+    fn no_profile_is_unresolved_and_needs_consent() {
+        let mut c = ContactView::new(pk());
+        c.apply_peer_info(PeerInfo::default(), false);
+        assert_eq!(c.discovery, Discovery::Unresolved);
+        assert!(c.needs_consent());
+        c.apply_peer_info(PeerInfo::default(), true);
+        assert!(!c.needs_consent(), "the user accepted");
+    }
+
+    #[test]
+    fn a_human_profile_needs_no_consent() {
+        let mut c = ContactView::new(pk());
+        c.apply_peer_info(
+            PeerInfo {
+                found_profile: true,
+                ..PeerInfo::default()
+            },
+            false,
+        );
+        assert_eq!(c.discovery, Discovery::Resolved);
+        assert!(!c.is_agent && c.consented && !c.needs_consent());
+    }
+
+    #[test]
+    fn an_incomplete_fetch_never_downgrades_an_agent() {
+        let mut c = ContactView::new(pk());
+        c.apply_peer_info(
+            PeerInfo {
+                found_profile: true,
+                is_bot: true,
+                ..PeerInfo::default()
+            },
+            false,
+        );
+        assert!(c.is_agent && c.needs_consent());
+        // A later fetch that finds a profile without the bot flag, or nothing at all.
+        for info in [
+            PeerInfo {
+                found_profile: true,
+                ..PeerInfo::default()
+            },
+            PeerInfo::default(),
+        ] {
+            c.apply_peer_info(info, false);
+            assert!(c.is_agent, "still an agent");
+            assert!(c.needs_consent(), "still gated");
         }
     }
 }

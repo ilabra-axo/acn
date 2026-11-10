@@ -144,6 +144,11 @@ async fn acn_draft(app: State<'_, App>, intent: Value, config: Value) -> Result<
 }
 
 #[tauri::command]
+async fn fetch_image(app: State<'_, App>, url: String, sha256: String) -> Result<String, AppError> {
+    app.fetch_image(&url, &sha256).await
+}
+
+#[tauri::command]
 fn acn_lint(app: State<'_, App>, terms: Value, binding: bool) -> Result<Value, AppError> {
     Ok(serde_json::to_value(app.lint_terms(&terms, binding)?).unwrap_or_default())
 }
@@ -392,6 +397,7 @@ pub fn run() {
             acn_request_terms,
             acn_draft,
             acn_lint,
+            fetch_image,
             acn_dispute,
             acn_hint,
             acn_run_hint,

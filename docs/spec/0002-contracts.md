@@ -29,7 +29,10 @@ structured payload means.
 ## Host rules
 1. Look up the contract. If it is unknown, try to fetch the definition from trusted publishers.
 2. Check the pin, if present.
-3. Validate the payload. **Invalid payloads never reach a renderer**; show alt text.
+3. Validate the payload. **Invalid payloads never reach a renderer**; show alt text. One
+   exception: the host's own raw-data inspector (an escaped, read-only JSON view, never a
+   contract renderer) may show an invalid or contractless payload on request, labelled as not
+   validated. A payload is only marked valid when a schema checked it.
 4. Resolve a renderer (spec 0003).
 
 ## Built-ins
