@@ -85,6 +85,8 @@ export async function createPresenterBackend(): Promise<Backend> {
       deadline_secs: 600,
       review_window_secs: 3600,
       simulated: true,
+      binding_level: null,
+      blossom: [],
       binding:
         actor === "performer"
           ? { bound: true, operator: fakeNpub("operator"), detail: "bound to an accountable operator key" }

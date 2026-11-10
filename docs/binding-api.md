@@ -8,8 +8,10 @@ defined in Core.md, and every check is the validator's.
 
 A **binding** (Core.md §11) is the adapter that lets an external harness's agents take part in
 ACN. It signs acts with its party's key, through the act schemas (§12), and runs the same
-validator as everyone else. The reference binding today is `acn-mcp-shim` (T0, free calls) in
-`crates/nmesh-agent-bridge`. A binding may act for a requester as well as for a performer.
+validator as everyone else. The reference performer bindings are `acn-mcp-shim`
+(`crates/nmesh-agent-bridge`) and `acn-cli-shim` (`crates/acn-cli-shim`), both on the
+`acn-binding` traits and both passing the L0 suite (T0 and paid T1, with Blossom evidence). A
+binding may act for a requester as well as for a performer.
 
 ## Settlement policy filters (CR-002)
 
@@ -28,7 +30,7 @@ In the reference bindings:
 | Binding | Side | Policy | Where |
 | --- | --- | --- | --- |
 | `nmesh-app` | requester | `SettlementPolicy { refuse_verifier, refuse_contingent, trusted_verifiers }` (the trusted set covers both triggers); checked before any money is locked; default accepts every valid combination. Contingent also needs the agent's `K_SVC` to declare `reveals_preimage_to_payer` for the terms' mint, else `rail_incapable` (vector S-10) | `crates/nmesh-app/src/lib.rs` (`SettlementPolicy`, `mint_has_capability`) |
-| `acn-mcp-shim` | performer | requester trigger only; anything else is declined `trigger_unsupported`. It also declines terms it can't meet: other profiles, priced terms, an `open` condition (`terms_unclosed`), held-out instances (`instances_unsupported`) | `crates/nmesh-agent-bridge/src/shim.rs` (`refusal`) |
+| `acn-mcp-shim`, `acn-cli-shim` | performer | requester trigger only; anything else is declined `trigger_unsupported`. They also decline terms an L0 binding can't meet: profile N, a price below theirs or another mint, an `open` condition (`terms_unclosed`), held-out instances (`instances_unsupported`), disqualifiers | `crates/acn-binding/src/lib.rs` (`Performer::refusal`) |
 
 ## Authoring aids (CR-003 §3)
 

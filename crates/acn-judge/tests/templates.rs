@@ -79,8 +79,15 @@ fn instantiate(content: &Value, slots: BTreeMap<String, Value>, rework_limit: u3
     let (conditions, disqualifiers) = tpl.instantiate(&slots).expect("template instantiates");
     // Every item has a note, and the notes fill (a drafter shows them beside the diff).
     let notes = tpl.notes_for(&slots).expect("notes fill");
-    for id in conditions.iter().map(|c| &c.id).chain(disqualifiers.iter().map(|d| &d.id)) {
-        assert!(notes.get(id).is_some_and(|n| !n.contains("{{")), "note for {id}");
+    for id in conditions
+        .iter()
+        .map(|c| &c.id)
+        .chain(disqualifiers.iter().map(|d| &d.id))
+    {
+        assert!(
+            notes.get(id).is_some_and(|n| !n.contains("{{")),
+            "note for {id}"
+        );
     }
     let event = Draft::template(content).sign(&[0x41; 32], 1_000).unwrap();
     let terms = json!({

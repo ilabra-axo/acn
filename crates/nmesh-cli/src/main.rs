@@ -54,6 +54,14 @@ enum Cmd {
         #[arg(long, default_value_t = 7777)]
         port: u16,
     },
+    /// Run a development Blossom server (artifacts and derivation records, Core §9).
+    Blossom {
+        #[arg(long, default_value_t = 3400)]
+        port: u16,
+        /// Keep blobs in this directory (default: in memory).
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
+    },
     /// Print this identity's npub.
     Whoami,
     /// Send one text DM.
@@ -79,6 +87,21 @@ async fn main() -> anyhow::Result<()> {
 
     if let Cmd::Relay { port } = cli.cmd {
         return run_relay(port).await;
+    }
+    if let Cmd::Blossom { port, dir } = &cli.cmd {
+        let srv = nmesh_blossom::serve(([127, 0, 0, 1], *port).into(), dir.clone()).await?;
+        eprintln!(
+            "dev Blossom server ({}) listening on {}",
+            if dir.is_some() {
+                "on disk"
+            } else {
+                "in memory"
+            },
+            srv.url
+        );
+        tokio::signal::ctrl_c().await?;
+        srv.stop();
+        return Ok(());
     }
 
     let keys: Keys = nmesh_core::load_or_create_keys(&cli.key)?;
@@ -126,7 +149,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::Chat { with } => chat(&session, &registry, PublicKey::parse(&with)?).await?,
-        Cmd::Relay { .. } | Cmd::Whoami => unreachable!(),
+        Cmd::Relay { .. } | Cmd::Blossom { .. } | Cmd::Whoami => unreachable!(),
     }
     session.shutdown().await;
     Ok(())

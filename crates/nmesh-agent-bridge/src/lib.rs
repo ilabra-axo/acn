@@ -12,9 +12,11 @@
 //!                                    against the tool's contract) else plain text
 //! ```
 //!
-//! With `[acn]` enabled the bridge is also **`acn-mcp-shim`** (docs/Core.md §11): it publishes a
-//! `K_SVC` service advertisement and an operator binding, and answers ACN T0 `REQUEST`s for its
-//! tools with signed `REPORT`s (see [`shim`]).
+//! With `[acn]` enabled the bridge is also **`acn-mcp-shim`** (docs/Core.md §11): a performer on
+//! the Binding API (`acn-binding`). It publishes a `K_SVC` service advertisement, an operator
+//! binding and its Blossom server list, answers T0 and (with a mint) T1 `REQUEST`s for its tools
+//! with signed `REPORT`s carrying artifacts and a derivation record, and redeems paid calls
+//! (see [`shim`]).
 //!
 //! Interop note: ContextVM (MCP-over-Nostr transport) is complementary. A future
 //! `transport = "contextvm"` lets the bridge reach MCP servers that are themselves on Nostr.
@@ -25,7 +27,11 @@ mod reply;
 pub mod shim;
 
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
+
+use acn_binding::Performer;
+use acn_binding_nostr::{BlossomEvidence, MintWallet, SessionBinding};
 
 use anyhow::Context;
 use nmesh_contracts::ContractRegistry;
@@ -46,10 +52,10 @@ enum Args<'a> {
 pub struct Bridge {
     config: AgentConfig,
     session: Session,
-    hub: McpHub,
-    registry: ContractRegistry,
+    hub: Arc<McpHub>,
+    registry: Arc<ContractRegistry>,
     allow: Option<HashSet<PublicKey>>,
-    acn: shim::Store,
+    performer: Arc<Performer>,
 }
 
 impl Bridge {
@@ -86,20 +92,75 @@ impl Bridge {
             )
         };
 
+        let hub = Arc::new(hub);
+        let registry = Arc::new(registry);
+        let acn = &config.acn;
+        let sb = Arc::new(SessionBinding(session.clone()));
+        let mut performer = Performer::new(
+            sb.clone(),
+            sb,
+            Arc::new(shim::McpExecutor {
+                hub: hub.clone(),
+                registry: registry.clone(),
+            }),
+        );
+        if !acn.blossom.is_empty() {
+            performer = performer.with_evidence(Arc::new(BlossomEvidence(
+                nmesh_blossom::BlossomClient::new(acn.blossom.clone(), session.keys().clone()),
+            )));
+        }
+        if acn.price_sat > 0 {
+            let mint = acn
+                .mint
+                .as_deref()
+                .context("acn.price_sat > 0 needs acn.mint, the mint the agent is paid at")?;
+            let wallet = nmesh_wallet::CashuWallet::open(
+                mint,
+                &session.keys().secret_key().secret_bytes(),
+                acn.wallet_dir.as_deref(),
+            )
+            .await?;
+            performer = performer.with_wallet(Arc::new(MintWallet {
+                wallet,
+                capabilities: acn.mint_capabilities.clone(),
+            }));
+        }
+        let performer = performer.with_min_price(acn.price_sat);
         let bridge = Self {
             config,
             session,
             hub,
             registry,
             allow,
-            acn: shim::Store::default(),
+            performer: Arc::new(performer),
         };
         bridge.publish_capabilities().await?;
         if bridge.config.acn.enabled {
+            let acn = &bridge.config.acn;
             let dh = serde_json::to_value(&bridge.manifest().data_handling)?;
-            let svc = shim::service_advertisement(&bridge.hub, &bridge.config.acn, &dh);
-            shim::publish_service(&bridge.session, &bridge.config.agent.id, &svc).await?;
-            shim::ensure_binding(&bridge.session, &bridge.config.acn).await?;
+            let ad = shim::service_advertisement(
+                &bridge.hub,
+                acn,
+                &dh,
+                &acn.mint_capabilities,
+                bridge.performer.level(),
+            );
+            acn_binding_nostr::announce(&bridge.session, &bridge.config.agent.id, &ad).await?;
+            match &acn.operator_key_file {
+                Some(path) => {
+                    let operator = nmesh_core::load_or_create_keys(path)?;
+                    acn_binding_nostr::ensure_binding(
+                        &bridge.session,
+                        &operator,
+                        acn.price_sat,
+                        acn.binding_days,
+                    )
+                    .await?;
+                }
+                None => {
+                    tracing::warn!("acn: no operator_key_file; agent will be flagged unaccountable")
+                }
+            }
         }
         Ok(bridge)
     }
@@ -167,15 +228,6 @@ impl Bridge {
         Ok(())
     }
 
-    fn shim(&self) -> shim::Shim<'_> {
-        shim::Shim {
-            session: &self.session,
-            hub: &self.hub,
-            registry: &self.registry,
-            store: &self.acn,
-        }
-    }
-
     /// Serve requests until the inbox closes or ctrl-c.
     pub async fn run(&self) -> anyhow::Result<()> {
         // Own messages are included so ACN state survives restarts (our earlier REPORTs are
@@ -192,15 +244,13 @@ impl Bridge {
         let settle = Duration::from_millis(1500);
         while let Ok(Some(m)) = tokio::time::timeout(settle, inbox.recv()).await {
             if let Body::Act(e) = &m.body {
-                self.acn.add((**e).clone());
+                self.performer.ingest((**e).clone());
             } else if m.sender != self.session.public_key() {
                 self.handle(m).await;
             }
         }
-        for c in self.acn.ids() {
-            if let Err(e) = self.shim().drive(&c).await {
-                tracing::error!(error = %e, commitment = %c, "acn: drive failed");
-            }
+        for c in self.performer.store.ids() {
+            self.performer.drive(&c).await;
         }
 
         loop {
@@ -219,7 +269,7 @@ impl Bridge {
     async fn handle(&self, msg: Inbound) {
         if msg.sender == self.session.public_key() {
             if let Body::Act(e) = &msg.body {
-                self.acn.add((**e).clone());
+                self.performer.ingest((**e).clone());
             }
             return;
         }
@@ -233,8 +283,12 @@ impl Bridge {
             Body::Text(t) => self.handle_text(&msg, t).await,
             Body::Action(a) => self.handle_action(&msg, a).await,
             Body::Act(e) if self.config.acn.enabled => {
-                let c = self.acn.add((**e).clone());
-                self.shim().drive(&c).await
+                let p = self.performer.clone();
+                let e = (**e).clone();
+                tokio::spawn(async move {
+                    p.on_event(e).await;
+                });
+                Ok(())
             }
             _ => Ok(()),
         };

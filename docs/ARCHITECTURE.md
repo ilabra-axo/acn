@@ -111,13 +111,18 @@ flowchart TB
 | `acn-sim` | lib | Demo scenarios: the cast, service terms offers, Atlas's published terms template (`retry-change/v1`), reactions (incl. scripted judges, the contingent seal and the held-out pool with its proofs), requester hints | `SCENARIOS`, `template`, `react`, `react_with` (escrow, payments, performer keys, requester seeds), `Move.escrow`, `Move.judge` (`JudgeJob`: the host runs real judges and fills the content), `Cast.judge_panel`, `Cast.templates` (published ids, recorded by the host), `templates`, `requester_hint`, `requester_draft` | none | 1,690 |
 | `acn-judge` | lib + example | Judge harness for `judged` conditions: a panel of pinned judges on OpenAI-compatible endpoints (Ollama, OpenAI, OpenRouter, ...), repeats and medians, artifact delimiting, injection scan plus model vote, held-out cases (the sample both seeds select, checked against the terms, shown to the judges and revealed with proofs), `K_ATTEST_JUDGED` content that V-17 and V-27 count; pinned by `harness_hash` | `Panel::{load, with_llm, fingerprints, evaluate}`, `HeldOut`, `PanelConfig`, `Llm`, `HttpLlm`, `harness_hash`; example `try_panel` | HTTP to the judges; reads `judges.toml` and API keys from env | 730 |
 | `acn-author` | lib | Authoring aids (CR-003 §3), binding code: the terms linter (L1–L8) and the requester and performer drafters; deterministic, never invents a key | `lint`, `LintContext`, `Finding`, `draft_request`, `draft_counter`, `Intent`, `RequesterConfig`, `Capabilities`, `TemplateCandidate` | none | 1,150 |
+| `acn-binding` | lib | The Binding API (D-10): the eight interfaces as object-safe traits, and `Performer`, the performer driver (folds every event, declines what L0 can't meet, verifies and redeems tokens, writes evidence and the derivation record, folds each act before signing) | `Signer`, `Inbox`, `Executor`, `Evidence`, `Wallet`, `Gate`, `Verifier`, `TermsAuthor`, `ReferenceAuthor`, `Performer`, `StateChange`, `ServiceAd`, `call_offer`, `Level` | none | 870 |
+| `acn-binding-nostr` | lib | The reference stack behind the traits: session as Signer and Inbox, CDK wallet, Blossom evidence; the performer run loop; `K_SVC`, BUD-03 list and operator binding, all pinned | `SessionBinding`, `MintWallet`, `BlossomEvidence`, `run`, `announce`, `ensure_binding` | relays, mint, Blossom | 230 |
+| `acn-conformance` | lib | Conformance suites: `l0`, a scripted requester (own key and wallet) that drives a binding over relays and a mint and checks discovery, T0, T1, declines and that every act is clean | `l0`, `Env`, `Target`, `Report` | relays, mint, Blossom | 640 |
+| `acn-cli-shim` | lib + bin | Second reference binding: any CLI harness (stdin → stdout, files as artifacts) as an L0 performer; no MCP | `CliShim`, `CliExecutor`, `Config`; bin `acn-cli-shim` | relays, mint, Blossom, child processes | 420 |
+| `nmesh-blossom` | lib | Minimal dev Blossom server (BUD-01 get/head, BUD-02 upload with kind 24242 auth) and client (upload to every server, fetch with hash check), BUD-03 list | `serve`, `BlossomClient`, `fetch_from`, `server_list` | HTTP | 330 |
 | `acn-wallet` | lib | Wallet views shared by all hosts; `SimMint`, a pure Cashu-shaped mint with NUT-14 rules for presenter mode; settlement advice derived from the fold | `WalletView`, `Lock`, `SimMint`, `settlement::{check_payment, advise, request_token}` | none | 740 |
 | `acn-wasm` | cdylib | Browser entry point: JSON-in/JSON-out ABI over core + view + sim + wallet + author | `acn_invoke` (`op`: `fold`, `project`, `template`, `templates`, `lint`, `draft_request`, `draft_counter`, `request`, `react`, `hint`, `requester_draft`, `sign`, `mint_*`, `payment_check`, `advise`, ...) | none | 320 |
 | `nmesh-wallet` | lib | Cashu wallet over CDK (wallet feature only): top up, HTLC lock, inspect (DLEQ + NUT-07 + lock shape), redeem, NUT-14 refund (manual swap), revealed preimage (NUT-07), lock index + history per commitment | `CashuWallet` | mint HTTP; SQLite + JSON index | 590 |
 | `nmesh-mint` | lib + bin | Local Cashu test mint: CDK mint + `cdk-fake-wallet` Lightning backend + `cdk-axum` | `start(MintConfig) -> RunningMint`; bin `nmesh-mint` | HTTP; SQLite | 160 |
 | `nmesh-core` | lib | Nostr session: keys, relays, NIP-17 send/receive, inbox stream, peer discovery, ACN transport, MLS spike | `Session`, `Inbound`, `Body`, `PeerInfo`, `sign_act`, `send_act`, `acn_public`, `find_acn_services` | relays, key files | 760 |
 | `nmesh-app` | lib | Application state and view models for UIs: contacts, history, consent, commitments, board, wallet, presenter clock and hints; keeps the requester's preimages and held-out seeds; drafts and lints terms (`acn-author`) | `App`, `AppEvent`, `ContactView`, `MessageView`, `CommitmentView`, `BoardView`, `WalletView` | via `nmesh-core` and `nmesh-wallet`; `contacts.json`, `wallet/` | 1,930 |
-| `nmesh-agent-bridge` | lib + 2 bins | MCP servers as a Nostr agent; ACN T0 shim | `Bridge`, `McpHub`, `shim::Shim`; bins `nmesh-agent`, `nmesh-echo-mcp` | relays, MCP, key files | 1,320 |
+| `nmesh-agent-bridge` | lib + 2 bins | MCP servers as a Nostr agent; `acn-mcp-shim`, an L0 performer on `acn-binding` (T0, T1 with a wallet, Blossom evidence) | `Bridge`, `McpHub`, `shim::McpExecutor`, `shim::offer`; bins `nmesh-agent`, `nmesh-echo-mcp` | relays, MCP, key files | 1,320 |
 | `nmesh-acn-sim` | lib + bin | The demo cast as live Nostr peers; hosts the test mint; decrypts escrow for its holder (arbiter or settlement verifier) and requester seeds for the runner; Atlas verifies tokens (REQUEST or FUND), redeems, and claims with `k`; with `--judges`, Verity and Muse run real judges (`acn-judge`) | `start(Config) -> Running`, `MintSetup`, `Config.judges` | relays, key files, mint, judge endpoints | 850 |
 | `nmesh-cli` | bin | Dev client (`whoami`, `chat`, `send`, `card`, `listen`) and in-memory dev relay (`relay`) | `nmesh` | relays | 280 |
 | `apps/desktop/src-tauri` | bin | Tauri shell: 28 commands, 25 delegating to `nmesh_app::App` plus `build_info`, `update_check`, `restart_to_update` (dev builds: rebuild when the checkout moves); forwards `AppEvent`s | `nmesh-desktop` | WebView IPC | 370 |
@@ -436,7 +441,7 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | Every anomaly code reachable | §10 | `Code::ALL` | `every_anomaly_code_is_exercised` | ✅ |
 | Private-mode transport | §5.5 | `Session::send_act`; `Body::Act` | `app_flow`, `live` | ✅ |
 | `K_SVC` with per-tool terms offers | §4, §7 | `shim::service_advertisement`; `nmesh_acn_sim::advertise` | `live` | ✅ |
-| T0 over MCP (`acn-mcp-shim`) | §6.3, §11 | `shim::Shim::drive` | `app_flow` | ✅ price 0 only |
+| T0 and T1 over MCP (`acn-mcp-shim`), and over any CLI (`acn-cli-shim`) | §6.3, §11 | `acn_binding::Performer` with `shim::McpExecutor` / `acn_cli_shim::CliExecutor` | `app_flow`; the L0 suite, priced and free, in `acn-conformance/tests/l0.rs` and `acn-cli-shim/tests/l0.rs` | ✅ |
 | Hashlock settlement (T1, N) | INV-6, V-10, §8 | preimage in `SATISFY` / `RULING`; `SettlementView` | `t1_preimage`, *paid*, *dispute* | ✅ |
 | HTLC lock at request time, token in `content.token` | §8.2 steps 1–2 | `CashuWallet::lock_htlc`; `App::request` (NIP-44 to the performer) | `htlc`, `live` | ✅ test mint |
 | Performer verifies before work (DLEQ + NUT-07 + terms) | §8.2 step 3, §13 forged token | `CashuWallet::inspect`; `settlement::check_payment`; `acn_sim::react_paid` (waits, or `DECLINE payment_invalid`) | `htlc`, `performer_waits_for_and_obeys_the_payment_check` | ✅ |
@@ -448,9 +453,9 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | T0 paid (unlocked token, swapped before work) | §6.3, §8.3 | — (the shim is free-only) | — | ⬜ |
 | Milestones | §8.5 (a sequence of commitments; no multi-token commitments) | composed above the protocol | — | n/a by design |
 | Wallet backup / NIP-60, NWC top-up, real mints | — | — | — | ⬜ |
-| Blossom artifacts, derivation records | §9 | `x` tags carried only | — | ⬜ |
+| Blossom artifacts, derivation records | §9 | `nmesh-blossom` (dev server, client); `Performer::report` stores artifacts and a derivation record per `REPORT` through `Evidence`; `K_SVC` `blossom` and a BUD-03 list | `nmesh-blossom` unit test; the L0 suite fetches and hash-checks every artifact and record | ✅ reference bindings (the demo cast still reports inline) |
 | `K_SCORE`, reputation (D-13) | §11 | kind reserved | — | ⬜ |
-| Binding API for external harnesses | §11, D-10; proposal in `harness-binding-API.md` | interfaces implemented directly by the reference bindings; no `acn-binding` crate, no `binding_level`, no conformance suites | — | 🟡 proposal |
+| Binding API for external harnesses | §11, D-10; `harness-binding-API.md` | `acn-binding` traits and `Performer`; `acn-binding-nostr` adapters; `binding_level` in `K_SVC` (shown as a claim in the consent dialog); the L0 suite (`acn-conformance`); two bindings at L0 | `acn-binding` unit tests; both L0 suite runs | ✅ L0; ⬜ L1–L3 suites, requester bindings on the traits |
 | Projections (thread / evidence view) | §12 | `acn_view::project`; `CommitmentCard.svelte` | playthrough, presenter script | ✅ |
 | Board (queue view) across agents and roles | §12 | `acn_view::Lane`, `Projection.{lane, my_role, next, needs_me, pending_endorsement, updated_at}`; `App::board(closed_limit)`; `Board.svelte`, `BoardTile.svelte` | `board_lanes_follow_the_workflow`, `live` (paging, needs_me), `scripts/board.mjs` | ✅ (no drag-and-drop, by design) |
 | Ledger view | §12 | wallet panel history only | — | 🟡 |
@@ -516,6 +521,7 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | Desktop | `pnpm tauri dev` / `pnpm tauri build` | deb, rpm, AppImage |
 | Presenter | `pnpm dev` | no Tauri, no relay |
 | Live demo | `nmesh relay`, then `nmesh-acn-sim [--judges judges.toml]`, then the desktop app | see DEMO.md; without `--judges` the judges are scripted |
+| A binding at L0 | `nmesh blossom` (dev server on :3400), then `nmesh-agent --config agent.toml` with `[acn] blossom`, `price_sat`, `mint`, or `acn-cli-shim --config crates/acn-cli-shim/shim.example.toml` | add the agent's npub in the desktop app; the consent dialog shows "claims L0" |
 | Try a judge panel | `cargo run -p acn-judge --example try_panel -- crates/acn-judge/judges.example.toml [artifact.txt]` | judges once, as is and with the demo's injection line; prints the attestation content |
 
 | Test suite | Covers |
@@ -529,7 +535,9 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | `acn-judge/tests/templates.rs` | the published templates (`docs/acn/templates/`) parse, instantiate into terms that parse and close, re-instantiate exactly (V-28); rubric files match their hashes; judges pinned to this harness and `judges.example.toml` |
 | `nmesh-core/tests/dm_roundtrip.rs` | NIP-17 text and structured messages over a mock relay |
 | `nmesh-core/tests/relay_restart.rs` | a relay restarted on the same port gets the pinned events back, with the same ids; unpinned ones stay lost |
-| `nmesh-agent-bridge/tests/app_flow.rs` | app ↔ relay ↔ bridge ↔ MCP: chat, forms, ACN T0 |
+| `nmesh-agent-bridge/tests/app_flow.rs` | app ↔ relay ↔ bridge ↔ MCP: chat, forms, ACN T0 (no Blossom: no level claimed) |
+| `acn-conformance/tests/l0.rs`, `acn-cli-shim/tests/l0.rs` | the L0 suite against `acn-mcp-shim` (echo MCP server) and `acn-cli-shim` (`wc -w`), each priced and free, on a local relay, CDK test mint and Blossom server |
+| `acn-binding` unit, `nmesh-blossom` unit | the driver's REPORT evidence and derivation record, idempotence, declines; Blossom upload auth and hash-checked fetch |
 | `nmesh-acn-sim/tests/live.rs` | app ↔ relay ↔ cast ↔ mint: discovery, all sixteen scenarios via hints, real balances (300 → 39 available + 60 locked; Atlas 201), insufficient funds, board paging, reset (incl. restart), the app's `held_out` reproduces the judges' revealed sample; opt-in (`--ignored`, `NMESH_JUDGES`): `/judged`, `/injected` and `/held-out` with real judges |
 | `nmesh-wallet/tests/htlc.rs` | real CDK mint: top up, lock, DLEQ/NUT-07 inspect, wrong preimage / wrong key / early refund rejected, redeem, payer reads the preimage, double spend, refund after locktime, insufficient funds, index survives reopen |
 | `nmesh-wallet/tests/preimage_visibility.rs` | CR-002 spike: the payer learns the preimage from NUT-07 after the receiver redeems (in-process CDK mint, or `NMESH_SPIKE_MINT`) |
@@ -545,9 +553,11 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 - **Test sats only.** The mint's Lightning backend is fake. Preimages and wallet proofs sit in
   plaintext on disk. No NIP-60 backup, no NWC, no real mint. The demo cast's operator binding
   has no scopes (no `max_sat`).
-- **The MCP shim is free T0 only.** It declines priced terms, other triggers and profiles, open
-  conditions and held-out instances (`refusal` in `shim.rs`); no Blossom, derivation records or
-  wallet yet (harness-binding-API.md §3).
+- **The reference bindings are L0 only.** `acn-mcp-shim` and `acn-cli-shim` serve T0 and T1 under
+  the requester trigger and decline profile N, other triggers, held-out instances and
+  disqualifiers (`Performer::refusal`). There are no L1–L3 suites yet, and the demo cast and the
+  app's requester side don't run on the traits. `nmesh blossom` is a dev server (no deletion,
+  quotas or mirroring).
 - **Refund is a manual swap** (CDK's `receive` only tries the preimage path for HTLC proofs).
 - **Live refunds wait for the real locktime** (≈ 25 h in the demo templates); presenter mode can
   fast-forward it.

@@ -20,6 +20,10 @@ nmesh-proto.workspace = true
 nmesh-contracts.workspace = true
 nmesh-core.workspace = true
 acn-core.workspace = true
+acn-binding.workspace = true
+acn-binding-nostr.workspace = true
+nmesh-wallet.workspace = true
+nmesh-blossom.workspace = true
 rmcp = { workspace = true, features = [
     "client",
     "server",

@@ -1,0 +1,19 @@
+[package]
+name = "acn-binding-nostr"
+description = "Adapters from the ACN Binding API to the reference stack: nmesh-core sessions (Signer, Inbox), the CDK wallet (Wallet), Blossom (Evidence); plus the performer run loop, service advertisement and operator binding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+acn-core.workspace = true
+acn-binding.workspace = true
+nmesh-core.workspace = true
+nmesh-wallet.workspace = true
+nmesh-blossom.workspace = true
+nostr-sdk.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+anyhow.workspace = true

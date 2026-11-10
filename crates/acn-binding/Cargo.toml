@@ -1,0 +1,18 @@
+[package]
+name = "acn-binding"
+description = "The ACN Binding API (D-10, docs/harness-binding-API.md): the eight interfaces as Rust traits and a performer driver that runs the lifecycle on them. Harness-neutral: no transport, no wallet, no harness code"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+acn-core.workspace = true
+acn-wallet.workspace = true
+acn-author.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

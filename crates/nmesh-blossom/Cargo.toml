@@ -1,0 +1,23 @@
+[package]
+name = "nmesh-blossom"
+description = "A minimal Blossom server for development (BUD-01 retrieval, BUD-02 upload with kind 24242 auth) and its client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+nostr.workspace = true
+axum = "0.8"
+tokio = { workspace = true, features = ["net"] }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64 = "0.22"
+anyhow.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+rustls.workspace = true
