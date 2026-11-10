@@ -162,20 +162,25 @@ export class AppStore {
     if (!this.backend || !this.active) return null;
     try {
       const c = await this.backend.acnRequest(this.active, text);
-      this.putCommitment(c);
-      this.messages = upsertSorted(this.messages, {
-        id: c.id,
-        conversation: c.conversation,
-        sender: this.me?.pubkey ?? "",
-        mine: true,
-        created_at: c.created_at,
-        body: { kind: "commitment", commitment: c.id },
-      });
+      this.putRequest(c);
       return c.id;
     } catch (e) {
       this.fail(e);
       return null;
     }
+  }
+
+  /** A REQUEST we just sent: its card, and its place in the conversation. */
+  private putRequest(c: Commitment) {
+    this.putCommitment(c);
+    this.messages = upsertSorted(this.messages, {
+      id: c.id,
+      conversation: c.conversation,
+      sender: this.me?.pubkey ?? "",
+      mine: true,
+      created_at: c.created_at,
+      body: { kind: "commitment", commitment: c.id },
+    });
   }
 
   /** Requester acts. `arg` is the reject note / dispute reason. */
@@ -201,6 +206,35 @@ export class AppStore {
       if (this.view === "board") await this.loadBoard();
     } catch (e) {
       this.fail(e);
+    }
+  }
+
+  /** Counter-offer with edited terms (profile N). Returns false on error (shown as a toast). */
+  async counter(id: string, terms: any, reason: string, conversation: string | null = null): Promise<boolean> {
+    const p = conversation ?? this.active;
+    if (!this.backend || !p) return false;
+    try {
+      const c = await this.backend.acnCounter(p, id, terms, reason);
+      if (c.conversation === this.active) this.putCommitment(c);
+      if (this.view === "board") await this.loadBoard();
+      return true;
+    } catch (e) {
+      this.fail(e);
+      return false;
+    }
+  }
+
+  /** Send drafted terms as a REQUEST to the active conversation. */
+  async requestTerms(profile: string, terms: any): Promise<boolean> {
+    const p = this.active;
+    if (!this.backend || !p) return false;
+    try {
+      const c = await this.backend.acnRequestTerms(p, profile, terms);
+      this.putRequest(c);
+      return true;
+    } catch (e) {
+      this.fail(e);
+      return false;
     }
   }
 

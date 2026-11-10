@@ -28,6 +28,7 @@ async fn cli_shim_passes_l0_priced_and_free() -> anyhow::Result<()> {
     let env = Env {
         relays: vec![url.clone()],
         mint: Some(mint.url.clone()),
+        blossom: Some(blossom.url.clone()),
     };
     for (name, price) in [("priced", 3), ("free", 0)] {
         let dir = std::env::temp_dir().join(format!("acn-cli-l0-{name}-{}", std::process::id()));

@@ -101,6 +101,22 @@ impl Evidence for BlossomEvidence {
     fn servers(&self) -> Vec<String> {
         self.0.servers.clone()
     }
+    fn fetch<'a>(
+        &'a self,
+        hash: &'a str,
+        hints: &'a [String],
+    ) -> BoxFut<'a, Result<Vec<u8>, String>> {
+        Box::pin(async move {
+            let servers: Vec<String> = hints
+                .iter()
+                .cloned()
+                .chain(self.0.servers.clone())
+                .collect();
+            nmesh_blossom::fetch_from(&reqwest::Client::new(), &servers, hash)
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
 }
 
 /// Issue (if missing) and acknowledge an operator binding for the session's key (Core §4),

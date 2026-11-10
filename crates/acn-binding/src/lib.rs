@@ -131,6 +131,13 @@ pub trait Evidence: Send + Sync {
     fn put(&self, bytes: Vec<u8>, media_type: String) -> BoxFut<'_, Result<String, String>>;
     /// Where the blobs can be fetched (published as the binding's server list).
     fn servers(&self) -> Vec<String>;
+    /// Fetch a blob by hash: from `hints` (e.g. a terms tag's URL), then the own servers. The
+    /// caller checks the hash.
+    fn fetch<'a>(
+        &'a self,
+        hash: &'a str,
+        hints: &'a [String],
+    ) -> BoxFut<'a, Result<Vec<u8>, String>>;
 }
 
 /// Cashu operations.
@@ -272,6 +279,8 @@ pub struct Performer {
     /// The advertised minimum price (`K_SVC` `price.min`): cheaper requests are declined.
     pub min_price_sat: u64,
     pub store: Store,
+    /// Terms documents referenced by hash rather than inlined (Core §7).
+    docs: Mutex<BTreeMap<String, Value>>,
     redeemed: Mutex<HashSet<String>>,
     /// Commitments the driver is acting on (an act is in flight).
     busy: Mutex<HashSet<String>>,
@@ -292,6 +301,7 @@ impl Performer {
             gate: None,
             min_price_sat: 0,
             store: Store::default(),
+            docs: Mutex::new(BTreeMap::new()),
             redeemed: Mutex::new(HashSet::new()),
             busy: Mutex::new(HashSet::new()),
         }
@@ -331,11 +341,12 @@ impl Performer {
     /// Fold an inbound event and make the performer's move, if it has one.
     pub async fn on_event(&self, e: Event) -> StateChange {
         let id = e.id.clone();
+        self.resolve_terms(&e).await;
         let c = self.store.add(e);
         let before = self.phase(&c);
         let mut change = self.drive(&c).await;
         change.from = before;
-        let out = fold(&self.store.events(&c), &BTreeMap::new());
+        let out = fold(&self.store.events(&c), &self.docs());
         change.anomalies = out
             .anomalies
             .into_iter()
@@ -344,8 +355,35 @@ impl Performer {
         change
     }
 
+    /// Terms by reference: fetch each through Evidence and keep it if it hashes right.
+    async fn resolve_terms(&self, e: &Event) {
+        let Some(ev) = &self.evidence else { return };
+        for (hash, hint) in acn_core::draft::referenced_terms(std::slice::from_ref(e)) {
+            if self.docs.lock().unwrap().contains_key(&hash) {
+                continue;
+            }
+            let hints: Vec<String> = hint.into_iter().collect();
+            let doc = ev
+                .fetch(&hash, &hints)
+                .await
+                .ok()
+                .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+                .filter(|v| acn_core::jcs::hash(v).ok().as_deref() == Some(hash.as_str()));
+            match doc {
+                Some(v) => {
+                    self.docs.lock().unwrap().insert(hash, v);
+                }
+                None => tracing::warn!(%hash, "binding: referenced terms not retrievable"),
+            }
+        }
+    }
+
+    fn docs(&self) -> BTreeMap<String, Value> {
+        self.docs.lock().unwrap().clone()
+    }
+
     fn phase(&self, c: &str) -> Option<Phase> {
-        let out = fold(&self.store.events(c), &BTreeMap::new());
+        let out = fold(&self.store.events(c), &self.docs());
         out.commitments
             .get(c)
             .and_then(|x| x.state.as_ref())
@@ -383,7 +421,7 @@ impl Performer {
     async fn drive_inner(&self, c: &str, change: &mut StateChange) -> Result<(), String> {
         let me = self.signer.pubkey();
         let events = self.store.events(c);
-        let out = fold(&events, &BTreeMap::new());
+        let out = fold(&events, &self.docs());
         let Some(cm) = out.commitments.get(c) else {
             return Ok(());
         };
@@ -642,7 +680,7 @@ impl Performer {
         let act = self.signer.sign(draft, Some(not_before))?;
         let mut events = self.store.events(c);
         events.push(act.clone());
-        let out = fold(&events, &BTreeMap::new());
+        let out = fold(&events, &self.docs());
         if let Some(a) = out
             .anomalies
             .iter()
@@ -668,11 +706,17 @@ impl Performer {
         }
         let now = u64::MAX / 2;
         let Some(acn_wallet::settlement::Advice::Redeem { preimage, .. }) =
-            acn_wallet::settlement::advise(events, c, &self.signer.pubkey(), now)
+            acn_wallet::settlement::advise_with(
+                events,
+                &self.docs(),
+                c,
+                &self.signer.pubkey(),
+                now,
+            )
         else {
             return Ok(0);
         };
-        let out = fold(events, &BTreeMap::new());
+        let out = fold(events, &self.docs());
         let requester = out
             .commitments
             .get(c)
@@ -808,6 +852,10 @@ mod tests {
         }
         fn servers(&self) -> Vec<String> {
             vec!["mem:".into()]
+        }
+        fn fetch<'a>(&'a self, h: &'a str, _: &'a [String]) -> BoxFut<'a, Result<Vec<u8>, String>> {
+            let b = self.0.lock().unwrap().get(h).cloned();
+            Box::pin(async move { b.ok_or_else(|| "missing".to_string()) })
         }
     }
 

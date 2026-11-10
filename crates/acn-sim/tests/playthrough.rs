@@ -507,3 +507,71 @@ fn reactions_are_idempotent() {
     let after = react(&w.cast, &w.events, &w.escrow);
     assert!(after.iter().all(|m| m.draft.kind != K_PROMISE));
 }
+
+/// Profile N in both directions (P2): the requester answers Atlas's counter with its own; Atlas
+/// accepts what it can be held to and declines what it can't.
+#[test]
+fn requester_counters_and_atlas_answers() {
+    let step = |w: &mut World, c: &str| {
+        let moves = react_with(&w.cast, &w.events, &w.escrow, None, &w.keys, &w.seeds);
+        for m in moves {
+            let key = w.actor_keys[&m.actor];
+            w.sign(&m.draft, key, m.not_before);
+        }
+        w.view(c)
+    };
+    let counter = |w: &mut World, c: &str, f: &dyn Fn(&mut serde_json::Value)| {
+        let p = w.view(c);
+        assert!(
+            p.allowed.counter,
+            "the requester may counter while negotiating"
+        );
+        let mut t = p.negotiable_terms.clone().expect("terms to edit");
+        f(&mut t);
+        let a = HintAction::Counter {
+            terms: t,
+            reason: "Two revision rounds, please".into(),
+        };
+        let (d, nb) = requester_draft(&w.events, c, &a, None).unwrap();
+        w.sign(&d, w.me, nb);
+    };
+
+    // Accepted: a closed counter on an unpaid commitment.
+    let mut w = World::new();
+    let c = w.request("negotiate");
+    let p = step(&mut w, &c);
+    assert_eq!(p.phase, Some(Phase::Countered), "Atlas counters first");
+    counter(&mut w, &c, &|t| t["rework_limit"] = json!(2));
+    let p = step(&mut w, &c);
+    assert_eq!(
+        p.phase,
+        Some(Phase::Promised),
+        "{:?}",
+        p.timeline
+            .iter()
+            .map(|e| (e.act, &e.summary))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(p.terms_card.as_ref().unwrap().pay_if.rework_limit, 2);
+    assert_eq!(
+        p.terms_card.as_ref().unwrap().drafted_by_role,
+        acn_view::Role::Requester
+    );
+    w.play(&c);
+    assert_eq!(w.view(&c).phase, Some(Phase::Satisfied));
+
+    // Declined: a counter that leaves a condition open.
+    let mut w = World::new();
+    let c = w.request("negotiate");
+    step(&mut w, &c);
+    counter(
+        &mut w,
+        &c,
+        &|t| {
+            t["conditions"] = json!([{"id": "c1", "class": "open", "description": "make it nice"}])
+        },
+    );
+    let p = step(&mut w, &c);
+    assert_eq!(p.phase, Some(Phase::Declined));
+    assert!(p.timeline.iter().any(|e| e.act == "DECLINE"));
+}

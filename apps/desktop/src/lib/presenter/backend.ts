@@ -300,6 +300,16 @@ export async function createPresenterBackend(): Promise<Backend> {
     },
     acnWithdraw: async (_p, c) => (world.act(c, { type: "withdraw" }), commitment(c)!),
     acnAcceptCounter: async (_p, c) => (world.act(c, { type: "accept_counter" }), commitment(c)!),
+    acnCounter: async (_p, c, terms, reason) => (world.act(c, { type: "counter", terms, reason }), commitment(c)!),
+    acnRequestTerms: async (pubkey, profile, terms) => {
+      requireConsent(pubkey);
+      const cid = world.requestTerms(pubkey, profile, terms);
+      const c = commitment(cid)!;
+      push(pubkey, { id: cid, conversation: pubkey, sender: world.me, mine: true, created_at: c.created_at, body: { kind: "commitment", commitment: cid } });
+      return c;
+    },
+    acnDraft: async (intent) => world.draft(intent),
+    acnLint: async (terms, binding) => acn("lint", { terms, binding }),
     acnFund: async (_p, c) => (world.act(c, { type: "fund" }), commitment(c)!),
     acnDispute: async (_p, c, reason) => (world.act(c, { type: "dispute", reason: reason || "I dispute this outcome" }), commitment(c)!),
     acnHint: async (_p, c) => {

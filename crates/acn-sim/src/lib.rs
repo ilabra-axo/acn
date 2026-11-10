@@ -781,6 +781,7 @@ pub fn react(cast: &Cast, events: &[Event], escrow: &BTreeMap<String, String>) -
     react_inner(
         cast,
         events,
+        &BTreeMap::new(),
         escrow,
         None,
         &BTreeMap::new(),
@@ -801,7 +802,28 @@ pub fn react_with(
     keys: &BTreeMap<String, String>,
     seeds: &BTreeMap<String, String>,
 ) -> Vec<Move> {
-    react_inner(cast, events, escrow, payments, keys, seeds)
+    react_inner(
+        cast,
+        events,
+        &BTreeMap::new(),
+        escrow,
+        payments,
+        keys,
+        seeds,
+    )
+}
+
+/// [`react_with`] with terms documents referenced rather than inlined (Core §7).
+pub fn react_docs(
+    cast: &Cast,
+    events: &[Event],
+    documents: &BTreeMap<String, Value>,
+    escrow: &BTreeMap<String, String>,
+    payments: Option<&BTreeMap<String, PaymentCheck>>,
+    keys: &BTreeMap<String, String>,
+    seeds: &BTreeMap<String, String>,
+) -> Vec<Move> {
+    react_inner(cast, events, documents, escrow, payments, keys, seeds)
 }
 
 /// Like [`react`], but the performer only works on a priced commitment once its token is
@@ -816,6 +838,7 @@ pub fn react_paid(
     react_inner(
         cast,
         events,
+        &BTreeMap::new(),
         escrow,
         Some(payments),
         &BTreeMap::new(),
@@ -826,12 +849,13 @@ pub fn react_paid(
 fn react_inner(
     cast: &Cast,
     events: &[Event],
+    documents: &BTreeMap<String, Value>,
     escrow: &BTreeMap<String, String>,
     payments: Option<&BTreeMap<String, PaymentCheck>>,
     keys: &BTreeMap<String, String>,
     seeds: &BTreeMap<String, String>,
 ) -> Vec<Move> {
-    let out = fold(events, &BTreeMap::new());
+    let out = fold(events, documents);
     let mut moves = Vec::new();
     for c in out.commitments.values() {
         let (Some(st), Some(terms)) = (&c.state, &c.terms) else {
@@ -891,6 +915,12 @@ fn react_inner(
                 Some(PaymentCheck::Ok) => {}
             }
         }
+        if performer == Actor::Performer {
+            if let Some(m) = react_negotiation(cast, &ctx, events, documents) {
+                moves.extend(m);
+                continue;
+            }
+        }
         if ctx.scenario == "held-out" {
             moves.extend(react_held_out(
                 cast,
@@ -913,6 +943,127 @@ fn react_inner(
         ));
     }
     moves
+}
+
+/// The terms a `REQUEST` or `COUNTER` in `events` carries for `hash` (inline or a document).
+fn terms_by_hash(
+    events: &[Event],
+    documents: &BTreeMap<String, Value>,
+    hash: &str,
+) -> Option<acn_core::Terms> {
+    let inline = events
+        .iter()
+        .filter(|e| e.kind == K_REQUEST || e.kind == K_COUNTER)
+        .filter(|e| {
+            e.tags.iter().any(|t| {
+                t.first().map(String::as_str) == Some("terms")
+                    && t.get(1).map(String::as_str) == Some(hash)
+            })
+        })
+        .find_map(|e| {
+            serde_json::from_str::<Value>(&e.content)
+                .ok()?
+                .get("terms")
+                .filter(|t| !t.is_null())
+                .cloned()
+        });
+    acn_core::Terms::parse(&inline.or_else(|| documents.get(hash).cloned())?).ok()
+}
+
+/// Atlas as a negotiating performer, for any scenario (profile N):
+/// - a requester's `COUNTER`: accepted if Atlas can be held to it (every condition closed, no
+///   held-out instances to re-seed, and on a paid commitment the price the locked token covers);
+///   declined otherwise, with the reason;
+/// - a `REQUEST` with `open` conditions (e.g. from the requester drafter) outside the scripted
+///   scenarios: Atlas's drafter closes them from its published template, or Atlas declines.
+fn react_negotiation(
+    cast: &Cast,
+    ctx: &Ctx,
+    events: &[Event],
+    documents: &BTreeMap<String, Value>,
+) -> Option<Vec<Move>> {
+    let (c, st, p) = (ctx.c.id.as_str(), ctx.st, ctx.c.performer.as_str());
+    let head = st.head.as_str();
+    let parties = &ctx.parties[..];
+    if ctx.c.profile != acn_core::Profile::N {
+        return None;
+    }
+    let answered = ctx.exists(K_ACCEPT, p, |e| Ctx::prev_is(e, head))
+        || ctx.exists(K_DECLINE, p, |e| Ctx::prev_is(e, head))
+        || ctx.exists(K_COUNTER, p, |e| Ctx::prev_is(e, head));
+    match st.phase {
+        Phase::Countered if st.pending.as_ref().is_some_and(|x| x.by == ctx.c.requester) => {
+            if answered {
+                return Some(vec![]);
+            }
+            let pending = st.pending.as_ref()?;
+            let theirs = terms_by_hash(events, documents, &pending.terms)?;
+            let current = ctx.c.terms.as_ref()?;
+            let paid = current.payment.is_some() && current.price.amount > 0;
+            let refuse = if let Some(why) = theirs.unclosed() {
+                Some(format!("I can't be held to open terms: {why}"))
+            } else if theirs.has_instances() {
+                Some("held-out instances would need a new seed: send a new request".into())
+            } else if paid && theirs.price.amount != current.price.amount {
+                Some(format!(
+                    "your locked token covers {} sat: send a new request for another price",
+                    current.price.amount
+                ))
+            } else {
+                None
+            };
+            let m = match refuse {
+                Some(note) => mv(Actor::Performer, 1100, format!("Atlas reads your counter and declines: {note}."),
+                    Draft::closing(K_DECLINE, c, head, parties, "counter_unacceptable").content(json!({"reason": "counter_unacceptable", "note": note})), ctx),
+                None => mv(Actor::Performer, 1100, "Atlas reads your counter, can be held to it, and ACCEPTs: the commitment binds to your version's hash.",
+                    Draft::accept(c, head, parties, &pending.terms), ctx),
+            };
+            Some(vec![m])
+        }
+        Phase::Requested
+            if !matches!(
+                ctx.scenario,
+                "drafted" | "disqualified" | "negotiate" | "held-out"
+            ) && ctx.c.terms.as_ref().is_some_and(|t| t.unclosed().is_some()) =>
+        {
+            if answered {
+                return Some(vec![]);
+            }
+            let terms = ctx.c.terms.as_ref()?;
+            // Atlas proposes Verity as the checker when the request names none.
+            let caps = acn_author::Capabilities {
+                templates: vec![acn_author::TemplateCandidate {
+                    event: cast.templates.get("retry-change/v1").cloned(),
+                    content: retry_change_template(),
+                }],
+                verifiers: vec![acn_core::terms::Verifier {
+                    pubkey: cast.verifier.clone(),
+                    classes: vec![acn_core::terms::ConditionClass::Mechanical],
+                }],
+                ..Default::default()
+            };
+            let m = match acn_author::draft_counter(terms, &caps) {
+                Some(d) => mv(
+                    Actor::Performer,
+                    1300,
+                    format!(
+                        "Atlas's drafter closes your open conditions from its template {}: {}",
+                        d.template.as_deref().unwrap_or("?"),
+                        d.reason
+                    ),
+                    Draft::counter(c, head, parties, &d.terms, &d.reason).ok()?,
+                    ctx,
+                ),
+                None => {
+                    let why = terms.unclosed().unwrap_or_default();
+                    mv(Actor::Performer, 1100, format!("Atlas has no template that closes your open conditions ({why}), so it declines rather than promise against them."),
+                        Draft::closing(K_DECLINE, c, head, parties, "terms_unclosed").content(json!({"reason": "terms_unclosed", "note": why})), ctx)
+                }
+            };
+            Some(vec![m])
+        }
+        _ => None,
+    }
 }
 
 /// The held-out scenario (CR-003 §2.3): Atlas commits its seed when it promises and reveals it
@@ -1606,6 +1757,11 @@ fn react_one(
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HintAction {
     AcceptCounter,
+    /// Propose other terms (profile N): a `COUNTER` carrying `terms`, explained by `reason`.
+    Counter {
+        terms: Value,
+        reason: String,
+    },
     Satisfy,
     Reject {
         condition: String,
@@ -1634,7 +1790,17 @@ pub struct Hint {
 
 /// The requester's next scripted step for a commitment (for presenters and autopilot).
 pub fn requester_hint(events: &[Event], commitment: &str, now: u64) -> Option<Hint> {
-    let out = fold(events, &BTreeMap::new());
+    requester_hint_with(events, &BTreeMap::new(), commitment, now)
+}
+
+/// [`requester_hint`] with terms documents referenced rather than inlined.
+pub fn requester_hint_with(
+    events: &[Event],
+    documents: &BTreeMap<String, Value>,
+    commitment: &str,
+    now: u64,
+) -> Option<Hint> {
+    let out = fold(events, documents);
     let c = out.commitments.get(commitment)?;
     let (st, terms) = (c.state.as_ref()?, c.terms.as_ref()?);
     let scenario = terms.deliverable.tool.as_deref().unwrap_or_default();
@@ -1805,7 +1971,18 @@ pub fn requester_draft(
     action: &HintAction,
     preimage: Option<&str>,
 ) -> Option<(Draft, u64)> {
-    let out = fold(events, &BTreeMap::new());
+    requester_draft_with(events, &BTreeMap::new(), commitment, action, preimage)
+}
+
+/// [`requester_draft`] with terms documents referenced rather than inlined.
+pub fn requester_draft_with(
+    events: &[Event],
+    documents: &BTreeMap<String, Value>,
+    commitment: &str,
+    action: &HintAction,
+    preimage: Option<&str>,
+) -> Option<(Draft, u64)> {
+    let out = fold(events, documents);
     let c = out.commitments.get(commitment)?;
     let st = c.state.as_ref()?;
     let parties = [c.requester.as_str(), c.performer.as_str()];
@@ -1815,6 +1992,9 @@ pub fn requester_draft(
             Draft::accept(cid, head, &parties, &st.pending.as_ref()?.terms)
         }
         HintAction::Satisfy => Draft::satisfy(cid, head, &parties, preimage),
+        HintAction::Counter { terms, reason } => {
+            Draft::counter(cid, head, &parties, terms, reason).ok()?
+        }
         HintAction::Reject { condition, note } => Draft::reject(
             cid,
             head,

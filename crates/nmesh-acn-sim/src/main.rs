@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use acn_sim::Actor;
 use clap::Parser;
-use nmesh_acn_sim::{start, Config, MintSetup};
+use nmesh_acn_sim::{start, BlossomSetup, Config, MintSetup};
 use nmesh_core::ToBech32;
 use tracing_subscriber::EnvFilter;
 
@@ -31,6 +31,12 @@ struct Args {
     /// SQLite file of the in-process test mint (kept so wallets stay valid across runs).
     #[arg(long, default_value = ".nmesh/mint/mint.sqlite")]
     mint_db: PathBuf,
+    /// Atlas's Blossom server for artifacts and derivation records: hosted here on this address.
+    #[arg(long, default_value = "127.0.0.1:3400")]
+    blossom_listen: std::net::SocketAddr,
+    /// Use running Blossom servers instead (comma-separated), or `none` for inline results only.
+    #[arg(long, env = "NMESH_BLOSSOM")]
+    blossom: Option<String>,
     /// Real judges for the judged scenarios: a TOML panel (see crates/acn-judge/judges.example.toml).
     /// Without it, the judges are scripted.
     #[arg(long, env = "NMESH_JUDGES")]
@@ -55,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
     let relays = a.relays.join(", ");
     let running = start(Config {
         relays: a.relays,
-        data: a.data,
+        data: a.data.clone(),
         pace: a.pace,
         mint: match a.mint {
             Some(u) => MintSetup::External(u),
@@ -65,6 +71,16 @@ async fn main() -> anyhow::Result<()> {
             },
         },
         judges,
+        blossom: match a.blossom.as_deref().map(str::trim) {
+            Some("none") | Some("") => BlossomSetup::None,
+            Some(list) => {
+                BlossomSetup::External(list.split(',').map(|x| x.trim().to_string()).collect())
+            }
+            None => BlossomSetup::Host {
+                listen: a.blossom_listen,
+                dir: Some(a.data.join("blossom")),
+            },
+        },
     })
     .await?;
 

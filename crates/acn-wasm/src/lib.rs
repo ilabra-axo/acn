@@ -248,6 +248,15 @@ pub fn invoke(req: &str) -> Result<Value, String> {
             ser(&m.view(&arg::<String>(&r, "owner")?))
         }
         // The performer's check of a REQUEST's token against its terms (Core.md §8.2 step 3).
+        // A REQUEST with terms the requester drafted (the presenter's drafting panel).
+        "request_terms" => {
+            let performer: String = arg(&r, "performer")?;
+            let profile: String = arg(&r, "profile")?;
+            let terms: Value = arg(&r, "terms")?;
+            acn_core::terms::Terms::check(&terms)
+                .map_err(|(c, e)| format!("{}: {e}", c.as_str()))?;
+            ser(&Draft::request(&performer, &profile, &terms, None).map_err(|e| e.to_string())?)
+        }
         "payment_check" => {
             let m: SimMint = arg(&r, "mint")?;
             let events: Vec<Event> = arg(&r, "events")?;

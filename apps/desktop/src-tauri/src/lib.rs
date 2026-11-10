@@ -5,6 +5,8 @@
 //! - `NMESH_RELAY`  comma-separated relay URLs (default `ws://127.0.0.1:7777`)
 //! - `NMESH_DATA`   data directory (default: the OS app-data dir)
 //! - `NMESH_NAME`   display name to publish
+//! - `NMESH_BLOSSOM` Blossom server(s) for terms too large to inline (default
+//!   `http://127.0.0.1:3400`, the server `nmesh-acn-sim` hosts; `none` disables)
 //! - `NMESH_MINT`   Cashu mint of the built-in wallet (default `http://127.0.0.1:3338`, the test
 //!   mint `nmesh-acn-sim` hosts; empty or `none` disables the wallet)
 
@@ -111,6 +113,39 @@ async fn acn_accept_counter(
     commitment: String,
 ) -> Result<CommitmentView, AppError> {
     app.accept_counter(&pubkey, &commitment).await
+}
+
+#[tauri::command]
+async fn acn_counter(
+    app: State<'_, App>,
+    pubkey: String,
+    commitment: String,
+    terms: Value,
+    reason: String,
+) -> Result<CommitmentView, AppError> {
+    app.counter(&pubkey, &commitment, terms, &reason).await
+}
+
+#[tauri::command]
+async fn acn_request_terms(
+    app: State<'_, App>,
+    pubkey: String,
+    profile: String,
+    terms: Value,
+) -> Result<CommitmentView, AppError> {
+    app.request_terms(&pubkey, &profile, terms).await
+}
+
+#[tauri::command]
+async fn acn_draft(app: State<'_, App>, intent: Value, config: Value) -> Result<Value, AppError> {
+    let intent: acn_author::Intent = serde_json::from_value(intent).map_err(|e| AppError::Invalid(e.to_string()))?;
+    let config: acn_author::RequesterConfig = serde_json::from_value(config).unwrap_or_default();
+    Ok(serde_json::to_value(app.draft_request(&intent, &config).await).unwrap_or_default())
+}
+
+#[tauri::command]
+fn acn_lint(app: State<'_, App>, terms: Value, binding: bool) -> Result<Value, AppError> {
+    Ok(serde_json::to_value(app.lint_terms(&terms, binding)?).unwrap_or_default())
 }
 
 #[tauri::command]
@@ -313,6 +348,12 @@ pub fn run() {
             };
             let mut config = AppConfig::new(relays, data_dir);
             config.display_name = std::env::var("NMESH_NAME").ok();
+            config.blossom = std::env::var("NMESH_BLOSSOM")
+                .unwrap_or_else(|_| "http://127.0.0.1:3400".into())
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty() && s != "none")
+                .collect();
             config.mint = match std::env::var("NMESH_MINT") {
                 Ok(m) if m.trim().is_empty() || m.trim() == "none" => None,
                 Ok(m) => Some(m.trim().to_string()),
@@ -347,6 +388,10 @@ pub fn run() {
             acn_reject,
             acn_withdraw,
             acn_accept_counter,
+            acn_counter,
+            acn_request_terms,
+            acn_draft,
+            acn_lint,
             acn_dispute,
             acn_hint,
             acn_run_hint,

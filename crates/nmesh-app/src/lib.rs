@@ -83,6 +83,9 @@ pub struct AppConfig {
     pub mint: Option<String>,
     /// Which settlement triggers this requester accepts (local policy, not protocol).
     pub settlement_policy: SettlementPolicy,
+    /// Blossom servers for terms too large to inline (Core §7), and to fetch referenced terms
+    /// from besides the signer's own servers.
+    pub blossom: Vec<String>,
 }
 
 /// Requester-side settlement policy (Binding API policy filters, docs/binding-api.md). Local
@@ -142,6 +145,7 @@ impl AppConfig {
             target: "web".into(),
             mint: None,
             settlement_policy: SettlementPolicy::default(),
+            blossom: vec![],
         }
     }
 }
@@ -182,6 +186,10 @@ struct State {
     secrets: HashMap<String, String>,
     /// commitment id -> our requester seed for held-out instances (hex).
     seeds: HashMap<String, String>,
+    /// Terms documents referenced by hash rather than inlined (Core §7), as fetched.
+    docs: BTreeMap<String, Value>,
+    /// Hashes being fetched or found missing (not retried on every act).
+    docs_tried: HashSet<String>,
     /// ACN acts created before this are ignored ("Reset demo").
     demo_epoch: u64,
     /// Commitments the reset cleared that the time cutoff alone can't exclude (same second).
@@ -219,6 +227,8 @@ struct Inner {
     clock_offset: AtomicI64,
     wallet: Option<CashuWallet>,
     policy: SettlementPolicy,
+    blossom: Option<nmesh_blossom::BlossomClient>,
+    http: reqwest::Client,
 }
 
 #[derive(Clone)]
@@ -270,6 +280,7 @@ impl App {
         }
 
         let (tx, rx) = mpsc::channel(512);
+        let session_keys = session.keys().clone();
         let app = Self {
             inner: Arc::new(Inner {
                 trust: TrustPolicy::new(session.public_key()),
@@ -291,6 +302,8 @@ impl App {
                     owner: HashMap::new(),
                     secrets: stored.secrets.clone(),
                     seeds: stored.seeds.clone(),
+                    docs: BTreeMap::new(),
+                    docs_tried: HashSet::new(),
                     demo_epoch: stored.demo_epoch,
                     cleared: stored.cleared.iter().cloned().collect(),
                 }),
@@ -298,6 +311,14 @@ impl App {
                 clock_offset: AtomicI64::new(0),
                 wallet,
                 policy: config.settlement_policy.clone(),
+                blossom: (!config.blossom.is_empty()).then(|| {
+                    nmesh_blossom::BlossomClient::new(config.blossom.clone(), session_keys.clone())
+                }),
+                http: {
+                    // The workspace uses one TLS provider (ring); installing it twice is harmless.
+                    let _ = rustls::crypto::ring::default_provider().install_default();
+                    reqwest::Client::new()
+                },
             }),
         };
 
@@ -563,6 +584,7 @@ impl App {
                 &self.me().to_hex(),
                 acts,
                 st.bindings.get(conv).map(Vec::as_slice).unwrap_or_default(),
+                &st.docs,
                 &self.ctx(),
                 self.now(),
             ),
@@ -645,29 +667,128 @@ impl App {
                 ),
             ),
         };
-        // Requester-side settlement policy (Binding API policy filters, CR-002).
-        self.inner.policy.check(&terms)?;
-        // The terms linter (CR-003 §3): errors block sending; warnings go on the card.
-        if let Ok(t) = acn_core::terms::Terms::parse(&terms) {
-            let errors: Vec<String> = acn_author::lint(&t, &acn_author::LintContext::default())
-                .into_iter()
-                .filter(|f| f.level == acn_author::Level::Error)
-                .map(|f| format!("{} {}: {}", f.rule, f.item.unwrap_or_default(), f.message))
-                .collect();
-            if !errors.is_empty() {
-                return Err(AppError::Invalid(format!(
-                    "the terms can't be sent: {}",
-                    errors.join("; ")
-                )));
-            }
+        self.send_request(&pk, svc.as_ref(), &profile, terms, secret, seed)
+            .await
+    }
+
+    /// Check terms before they're sent: settlement policy, then the linter (CR-003 §3: errors
+    /// block sending; warnings go on the card).
+    fn check_terms(&self, terms: &Value) -> Result<(), AppError> {
+        self.inner.policy.check(terms)?;
+        let t = acn_core::terms::Terms::check(terms).map_err(|(code, e)| {
+            AppError::Invalid(format!("the terms aren't valid ({}): {e}", code.as_str()))
+        })?;
+        let errors: Vec<String> = acn_author::lint(&t, &acn_author::LintContext::default())
+            .into_iter()
+            .filter(|f| f.level == acn_author::Level::Error)
+            .map(|f| format!("{} {}: {}", f.rule, f.item.unwrap_or_default(), f.message))
+            .collect();
+        if !errors.is_empty() {
+            return Err(AppError::Invalid(format!(
+                "the terms can't be sent: {}",
+                errors.join("; ")
+            )));
         }
+        Ok(())
+    }
+
+    /// The linter's findings on a terms document (for an editor; `binding` = about to accept).
+    pub fn lint_terms(
+        &self,
+        terms: &Value,
+        binding: bool,
+    ) -> Result<Vec<acn_author::Finding>, AppError> {
+        let t = acn_core::terms::Terms::check(terms)
+            .map_err(|(code, e)| AppError::Invalid(format!("{}: {e}", code.as_str())))?;
+        Ok(acn_author::lint(
+            &t,
+            &acn_author::LintContext {
+                binding,
+                judge_price_threshold: acn_view::JUDGE_PRICE_THRESHOLD,
+                ..Default::default()
+            },
+        ))
+    }
+
+    /// Put a terms document on Blossom (JCS bytes); returns its hash and the server URL hint.
+    async fn store_terms(&self, terms: &Value) -> Result<(String, String), AppError> {
+        let client = self.inner.blossom.as_ref().ok_or_else(|| {
+            AppError::Invalid("these terms exceed the 16 KiB inline limit: configure a Blossom server (NMESH_BLOSSOM) to send them by reference".into())
+        })?;
+        let bytes =
+            acn_core::jcs::canonical(terms).map_err(|e| AppError::Invalid(e.to_string()))?;
+        let (hash, servers) = client
+            .upload(bytes.as_bytes(), "application/json")
+            .await
+            .map_err(|e| AppError::Invalid(format!("Blossom: {e}")))?;
+        self.inner
+            .state
+            .lock()
+            .await
+            .docs
+            .insert(hash.clone(), terms.clone());
+        Ok((hash, servers.first().cloned().unwrap_or_default()))
+    }
+
+    /// Send a `REQUEST` with terms we drafted ourselves (e.g. with [`App::draft_request`] and
+    /// edits), rather than an agent's terms offer. A price with a `payment` mint gets a fresh
+    /// hashlock and the token is locked as for an offer; held-out instances aren't supported here
+    /// (the seed needs a runner the offer names).
+    pub async fn request_terms(
+        &self,
+        pubkey: &str,
+        profile: &str,
+        mut terms: Value,
+    ) -> Result<CommitmentView, AppError> {
+        let pk = parse_pk(pubkey)?;
+        self.ensure_consent(&pk).await?;
+        let key = pk.to_hex();
+        let svc = self.inner.state.lock().await.svc.get(&key).cloned();
+        if !matches!(profile, "T0" | "T1" | "N") {
+            return Err(AppError::Invalid(format!("unknown profile {profile}")));
+        }
+        let parsed = acn_core::terms::Terms::check(&terms).map_err(|(code, e)| {
+            AppError::Invalid(format!("the terms aren't valid ({}): {e}", code.as_str()))
+        })?;
+        if parsed.has_instances() {
+            return Err(AppError::Invalid("held-out instances need the runner named by the agent's terms offer: request them with its /command".into()));
+        }
+        let mut secret = None;
+        if parsed.price.amount > 0 {
+            let pay = terms
+                .get_mut("payment")
+                .filter(|p| p.is_object())
+                .ok_or_else(|| {
+                    AppError::Invalid("priced terms need `payment` with the mint you pay at".into())
+                })?;
+            let s = Keys::generate().secret_key().secret_bytes();
+            pay["hashlock"] = serde_json::json!(acn_core::jcs::sha256_hex(&s));
+            pay["locktime"] = serde_json::json!(parsed.deadline + parsed.review_window + 24 * 3600);
+            secret = Some(hex32(&s));
+        }
+        self.send_request(&pk, svc.as_ref(), profile, terms, secret, None)
+            .await
+    }
+
+    /// Validate, lock payment, escrow the preimage and seed, and send a `REQUEST`.
+    async fn send_request(
+        &self,
+        pk: &PublicKey,
+        svc: Option<&Value>,
+        profile: &str,
+        terms: Value,
+        secret: Option<String>,
+        seed: Option<(String, String)>,
+    ) -> Result<CommitmentView, AppError> {
+        let key = pk.to_hex();
+        let pk = *pk;
+        self.check_terms(&terms)?;
         // Rail capability (Core.md §8.6): contingent needs a mint that reveals the preimage to
         // the payer, as declared in the agent's K_SVC.
         if terms["settlement_trigger"] == "contingent" {
             let mint = terms["payment"]["mint"].as_str().unwrap_or_default();
-            let capable = svc
-                .as_ref()
-                .is_some_and(|s| mint_has_capability(s, mint, "reveals_preimage_to_payer"));
+            let capable =
+                svc.is_some_and(|s| mint_has_capability(s, mint, "reveals_preimage_to_payer"));
             if !capable {
                 return Err(AppError::Invalid(format!(
                     "rail_incapable: mint {mint} is not declared to reveal preimages to payers"
@@ -702,8 +823,18 @@ impl App {
             Some(t) => Some(self.inner.session.nip44_encrypt(&pk, t)?),
             None => None,
         };
-        let mut draft = Draft::request(&key, &profile, &terms, ct.as_deref())
-            .map_err(|e| AppError::Invalid(e.to_string()))?;
+        // Inline when small enough; otherwise on Blossom, referenced by hash (Core §7).
+        let inline = acn_core::jcs::canonical(&terms)
+            .map(|c| c.len())
+            .unwrap_or(usize::MAX);
+        let mut draft =
+            if inline + ct.as_ref().map_or(0, |c| c.len()) < acn_core::INLINE_LIMIT - 512 {
+                Draft::request(&key, profile, &terms, ct.as_deref())
+                    .map_err(|e| AppError::Invalid(e.to_string()))?
+            } else {
+                let (hash, url) = self.store_terms(&terms).await?;
+                Draft::request_ref(&key, profile, &hash, &url, ct.as_deref())
+            };
         // Escrow the preimage with its holder: the arbiter (Core.md §8.4) or the settlement
         // verifier (verifier trigger, §8.2).
         let holder = terms["settlement_verifier"]
@@ -744,6 +875,101 @@ impl App {
         self.commitment(&key, &id)
             .await
             .ok_or_else(|| AppError::Invalid("commitment not created".into()))
+    }
+
+    /// Propose other terms (profile N): a `COUNTER` on a commitment we requested, while it is
+    /// being negotiated. The terms go through the same checks as a request's; large ones go to
+    /// Blossom by reference.
+    pub async fn counter(
+        &self,
+        pubkey: &str,
+        commitment: &str,
+        terms: Value,
+        reason: &str,
+    ) -> Result<CommitmentView, AppError> {
+        self.act(
+            pubkey,
+            commitment,
+            HintAction::Counter {
+                terms,
+                reason: reason.to_string(),
+            },
+        )
+        .await
+    }
+
+    /// Fetch terms documents the conversation's acts reference but don't inline (Core §7): from
+    /// the tag's URL hint, the agent's Blossom servers, then ours; each checked against its hash.
+    fn fetch_referenced(&self, conv: &str) {
+        let this = self.clone();
+        let conv = conv.to_string();
+        tokio::spawn(async move {
+            let events = this.fold_input(&conv).await;
+            let wanted: Vec<(String, Option<String>)> = {
+                let mut st = this.inner.state.lock().await;
+                let st = &mut *st;
+                let (docs, tried) = (&st.docs, &mut st.docs_tried);
+                acn_core::draft::referenced_terms(&events)
+                    .into_iter()
+                    .filter(|(h, _)| !docs.contains_key(h) && tried.insert(h.clone()))
+                    .collect()
+            };
+            if wanted.is_empty() {
+                return;
+            }
+            let agent_servers: Vec<String> = {
+                let st = this.inner.state.lock().await;
+                st.svc
+                    .get(&conv)
+                    .and_then(|s| s["blossom"].as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|x| x.as_str().map(str::to_owned))
+                    .collect()
+            };
+            let ours = this
+                .inner
+                .blossom
+                .as_ref()
+                .map(|b| b.servers.clone())
+                .unwrap_or_default();
+            let mut got = false;
+            for (hash, hint) in wanted {
+                let servers: Vec<String> = hint
+                    .into_iter()
+                    .chain(agent_servers.clone())
+                    .chain(ours.clone())
+                    .collect();
+                let doc = nmesh_blossom::fetch_from(&this.inner.http, &servers, &hash)
+                    .await
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+                    .filter(|v| acn_core::jcs::hash(v).ok().as_deref() == Some(hash.as_str()));
+                match doc {
+                    Some(v) => {
+                        this.inner.state.lock().await.docs.insert(hash, v);
+                        got = true;
+                    }
+                    None => {
+                        tracing::warn!(%hash, "referenced terms not retrievable; the commitment stays pending");
+                        this.inner.state.lock().await.docs_tried.remove(&hash);
+                    }
+                }
+            }
+            if got {
+                let views = {
+                    let st = this.inner.state.lock().await;
+                    this.project_locked(&st, &conv)
+                };
+                for v in views {
+                    let _ = this
+                        .inner
+                        .events
+                        .send(AppEvent::Commitment { commitment: v })
+                        .await;
+                }
+            }
+        });
     }
 
     /// Close a reported commitment as satisfied. Reveals the preimage when the terms carry a
@@ -887,7 +1113,8 @@ impl App {
             .ok_or_else(|| AppError::Invalid("no wallet configured".into()))?;
         let events = self.fold_input(&conv).await;
         let me = self.me().to_hex();
-        match acn_wallet::settlement::advise(&events, commitment, &me, self.now()) {
+        let docs = self.inner.state.lock().await.docs.clone();
+        match acn_wallet::settlement::advise_with(&events, &docs, commitment, &me, self.now()) {
             Some(acn_wallet::settlement::Advice::Refund { locktime, .. }) => {
                 if Timestamp::now().as_secs() <= locktime {
                     return Err(AppError::Invalid(format!(
@@ -947,7 +1174,8 @@ impl App {
         let pk = parse_pk(pubkey)?;
         let conv = pk.to_hex();
         let events = self.fold_input(&conv).await;
-        let out = acn_core::fold(&events, &BTreeMap::new());
+        let docs = self.inner.state.lock().await.docs.clone();
+        let out = acn_core::fold(&events, &docs);
         let c = out
             .commitments
             .get(commitment)
@@ -992,7 +1220,13 @@ impl App {
     pub async fn hint(&self, pubkey: &str, commitment: &str) -> Result<Option<Hint>, AppError> {
         let conv = parse_pk(pubkey)?.to_hex();
         let events = self.fold_input(&conv).await;
-        Ok(acn_sim::requester_hint(&events, commitment, self.now()))
+        let docs = self.inner.state.lock().await.docs.clone();
+        Ok(acn_sim::requester_hint_with(
+            &events,
+            &docs,
+            commitment,
+            self.now(),
+        ))
     }
 
     /// Perform the scripted next step (presenter "Next").
@@ -1081,7 +1315,8 @@ impl App {
                 AppError::Invalid("no requester seed kept for that commitment".into())
             })?;
         let events = self.fold_input(&conv).await;
-        let out = acn_core::fold(&events, &std::collections::BTreeMap::new());
+        let docs = self.inner.state.lock().await.docs.clone();
+        let out = acn_core::fold(&events, &docs);
         let performer_seed = out
             .commitments
             .get(commitment)
@@ -1110,17 +1345,28 @@ impl App {
         let pk = parse_pk(pubkey)?;
         let conv = pk.to_hex();
         let events = self.fold_input(&conv).await;
-        let preimage = self
-            .inner
-            .state
-            .lock()
-            .await
-            .secrets
-            .get(commitment)
-            .cloned();
-        let (draft, not_before) =
-            acn_sim::requester_draft(&events, commitment, &action, preimage.as_deref())
+        let (preimage, docs) = {
+            let st = self.inner.state.lock().await;
+            (st.secrets.get(commitment).cloned(), st.docs.clone())
+        };
+        if let HintAction::Counter { terms, .. } = &action {
+            self.check_terms(terms)?;
+        }
+        let (mut draft, not_before) =
+            acn_sim::requester_draft_with(&events, &docs, commitment, &action, preimage.as_deref())
                 .ok_or_else(|| AppError::Invalid("that act isn't possible right now".into()))?;
+        // Too large to inline: the counter's terms go to Blossom, referenced by hash (Core §7).
+        if matches!(action, HintAction::Counter { .. })
+            && draft.content.len() > acn_core::INLINE_LIMIT - 512
+        {
+            if let HintAction::Counter { terms, .. } = &action {
+                let (_, url) = self.store_terms(terms).await?;
+                draft = draft
+                    .with_terms_by_reference(&url)
+                    .map(|(d, _, _)| d)
+                    .ok_or_else(|| AppError::Invalid("counter without terms".into()))?;
+            }
+        }
         let act = self.inner.session.sign_act(&draft, Some(not_before))?;
         let act_id = act.id.clone();
         self.inner.session.send_act(pk, &act).await?;
@@ -1210,6 +1456,9 @@ impl App {
         };
         if !fresh {
             return;
+        }
+        if matches!(kind, K_REQUEST | K_COUNTER) {
+            self.fetch_referenced(&conv);
         }
         if is_request {
             let view = MessageView {

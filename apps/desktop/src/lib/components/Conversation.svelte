@@ -8,12 +8,15 @@
   import Composer from "./Composer.svelte";
   import MessageItem from "./MessageItem.svelte";
   import Director from "./Director.svelte";
+  import DraftPanel from "./DraftPanel.svelte";
 
   let { contact }: { contact: Contact } = $props();
   let list: HTMLDivElement | undefined = $state();
   let details = $state(false);
   // ACN-capable agents default to commitments; plain chat stays one click away.
   let commit = $state(true);
+  // The drafting screen (requester drafter, CR-003 §3).
+  let drafting = $state(false);
 
   const a = $derived(contact.agent);
   const needsConsent = $derived(contact.is_agent && !contact.consented);
@@ -47,6 +50,11 @@
       </div>
       <div class="npub mono">{contact.npub}</div>
     </div>
+    {#if !needsConsent && contact.acn}
+      <button class="btn draft-btn" class:on={drafting} onclick={() => (drafting = !drafting)} title="Write the conditions of satisfaction yourself, with the drafter and the linter">
+        ✎ Draft terms
+      </button>
+    {/if}
     {#if !needsConsent}
       <button class="btn director-btn" class:on={store.directorOpen} onclick={() => (store.directorOpen = !store.directorOpen)}>
         🎬 Director
@@ -92,6 +100,9 @@
     </div>
   {/if}
 
+  {#if drafting && contact.acn}
+    <DraftPanel {contact} onclose={() => (drafting = false)} />
+  {/if}
   <Composer
     commands={contact.commands}
     disabled={needsConsent}
@@ -117,6 +128,17 @@
     height: 100%;
     min-height: 0;
   }
+  .draft-btn {
+    margin-left: auto;
+    padding: 5px 11px;
+    font-size: 12.5px;
+  }
+  .draft-btn.on {
+    background: var(--agent-soft);
+    border-color: var(--agent-border);
+    color: var(--agent);
+  }
+  .draft-btn + .director-btn { margin-left: 6px; }
   .director-btn {
     margin-left: auto;
     padding: 5px 11px;

@@ -8,6 +8,9 @@ license.workspace = true
 
 [dependencies]
 acn-core.workspace = true
+nmesh-blossom.workspace = true
+reqwest.workspace = true
+base64 = "0.22"
 acn-sim.workspace = true
 acn-judge.workspace = true
 acn-wallet.workspace = true
@@ -25,6 +28,7 @@ tracing-subscriber.workspace = true
 rustls.workspace = true
 
 [dev-dependencies]
+nmesh-blossom.workspace = true
 acn-author.workspace = true
 nmesh-app.workspace = true
 acn-wallet.workspace = true

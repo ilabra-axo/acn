@@ -21,7 +21,7 @@ use std::time::Duration;
 use acn_core::draft::Draft;
 use acn_core::kinds::*;
 use acn_sim::{Actor, Cast, PaymentCheck, SCENARIOS};
-use acn_wallet::settlement::{advise, check_payment, Advice};
+use acn_wallet::settlement::{check_payment, Advice};
 use nmesh_core::{
     Body, IdentityKind, InboxOptions, Keys, PublicKey, Session, SessionConfig, Timestamp, ToBech32,
 };
@@ -40,6 +40,21 @@ pub struct Config {
     pub mint: MintSetup,
     /// Real judges for the judged scenarios (Verity and Muse run them). `None`: scripted judges.
     pub judges: Option<acn_judge::Panel>,
+    /// Where Atlas stores its artifacts and derivation records (Core §9).
+    pub blossom: BlossomSetup,
+}
+
+/// Where the cast's Blossom server comes from.
+pub enum BlossomSetup {
+    /// Run `nmesh-blossom` in-process (blobs in memory, or in `dir`).
+    Host {
+        listen: std::net::SocketAddr,
+        dir: Option<PathBuf>,
+    },
+    /// Use running servers.
+    External(Vec<String>),
+    /// Inline results only.
+    None,
 }
 
 /// Where the cast's Cashu mint comes from.
@@ -58,6 +73,7 @@ pub struct Running {
     sim: Arc<Sim>,
     task: tokio::task::JoinHandle<()>,
     mint: Option<nmesh_mint::RunningMint>,
+    blossom: Option<nmesh_blossom::RunningServer>,
 }
 
 impl Running {
@@ -69,6 +85,15 @@ impl Running {
         &self.sim.cast.mint
     }
 
+    /// Atlas's Blossom servers (empty: inline results only).
+    pub fn blossom_servers(&self) -> Vec<String> {
+        self.sim
+            .blossom
+            .as_ref()
+            .map(|b| b.servers.clone())
+            .unwrap_or_default()
+    }
+
     /// Atlas's wallet (the only cast member that gets paid).
     pub async fn performer_wallet(&self) -> anyhow::Result<acn_wallet::WalletView> {
         Ok(self.sim.wallet.view().await?)
@@ -78,6 +103,9 @@ impl Running {
         self.task.abort();
         if let Some(m) = self.mint {
             m.stop();
+        }
+        if let Some(b) = self.blossom {
+            b.stop();
         }
         for s in self.sim.sessions.values() {
             s.shutdown().await;
@@ -102,6 +130,8 @@ struct Store {
     keys: Mutex<BTreeMap<String, String>>,
     /// Requester seeds the runner decrypted from a REQUEST's `seed` tag (CR-003 §2.3).
     seeds: Mutex<BTreeMap<String, String>>,
+    /// Terms documents referenced by hash rather than inlined (Core §7), fetched from Blossom.
+    docs: Mutex<BTreeMap<String, Value>>,
 }
 
 impl Store {
@@ -145,6 +175,8 @@ struct Sim {
     /// Commitments requested before the cast started are history, not work (relays replay them).
     started: u64,
     judges: Option<acn_judge::Panel>,
+    /// Atlas's evidence store (artifacts and derivation records on Blossom).
+    blossom: Option<nmesh_blossom::BlossomClient>,
 }
 
 /// Connect the cast, publish profiles / `K_SVC` / bindings, and start reacting.
@@ -167,6 +199,16 @@ pub async fn start(args: Config) -> anyhow::Result<Running> {
             (Some(m), url)
         }
         MintSetup::External(u) => (None, u.trim_end_matches('/').to_string()),
+    };
+    let (blossom_server, blossom_urls) = match args.blossom {
+        BlossomSetup::Host { listen, dir } => {
+            let b = nmesh_blossom::serve(listen, dir).await?;
+            tracing::info!("Blossom server (dev) on {}", b.url);
+            let url = b.url.clone();
+            (Some(b), vec![url])
+        }
+        BlossomSetup::External(v) => (None, v),
+        BlossomSetup::None => (None, vec![]),
     };
     let mut sessions = BTreeMap::new();
     for actor in Actor::ALL {
@@ -223,9 +265,14 @@ pub async fn start(args: Config) -> anyhow::Result<Running> {
 
     let operator = nmesh_core::load_or_create_keys(&args.data.join("operator.nsec"))?;
     for agent in [Actor::Performer, Actor::Rogue] {
-        advertise(&sessions[&agent], agent, &cast).await?;
+        advertise(&sessions[&agent], agent, &cast, &blossom_urls).await?;
     }
     bind(&sessions[&Actor::Performer], &operator).await?;
+    if !blossom_urls.is_empty() {
+        sessions[&Actor::Performer]
+            .publish_pinned_builder(nmesh_blossom::server_list(&blossom_urls))
+            .await?;
+    }
     // Public terms templates (CR-003 §2.5); the cast drafts counters against their ids.
     for (name, actor, d) in acn_sim::templates() {
         let ev = sessions[&actor].sign_act(&d, None)?;
@@ -233,6 +280,7 @@ pub async fn start(args: Config) -> anyhow::Result<Running> {
         cast.templates.insert(name, ev.id);
     }
 
+    let sessions_keys = sessions[&Actor::Performer].keys().clone();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let sim = Arc::new(Sim {
         sessions,
@@ -243,6 +291,9 @@ pub async fn start(args: Config) -> anyhow::Result<Running> {
         wallet,
         started: Timestamp::now().as_secs(),
         judges: args.judges,
+        blossom: (!blossom_urls.is_empty()).then(|| {
+            nmesh_blossom::BlossomClient::new(blossom_urls.clone(), sessions_keys.clone())
+        }),
     });
 
     for agent in [Actor::Performer, Actor::Rogue] {
@@ -279,7 +330,12 @@ pub async fn start(args: Config) -> anyhow::Result<Running> {
             looped.clone().react(&c);
         }
     });
-    Ok(Running { sim, task, mint })
+    Ok(Running {
+        sim,
+        task,
+        mint,
+        blossom: blossom_server,
+    })
 }
 
 fn help(agent: Actor) -> String {
@@ -297,7 +353,12 @@ fn help(agent: Actor) -> String {
 }
 
 /// Profile extras, nmesh manifest (consent dialog), NIP-CD commands and ACN `K_SVC` with templates.
-async fn advertise(s: &Session, agent: Actor, cast: &Cast) -> anyhow::Result<()> {
+async fn advertise(
+    s: &Session,
+    agent: Actor,
+    cast: &Cast,
+    blossom: &[String],
+) -> anyhow::Result<()> {
     let scenarios: Vec<_> = SCENARIOS.iter().filter(|x| x.actor == agent).collect();
     let data_handling = DataHandling {
         sees_plaintext: true,
@@ -367,6 +428,10 @@ async fn advertise(s: &Session, agent: Actor, cast: &Cast) -> anyhow::Result<()>
         "data_handling": data_handling,
         "simulated": true,
     });
+    let mut svc = svc;
+    if agent == Actor::Performer && !blossom.is_empty() {
+        svc["blossom"] = json!(blossom);
+    }
     let d = Draft::new(K_SVC)
         .tag(vec!["d".into(), manifest.id.clone()])
         .tag(vec![
@@ -415,6 +480,27 @@ impl Sim {
     async fn ingest(self: &Arc<Self>, e: acn_core::Event, sender: PublicKey) {
         if e.kind == K_REQUEST && e.created_at + 60 < self.started {
             return;
+        }
+        // Terms by reference (Core §7): fetch them from the tag's Blossom hint before acting.
+        for (hash, hint) in acn_core::draft::referenced_terms(std::slice::from_ref(&e)) {
+            if self.store.docs.lock().unwrap().contains_key(&hash) {
+                continue;
+            }
+            let servers: Vec<String> = hint.into_iter().collect();
+            let doc = nmesh_blossom::fetch_from(&reqwest::Client::new(), &servers, &hash)
+                .await
+                .ok()
+                .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+                .filter(|v| acn_core::jcs::hash(v).ok().as_deref() == Some(hash.as_str()));
+            match doc {
+                Some(v) => {
+                    tracing::info!(%hash, "fetched terms by reference from Blossom");
+                    self.store.docs.lock().unwrap().insert(hash, v);
+                }
+                None => {
+                    tracing::warn!(%hash, "referenced terms not retrievable; the request stays pending")
+                }
+            }
         }
         if e.kind == K_REQUEST {
             self.store
@@ -534,9 +620,18 @@ impl Sim {
     /// Core.md §8.2 step 3: decrypt the token, verify it with the mint, check it against the terms.
     async fn check_payment(&self, e: &acn_core::Event, sender: PublicKey) {
         let content: Value = serde_json::from_str(&e.content).unwrap_or_default();
+        let by_ref = e
+            .tags
+            .iter()
+            .find(|t| t[0] == "terms")
+            .and_then(|t| t.get(1))
+            .and_then(|h| self.store.docs.lock().unwrap().get(h).cloned());
         let Some(terms) = content
             .get("terms")
-            .and_then(|t| serde_json::from_value::<acn_core::Terms>(t.clone()).ok())
+            .filter(|t| !t.is_null())
+            .cloned()
+            .or(by_ref)
+            .and_then(|t| serde_json::from_value::<acn_core::Terms>(t).ok())
         else {
             return;
         };
@@ -592,9 +687,13 @@ impl Sim {
     /// Redeem once the preimage is public (SATISFY or a performer-side RULING).
     fn maybe_redeem(self: &Arc<Self>, c: &str, events: &[acn_core::Event]) {
         let me = self.sessions[&Actor::Performer].public_key().to_hex();
-        let Some(Advice::Redeem { preimage, .. }) =
-            advise(events, c, &me, Timestamp::now().as_secs())
-        else {
+        let Some(Advice::Redeem { preimage, .. }) = acn_wallet::settlement::advise_with(
+            events,
+            &self.store.docs.lock().unwrap().clone(),
+            c,
+            &me,
+            Timestamp::now().as_secs(),
+        ) else {
             return;
         };
         let Some(token) = self.store.tokens.lock().unwrap().get(c).cloned() else {
@@ -631,7 +730,16 @@ impl Sim {
         self.maybe_redeem(c, &events);
         let keys = self.store.keys.lock().unwrap().clone();
         let seeds = self.store.seeds.lock().unwrap().clone();
-        for m in acn_sim::react_with(&self.cast, &events, &escrow, Some(&payments), &keys, &seeds) {
+        let docs = self.store.docs.lock().unwrap().clone();
+        for m in acn_sim::react_docs(
+            &self.cast,
+            &events,
+            &docs,
+            &escrow,
+            Some(&payments),
+            &keys,
+            &seeds,
+        ) {
             // CLAIM only once the FUND token is verified (and redeem it with k first).
             if m.draft.kind == K_CLAIM && !self.store.tokens.lock().unwrap().contains_key(c) {
                 continue;
@@ -689,6 +797,25 @@ impl Sim {
                         }
                     }
                 }
+                if draft.kind == K_REPORT && m.actor == Actor::Performer {
+                    draft = this.with_evidence(&c, draft).await;
+                }
+                // Terms too large to inline go to Blossom by reference (Core §7).
+                if draft.kind == K_COUNTER && draft.content.len() > acn_core::INLINE_LIMIT - 512 {
+                    let Some(b) = &this.blossom else {
+                        return tracing::error!(commitment = %c, "counter terms exceed 16 KiB and the cast has no Blossom server");
+                    };
+                    let Some((d, hash, terms)) = draft.with_terms_by_reference(&b.servers[0])
+                    else {
+                        return;
+                    };
+                    let bytes = acn_core::jcs::canonical(&terms).unwrap_or_default();
+                    if let Err(e) = b.upload(bytes.as_bytes(), "application/json").await {
+                        return tracing::error!(error = %e, "counter terms upload failed");
+                    }
+                    this.store.docs.lock().unwrap().insert(hash, terms);
+                    draft = d;
+                }
                 let act = match session.sign_act(&draft, Some(m.not_before)) {
                     Ok(a) => a,
                     Err(e) => return tracing::error!(error = %e, "sign failed"),
@@ -710,6 +837,78 @@ impl Sim {
 }
 
 impl Sim {
+    /// Atlas's REPORT with evidence (Core §9): the result (or, when contingent, the sealed
+    /// payload, whose hash is the offer's ciphertext) as an artifact on Blossom, and a derivation
+    /// record. Without Blossom, or if an upload fails, the REPORT goes out as drafted.
+    async fn with_evidence(&self, c: &str, draft: Draft) -> Draft {
+        let Some(b) = &self.blossom else { return draft };
+        let mut content: Value = serde_json::from_str(&draft.content).unwrap_or_default();
+        let (bytes, mime, role) = match content.get("sealed").and_then(Value::as_str) {
+            // The payload's bytes: their sha256 is the offer's `ciphertext` (Core §8.2), which the
+            // REPORT already lists.
+            Some(sealed) => {
+                match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, sealed) {
+                    Ok(b) => (b, "application/octet-stream", "sealed_deliverable"),
+                    Err(_) => return draft,
+                }
+            }
+            None => match content.get("result") {
+                Some(r) => (
+                    serde_json::to_vec(r).unwrap_or_default(),
+                    "application/json",
+                    "result",
+                ),
+                None => return draft,
+            },
+        };
+        let started = Timestamp::now().as_secs();
+        let Ok((artifact, _)) = b.upload(&bytes, mime).await else {
+            tracing::warn!(commitment = %c, "Blossom upload failed; REPORT inline only");
+            return draft;
+        };
+        let events = self.store.events(c);
+        let docs = self.store.docs.lock().unwrap().clone();
+        let out = acn_core::fold(&events, &docs);
+        let terms = out.commitments.get(c).and_then(|x| x.terms.clone());
+        let input = terms
+            .as_ref()
+            .and_then(|t| t.deliverable.input.clone())
+            .unwrap_or_else(|| json!({}));
+        let tool = terms.and_then(|t| t.deliverable.tool).unwrap_or_default();
+        let record = json!({
+            "inputs": [{"hash": acn_core::jcs::hash(&input).unwrap_or_default(), "role": "input"}],
+            "outputs": [{"hash": artifact, "role": role, "type": mime}],
+            "tools": [{"tool": tool, "service": "acn-sim demo cast", "version": env!("CARGO_PKG_VERSION")}],
+            "subcommitments": [],
+            "started": started,
+            "ended": Timestamp::now().as_secs(),
+        });
+        let Ok(canonical) = acn_core::jcs::canonical(&record) else {
+            return draft;
+        };
+        let Ok((derivation, _)) = b.upload(canonical.as_bytes(), "application/json").await else {
+            return draft;
+        };
+        content["derivation"] = json!(derivation);
+        // The full result is the artifact; inline, keep it within the 16 KiB limit (Core §6.2).
+        if content.to_string().len() > acn_core::INLINE_LIMIT - 512 {
+            if let Some(r) = content.get_mut("result") {
+                let title = r["title"].as_str().unwrap_or("Result").to_string();
+                *r = json!({"title": title, "body": format!("The full result is on Blossom: artifact {artifact}.")});
+            }
+        }
+        let listed = draft
+            .tags
+            .iter()
+            .any(|t| t.first().map(String::as_str) == Some("x") && t.get(1) == Some(&artifact));
+        let d = draft.content(content);
+        if listed {
+            d
+        } else {
+            d.tag(vec!["x".into(), artifact])
+        }
+    }
+
     /// Run the real judges on a job (a few tries: endpoints time out), or give up.
     async fn judge(&self, c: &str, job: &acn_sim::JudgeJob) -> Option<Value> {
         let panel = self.judges.as_ref()?;

@@ -124,6 +124,7 @@ async fn mcp_shim_passes_l0_priced_and_free() -> anyhow::Result<()> {
     let env = Env {
         relays: vec![i.url.clone()],
         mint: Some(i.mint.url.clone()),
+        blossom: Some(i.blossom.url.clone()),
     };
     for (name, price) in [("priced", 5), ("free", 0)] {
         let dir = temp_dir(name);

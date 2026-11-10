@@ -34,6 +34,8 @@ use serde_json::{json, Value};
 pub struct Env {
     pub relays: Vec<String>,
     pub mint: Option<String>,
+    /// The requester's Blossom server. Set it to test terms sent by reference (Core §7).
+    pub blossom: Option<String>,
 }
 
 /// The binding under test and a call it can serve.
@@ -439,6 +441,55 @@ pub async fn l0(env: &Env, target: &Target) -> anyhow::Result<Report> {
     }
     case("t0-acts-clean", clean(&r, &c));
 
+    // ---- terms by reference (Core §7): on the requester's Blossom server, not inline ----
+    if let (Some(server), true) = (&env.blossom, min_price == 0) {
+        let res = async {
+            let terms = base_terms(&target.tool, &target.input, 0);
+            let client =
+                nmesh_blossom::BlossomClient::new(vec![server.clone()], r.session.keys().clone());
+            let bytes = acn_core::jcs::canonical(&terms).map_err(|e| e.to_string())?;
+            let (h, _) = client
+                .upload(bytes.as_bytes(), "application/json")
+                .await
+                .map_err(|e| e.to_string())?;
+            let d = Draft::request_ref(&target.agent, "T0", &h, server, None);
+            let ev = r.send(&d, None).await.map_err(|e| e.to_string())?;
+            let rep = r
+                .answer(&ev.id, &[K_REPORT, K_DECLINE])
+                .await
+                .ok_or("no answer to a by-reference request")?;
+            if rep.kind != K_REPORT {
+                return Err(format!(
+                    "declined terms sent by reference: {}",
+                    reason(&rep)
+                ));
+            }
+            let events = r.events(&ev.id);
+            let docs = BTreeMap::from([(h.clone(), terms)]);
+            let out = fold(&events, &docs);
+            let mine: Vec<&str> = events
+                .iter()
+                .filter(|e| e.pubkey == target.agent && e.kind != K_BIND_ACK)
+                .map(|e| e.id.as_str())
+                .collect();
+            let bad: Vec<String> = out
+                .anomalies
+                .iter()
+                .filter(|a| mine.contains(&a.event.as_str()))
+                .map(|a| a.code.as_str().to_string())
+                .collect();
+            if !bad.is_empty() {
+                return Err(format!("anomalies on the binding's acts: {bad:?}"));
+            }
+            Ok(format!(
+                "fetched terms {}… from the hint and REPORTed against them",
+                &h[..12]
+            ))
+        }
+        .await;
+        case("t0-terms-by-reference", res);
+    }
+
     // ---- T1 ----
     if profiles.contains(&"T1") {
         let mint = env
@@ -526,6 +577,56 @@ pub async fn l0(env: &Env, target: &Target) -> anyhow::Result<Report> {
         }
         .await;
         case("t1-paid-call", res);
+        // The same, with the terms on the requester's Blossom server (Core §7).
+        if let Some(server) = &env.blossom {
+            let s2 = Keys::generate().secret_key().to_secret_hex();
+            let h2 = acn_core::jcs::sha256_hex(&hex_bytes(&s2));
+            let res = async {
+                let terms = paid(&h2).map_err(|e| e.to_string())?;
+                let amount = terms["price"]["amount"].as_u64().unwrap_or(0);
+                let locktime = terms["payment"]["locktime"].as_u64().unwrap_or(0);
+                let token = wallet
+                    .lock_htlc(amount, &h2, &target.agent, locktime, None)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let ct = r
+                    .session
+                    .nip44_encrypt(&r.agent, &token)
+                    .map_err(|e| e.to_string())?;
+                let client = nmesh_blossom::BlossomClient::new(
+                    vec![server.clone()],
+                    r.session.keys().clone(),
+                );
+                let bytes = acn_core::jcs::canonical(&terms).map_err(|e| e.to_string())?;
+                let (th, _) = client
+                    .upload(bytes.as_bytes(), "application/json")
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let ev = r
+                    .send(
+                        &Draft::request_ref(&target.agent, "T1", &th, server, Some(&ct)),
+                        None,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let rep = r
+                    .answer(&ev.id, &[K_REPORT, K_DECLINE])
+                    .await
+                    .ok_or("no answer to a by-reference paid request")?;
+                if rep.kind != K_REPORT {
+                    return Err(format!(
+                        "declined a paid call with terms by reference: {}",
+                        reason(&rep)
+                    ));
+                }
+                Ok(format!(
+                    "fetched terms {}… from the hint, verified the token and REPORTed",
+                    &th[..12]
+                ))
+            }
+            .await;
+            case("t1-terms-by-reference", res);
+        }
         // A token whose lock doesn't match the terms.
         let res = async {
             let terms = paid(&h).map_err(|e| e.to_string())?;

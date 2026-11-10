@@ -72,6 +72,34 @@ scenario logic** (`acn-core`, `acn-view`, `acn-sim`). Every act is a real BIP-34
    never saw, and their attestation reveals those cases with proofs too. With `--judges` these
    are real models (the score may fall below 7, and then you reject, with no rework).
 
+### Writing and negotiating your own terms (P2)
+
+8. **Draft terms.** **✎ Draft terms** in the conversation header opens the drafting screen: say
+   what the agent should do, list your requirements, pick the tool, price and deadline, and
+   **Draft**. The requester drafter (`acn-author`) fills in what it can from the agent's published
+   templates; what it can't close stays `open`. You edit the result in the **terms editor**,
+   where the linter's findings appear as you type (errors block sending), then **Send request**.
+   Atlas's drafter closes the open condition from its template (e.g. "Don't make it slower" →
+   *p95 latency within 5% of the baseline*, plus two disqualifiers and Verity as the verifier) and
+   counters; you accept, it works, you satisfy. Terms over the 16 KiB inline limit travel by
+   reference: they go to Blossom and the `terms` tag carries the hash and a server hint.
+9. **Counter the counter.** On `/negotiate`, **Counter…** on Atlas's counter-offer opens the same
+   editor (e.g. two revisions instead of one) with a reason. Atlas accepts a counter whose
+   conditions are all closed, has no held-out cases and keeps the price; otherwise it declines
+   `counter_unacceptable`.
+10. **Read the evidence.** Each condition's evidence row expands: who signed it and when, the
+    method or recipe, the referent, the judges with their runs and medians, the aggregate, the
+    held-out cases. Below the result, links open each artifact and the derivation record on
+    Blossom (live mode: the cast stores every `REPORT`'s evidence there).
+
+![Drafting screen](screenshots/p21-drafted-terms.png)
+
+![Atlas closes the open condition from its template](screenshots/p22-drafted-countered.png)
+
+![Countering Atlas's counter-offer](screenshots/p20-counter-editor.png)
+
+![Attestation details](screenshots/p19-attestation-details.png)
+
 Point out the ladder: a judged condition certifies that pinned judges produced a score; it is
 evidence about an opinion, not about the work (INV-8). Stronger classes (mechanical, grounded,
 an audit) are conditions you add to the same terms.
@@ -148,6 +176,10 @@ the workspace crates are not picked up without this.) Release builds have no upd
 Paste Atlas's npub into "Start a chat", accept, and open **🎬 Director**. `--pace 0.5` doubles
 the speed. The cast keeps its keys in `.nmesh/sim/`, so npubs stay the same across runs.
 
+**Blossom.** The cast also hosts a dev Blossom server on `http://127.0.0.1:3400`
+(`--blossom-listen`; `--blossom <url>` or `NMESH_BLOSSOM` to use another) for terms by reference,
+artifacts and derivation records. The desktop app uses `NMESH_BLOSSOM` (same default).
+
 **Wallet.** The cast hosts a Cashu test mint (CDK, fake Lightning) on `http://127.0.0.1:3338`,
 and the desktop app's wallet points there by default (`NMESH_MINT`; set it to `none` to disable).
 Click the **₿** chip in the sidebar, then **Top up 100 test sats** before running *Paid call*,
@@ -172,11 +204,12 @@ Atlas DMs you when it redeems; send it `wallet` to see its balance.
   the wallet's real test ecash is kept.
 - **Balances:** yours and (presenter mode) Atlas's. **open wallet** shows locks per commitment,
   history and refunds.
-- You can also ignore the Director and use the card's buttons: Accept counter-offer, Satisfy,
-  Reject (pick the condition), Dispute, Withdraw.
+- You can also ignore the Director and use the card's buttons: Accept counter-offer, Counter…,
+  Satisfy, Reject (pick the condition), Dispute, Withdraw.
 
 Each card shows the applied chain, any pending acts, conditions with evidence (counted or
-not, and why), the counter-offer diff, settlement, validator notes, and **Show signed events**
+not, and why; click a row for what the attester signed), links to the artifacts and derivation
+record, the counter-offer diff, settlement, validator notes, and **Show signed events**
 (every event, including rejected ones, retained under INV-11).
 
 ## The board

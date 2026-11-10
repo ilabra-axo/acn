@@ -39,12 +39,13 @@ of focused work for 1–2 people.
 - [ ] A requester-side runner in the reference binding (the app running checks or judges itself): P3
 - [x] CR-003 Phase C: terms templates (`K_TERMS_TEMPLATE`, typed slots, `template_ref` checked by re-instantiation, V-28), template and record on the terms card; best practices and two templates in `docs/acn/cos-templates.md`; Atlas's `/drafted` and `/disqualified` counters come from its published `retry-change/v1`
 - [x] CR-003 Phase D: `acn-author`, the terms linter (L1–L8; errors block a `REQUEST`, warnings on the card) and the requester and performer drafters (Atlas's counters come from it; `App::draft_request`); template `notes` explain each change
-- [ ] Drafting UI (intent → drafted terms → card with findings → send) and a model-backed drafter behind the same signatures: P2
+- [x] Drafting UI (intent → drafted terms → editor with linter findings → send), in the app and presenter mode: P2
+- [ ] A model-backed drafter behind the same signatures as `acn-author`'s
 - [ ] Template records split by slot range (the template-laundering residual, Core §13)
 - [x] Board (queue view, §12): columns by ACN stage across agents and roles, whose-move from `acn-view`, needs-you filter, paged Closed column, drawer with the full card; no drag-and-drop. Reset demo (Director)
 - [x] P1 remainder: paid calls in the MCP shim, as T1 with a hash-locked token (verified before work, redeemed after `SATISFY`); unlocked-token T0 is not offered
 - [ ] Wallet: NIP-60 backup, NWC top-up, real mints and a multi-mint policy, binding `max_sat` caps applied to the wallet, encrypted preimage/proof storage
-- [ ] P2: negotiated profile in the UI (counter/accept/promise), terms on Blossom, attestations UI, the demo cast's artifacts on Blossom (the reference bindings already store artifacts and derivation records there)
+- [x] P2: the requester's counter-offer (terms editor on the card; Atlas accepts a closed, same-price counter or declines `counter_unacceptable`), terms by reference on Blossom (`terms` tag server hint; the app, the cast and the binding driver fetch and fold with them; conformance `t0/t1-terms-by-reference`), attestation details and evidence links on the card, the demo cast hosting Blossom and storing every `REPORT`'s artifacts and derivation record
 - [x] P3 at L0 ([harness-binding-API.md](harness-binding-API.md), D-10): `acn-binding` traits and the performer driver, `acn-binding-nostr` adapters, `binding_level` in `K_SVC`, the L0 suite (`acn-conformance`), `acn-mcp-shim` at L0 (Blossom evidence, derivation records, CDK wallet), `acn-cli-shim` as the second independent binding, `nmesh blossom` dev server
 - [ ] P3 beyond L0: L1–L3 suites; profile N, Gate and Verifier in the driver; the requester side (`nmesh-app`) and the demo cast on the traits; a requester-side runner
 - [ ] P4: arbiter path, anchoring (D-11), adversarial scenarios
