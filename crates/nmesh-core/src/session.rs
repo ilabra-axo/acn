@@ -59,6 +59,10 @@ pub struct Session {
     client: Client,
     keys: Keys,
     relays: Vec<RelayUrl>,
+    /// Public events this identity keeps on its relays (profile, inbox relays, and whatever the
+    /// caller pins: service advertisements, bindings, templates). Resent verbatim, so their ids
+    /// don't change, every time a relay (re)connects: a restarted in-memory relay has lost them.
+    pinned: Arc<std::sync::Mutex<Vec<Event>>>,
 }
 
 impl Session {
@@ -80,7 +84,11 @@ impl Session {
             client,
             keys,
             relays,
+            pinned: Default::default(),
         };
+        for url in &session.relays {
+            session.republish_on_reconnect(url).await?;
+        }
         if config.announce {
             // Not fatal: relays may be temporarily unreachable; we'll still receive once they are.
             if let Err(e) = session.announce(&config).await {
@@ -118,12 +126,73 @@ impl Session {
         if config.kind == IdentityKind::Agent {
             md = md.custom_field("bot", true);
         }
-        self.client.set_metadata(&md).await?;
+        self.publish_pinned_builder(EventBuilder::metadata(&md))
+            .await?;
 
         // NIP-17: advertise where we want to receive DMs.
         let inbox = EventBuilder::new(kinds::kind(kinds::INBOX_RELAYS), "")
             .tags(self.relays.iter().cloned().map(Tag::relay));
-        self.client.send_event_builder(inbox).await?;
+        self.publish_pinned_builder(inbox).await?;
+        Ok(())
+    }
+
+    /// Keep `event` on this session's relays: resent verbatim whenever a relay (re)connects. A
+    /// replaceable or addressable event replaces the pinned one with the same kind (and `d`).
+    pub fn pin(&self, event: Event) {
+        let mut pinned = self.pinned.lock().unwrap();
+        let key = |e: &Event| (e.kind, e.tags.identifier().map(str::to_owned));
+        let replaces = event.kind.is_replaceable() || event.kind.is_addressable();
+        pinned.retain(|p| p.id != event.id && !(replaces && key(p) == key(&event)));
+        pinned.push(event);
+    }
+
+    /// Pin and publish a signed event.
+    pub async fn publish_pinned(&self, event: Event) -> Result<EventId, CoreError> {
+        self.pin(event.clone());
+        Ok(*self.client.send_event(&event).await?.id())
+    }
+
+    /// Sign with this session's key, then pin and publish.
+    pub async fn publish_pinned_builder(
+        &self,
+        builder: EventBuilder,
+    ) -> Result<EventId, CoreError> {
+        let event = builder
+            .sign_with_keys(&self.keys)
+            .map_err(|e| CoreError::Other(e.to_string()))?;
+        self.publish_pinned(event).await
+    }
+
+    /// Resend the pinned events to `url` each time it connects. Subscriptions are resent by
+    /// the relay pool itself; published state is not.
+    async fn republish_on_reconnect(&self, url: &RelayUrl) -> Result<(), CoreError> {
+        let relay = self.client.relay(url).await?;
+        let mut notifications = relay.notifications();
+        let (client, pinned, url) = (self.client.clone(), self.pinned.clone(), url.clone());
+        tokio::spawn(async move {
+            loop {
+                match notifications.recv().await {
+                    Ok(RelayNotification::RelayStatus {
+                        status: RelayStatus::Connected,
+                    }) => {
+                        let events = pinned.lock().unwrap().clone();
+                        if events.is_empty() {
+                            continue;
+                        }
+                        tracing::info!(relay = %url, n = events.len(), "relay (re)connected: republishing pinned events");
+                        for e in events {
+                            if let Err(err) = client.send_event_to([url.clone()], &e).await {
+                                tracing::warn!(relay = %url, error = %err, "republish failed");
+                            }
+                        }
+                    }
+                    Ok(RelayNotification::Shutdown) => break,
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => break,
+                }
+            }
+        });
         Ok(())
     }
 

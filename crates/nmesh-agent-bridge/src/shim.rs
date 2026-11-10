@@ -99,7 +99,7 @@ pub async fn publish_service(session: &Session, id: &str, svc: &Value) -> anyhow
         .tag(vec!["alt".into(), "ACN service advertisement".into()])
         .content(svc.clone());
     let ev = session.sign_act(&d, None)?;
-    session.publish_act(&ev).await?;
+    session.publish_act_pinned(&ev).await?;
     Ok(())
 }
 
@@ -117,6 +117,11 @@ pub async fn ensure_binding(session: &Session, cfg: &AcnConfig) -> anyhow::Resul
         acn_core::binding_status(&existing, &me.to_hex(), K_REPORT, cfg.price_sat, None, now);
     if matches!(status, acn_core::BindingStatus::Bound { .. }) {
         tracing::info!("acn: operator binding already in place");
+        let binding: Vec<_> = existing
+            .into_iter()
+            .filter(|e| matches!(e.kind, K_BIND | K_BIND_ACK | K_BIND_REVOKE))
+            .collect();
+        session.pin_acts(&binding);
         return Ok(());
     }
     let performer_kinds = [
@@ -134,9 +139,9 @@ pub async fn ensure_binding(session: &Session, cfg: &AcnConfig) -> anyhow::Resul
         ],
     )
     .sign_with_aux(&operator.secret_key().secret_bytes(), now, &rand32())?;
-    session.publish_act(&bind).await?;
+    session.publish_act_pinned(&bind).await?;
     let ack = session.sign_act(&Draft::bind_ack(&bind.id), Some(now))?;
-    session.publish_act(&ack).await?;
+    session.publish_act_pinned(&ack).await?;
     tracing::info!(operator = %operator.public_key().to_hex(), "acn: published operator binding");
     Ok(())
 }

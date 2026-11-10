@@ -483,7 +483,7 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | Cast secrets: escrowed preimages, Atlas's per-commitment key `k`, requester seeds | `nmesh-acn-sim` memory | lost on restart |
 | Judge panel | `judges.toml` (`--judges` / `NMESH_JUDGES`); API keys from the env vars it names | never stored in the file |
 | Messages and acts | relays only; in memory in each process | nothing local beyond the above |
-| Dev relay | in memory (`nmesh relay`) | lost on restart |
+| Dev relay | in memory (`nmesh relay`) | lost on restart; sessions republish their pinned public events (profile, inbox relays, `K_SVC`, commands, binding, templates) on every reconnect (`Session::pin`) |
 | Presenter mode | browser memory | fixed demo keys; nothing published |
 
 ## 8. Trust boundaries
@@ -526,6 +526,7 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 | `acn-judge/tests/end_to_end.rs` | a real-judge panel (scripted models) plays `/judged`, `/judged-auto`, `/injected` through the fold; model-vote injection; refuses unpinned judges and wrong rubrics; `HttpLlm` against an OpenAI-compatible stub |
 | `acn-judge/tests/templates.rs` | the published templates (`docs/acn/templates/`) parse, instantiate into terms that parse and close, re-instantiate exactly (V-28); rubric files match their hashes; judges pinned to this harness and `judges.example.toml` |
 | `nmesh-core/tests/dm_roundtrip.rs` | NIP-17 text and structured messages over a mock relay |
+| `nmesh-core/tests/relay_restart.rs` | a relay restarted on the same port gets the pinned events back, with the same ids; unpinned ones stay lost |
 | `nmesh-agent-bridge/tests/app_flow.rs` | app ↔ relay ↔ bridge ↔ MCP: chat, forms, ACN T0 |
 | `nmesh-acn-sim/tests/live.rs` | app ↔ relay ↔ cast ↔ mint: discovery, all sixteen scenarios via hints, real balances (300 → 39 available + 60 locked; Atlas 201), insufficient funds, board paging, reset (incl. restart); opt-in (`--ignored`, `NMESH_JUDGES`): `/judged` and `/injected` with real judges |
 | `nmesh-wallet/tests/htlc.rs` | real CDK mint: top up, lock, DLEQ/NUT-07 inspect, wrong preimage / wrong key / early refund rejected, redeem, payer reads the preimage, double spend, refund after locktime, insufficient funds, index survives reopen |
@@ -560,7 +561,8 @@ Status: ✅ built and tested · 🟡 partial / simulated · ⬜ not built.
 - **CR-003 Phase D is not built:** no drafters or linter in the reference binding. Template
   records are per template, not yet split by slot range.
 - **No local message store.** History comes back from relays (30-day window), and gift wraps
-  sent to a single relay are lost when the dev relay restarts.
+  sent to a single relay are lost when the dev relay restarts (public metadata is republished,
+  private acts are not).
 - **Keys are in files**, with no external signer (NIP-46 / NIP-55) yet.
 - **Single-relay assumptions:** no outbox / gossip routing to recipients' NIP-17 inbox relays.
 - **`nostr` is pinned to 0.44** because `mdk-core` 0.8 needs it; upgrade both together.
