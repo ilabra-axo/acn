@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 mod terms_card;
 pub use terms_card::{
     template_records, CheckedBy, DiffKind, DiffLine, DisqualifierItem, DoneItem, InstancesView,
-    PayIf, TemplateRecord, TemplateView, TermsCard, TermsVersionView,
+    PayIf, TemplateRecord, TemplateView, TermsCard, TermsVersionView, JUDGE_PRICE_THRESHOLD,
 };
 
 use acn_core::kinds::*;

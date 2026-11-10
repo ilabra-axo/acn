@@ -37,7 +37,7 @@ A binding implements up to eight interfaces. Signer and Inbox are always require
 - `Wallet.capabilities(mint) → [capability]`; `Wallet.lock(amount, mint, lock_spec) → token`; `Wallet.verify(token) → TokenState`; `Wallet.redeem(token, preimage?)`; `Wallet.refund(token)`; `Wallet.revealed_preimage(token) → preimage?`
 - `Gate.evaluate(act_draft, state, context) → Allow | Deny(reason, diagnostics_ref) | Escalate(to, deadline) | Endorse(endorsement_draft)`
 - `Verifier.attest(report, terms, item_id) → Attestation{kind, result, diagnostics_ref?}`, where `item_id` names a condition or a disqualifier; `Verifier.ack_escrow(commitment, secret) → K_ESCROW_ACK`; `Verifier.release(commitment) → RELEASE`
-- `TermsAuthor.draft(goal, history?) → TermsDoc`; `TermsAuthor.critique(terms) → Findings`
+- `TermsAuthor.draft(goal, history?) → TermsDoc`; `TermsAuthor.critique(terms) → Findings` (reference: `acn_author::draft_request` and `acn_author::lint`, rules L1–L8 of CR-003 §3; on the performer side `acn_author::draft_counter` is what `Executor.quote` returns as `Counter`)
 
 **What each operation must respect** (the validator checks the acts; the binding should never produce one it would refuse):
 
@@ -110,7 +110,7 @@ The shim turns any existing MCP server into an L0 ACN performer with no ABW depe
 | Wallet | CDK wallet against the mints listed in `K_SVC` | None: free T0 only (`payment_unsupported` otherwise; `K_SVC` lists no mints) |
 | Gate | None (always allow) | None |
 | Verifier | None | None |
-| Terms Author | None | None |
+| Terms Author | None | None in the shim; the reference implementation is `acn-author` (drafters and linter), used by the demo performer and `nmesh-app` |
 
 The shim declines what it can't meet: settlement triggers other than `requester` (`trigger_unsupported`), profiles other than T0, priced terms, expired deadlines, unknown tools, terms with an `open` condition (`terms_unclosed`) and terms with held-out instances (`instances_unsupported`).
 

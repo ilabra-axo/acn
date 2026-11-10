@@ -13,6 +13,7 @@ members = [
     "crates/acn-wasm",
     "crates/acn-wallet",
     "crates/acn-judge",
+    "crates/acn-author",
     "crates/nmesh-wallet",
     "crates/nmesh-mint",
     "crates/nmesh-acn-sim",
@@ -38,6 +39,7 @@ acn-view = { path = "crates/acn-view" }
 acn-sim = { path = "crates/acn-sim" }
 acn-wallet = { path = "crates/acn-wallet" }
 acn-judge = { path = "crates/acn-judge" }
+acn-author = { path = "crates/acn-author" }
 nmesh-wallet = { path = "crates/nmesh-wallet" }
 nmesh-mint = { path = "crates/nmesh-mint" }
 

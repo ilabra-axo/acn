@@ -2,8 +2,7 @@
 
 Nov 8, 2026 · @ivan Labra
 
-> **Status (Nov 9, 2026): Phases A, B and C applied, with changes; Phase D (authoring aids)
-> not started.** This is the change request as written; the normative text is
+> **Status (Nov 10, 2026): Phases A, B, C and D applied, with changes.** This is the change request as written; the normative text is
 > [Core.md](../Core.md) (v0.5), and where they differ, Core.md wins. Record: Core.md Appendix B,
 > rows "CR-003".
 >
@@ -28,6 +27,10 @@ Nov 8, 2026 · @ivan Labra
 >   [docs/acn/templates/](../acn/templates/) with §4.1 as
 >   [docs/acn/cos-templates.md](../acn/cos-templates.md); `research-brief/v1` drops d1's
 >   deliverable-derived pool (D-35).
+>   Authoring aids (Phase D) are the `acn-author` crate: deterministic drafters that never
+>   invent a key and the linter L1–L8 (L2 only when retrievability is known; L4/L5 by quality
+>   words). Templates gain optional `notes`, one line per item, for the drafter's explanations.
+>   See Core.md Appendix B, row "CR-003 Phase D".
 > - **Open decisions:** OD-1 → D-33, OD-2 → D-34, OD-3 → D-32, OD-4 → D-35, OD-5 → D-29,
 >   OD-6 → D-36, OD-7 → D-37 (all open); added D-30, D-31 (closed), D-38 (closed), D-39.
 > - **Reference:** `acn-core` (V-24…V-28, `instances`, `template`), `acn-view` (terms card,

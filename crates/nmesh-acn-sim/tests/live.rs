@@ -262,6 +262,41 @@ async fn every_scenario_plays_live() -> anyhow::Result<()> {
         }
     }
 
+    // CR-003 §3: the requester drafter matches Atlas's published template (fetched from the
+    // relay with its binding), fills the checker from our configuration, and the reference
+    // re-instantiates; nothing is left open, so the linter has nothing to say.
+    let verity = cast.public_key(Actor::Verifier).to_hex();
+    let draft = app
+        .draft_request(
+            &acn_author::Intent {
+                goal: "Retry with backoff in the relay client".into(),
+                requirements: vec![
+                    "The existing test suite passes".into(),
+                    "p95 latency stays within 5% of the baseline benchmark".into(),
+                ],
+                price_sat: 0,
+                deadline: 2_000_000_000,
+                review_window: 3600,
+            },
+            &acn_author::RequesterConfig {
+                slots: [("checker".to_string(), serde_json::json!(verity))].into(),
+                verifiers: vec![acn_core::terms::Verifier {
+                    pubkey: verity.clone(),
+                    classes: vec![acn_core::terms::ConditionClass::Mechanical],
+                }],
+            },
+        )
+        .await;
+    assert_eq!(
+        draft.template.as_deref(),
+        Some("retry-change/v1"),
+        "{:?}",
+        draft.notes
+    );
+    assert!(draft.findings.is_empty(), "{:?}", draft.findings);
+    let t = acn_core::terms::Terms::parse(&draft.terms).expect("drafted terms parse");
+    assert!(t.template_ref.is_some(), "{:?}", draft.notes);
+
     // Board: every scenario closed, across both agents; closed ones are paged.
     let b = app.board(3).await;
     assert_eq!(b.closed_total, SCENARIOS.len());

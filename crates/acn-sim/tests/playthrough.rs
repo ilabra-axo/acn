@@ -243,6 +243,15 @@ fn scenario_outcomes() {
     assert_eq!(tv.status, acn_core::template::TemplateStatus::Counted);
     assert_eq!(tv.name.as_deref(), Some("retry-change/v1"));
     assert_eq!((tv.record.commitments, tv.record.paid), (1, 1));
+    // CR-003 §3: Atlas's drafter explains each change in a line (from the template's notes),
+    // and its counter is clean under the linter.
+    let counter = p.timeline.iter().find(|e| e.act == "COUNTER").unwrap();
+    assert!(
+        counter.summary.contains("c2: closed as a benchmark check (p95 within 5%); d1: so the check can't be dodged; d2: so the suite can't be weakened to pass c1"),
+        "{}",
+        counter.summary
+    );
+    assert!(card.lint.is_empty(), "{:?}", card.lint);
     let p = run("disqualified");
     assert_eq!(p.phase, Some(Phase::Rejected), "{:?}", acts(&p));
     assert!(codes(&p).contains(&"disqualified"));
@@ -299,6 +308,17 @@ fn scenario_outcomes() {
     // CR-001 MVP: the verifier runs both judges and releases.
     let p = run("judged");
     assert_eq!(p.phase, Some(Phase::Settled), "{:?}", acts(&p));
+    // The linter's advice on the judged terms: no disqualifier for the obvious gaming route
+    // (L6), and a rubric with no reference or counterexample and no held-out cases (L8).
+    let lint: Vec<&str> = p
+        .terms_card
+        .as_ref()
+        .unwrap()
+        .lint
+        .iter()
+        .map(|f| f.rule)
+        .collect();
+    assert_eq!(lint, ["L6", "L8"]);
     let tl = p.timeline.iter().map(|e| e.act).collect::<Vec<_>>();
     assert!(
         tl.contains(&"ATTEST_JUDGED") && tl.contains(&"RELEASE"),

@@ -3,6 +3,15 @@
 version = 4
 
 [[package]]
+name = "acn-author"
+version = "0.1.0"
+dependencies = [
+ "acn-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "acn-core"
 version = "0.1.0"
 dependencies = [
@@ -40,6 +49,7 @@ dependencies = [
 name = "acn-sim"
 version = "0.1.0"
 dependencies = [
+ "acn-author",
  "acn-core",
  "acn-view",
  "hex",
@@ -52,6 +62,7 @@ dependencies = [
 name = "acn-view"
 version = "0.1.0"
 dependencies = [
+ "acn-author",
  "acn-core",
  "hex",
  "serde",
@@ -72,6 +83,7 @@ dependencies = [
 name = "acn-wasm"
 version = "0.1.0"
 dependencies = [
+ "acn-author",
  "acn-core",
  "acn-sim",
  "acn-view",
@@ -3125,6 +3137,7 @@ dependencies = [
 name = "nmesh-acn-sim"
 version = "0.1.0"
 dependencies = [
+ "acn-author",
  "acn-core",
  "acn-judge",
  "acn-sim",
@@ -3172,6 +3185,7 @@ dependencies = [
 name = "nmesh-app"
 version = "0.1.0"
 dependencies = [
+ "acn-author",
  "acn-core",
  "acn-sim",
  "acn-view",

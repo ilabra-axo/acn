@@ -82,7 +82,8 @@ Browser preview without Tauri or a relay (presenter mode: stand-in chat, real AC
 | `crates/acn-sim` | Demo scenarios: scripted cast reacting to real signed acts |
 | `crates/acn-wasm` | acn-core + view + sim + wallet for the browser (presenter mode) |
 | `crates/acn-wallet` | Wallet views, a pure simulated mint with NUT-14 rules, settlement advice from the fold |
-| `crates/acn-judge` | Judge harness for `judged` conditions: pinned LLM judges (OpenAI-compatible), injection detection, `K_ATTEST_JUDGED` |
+| `crates/acn-judge` | Judge harness for `judged` conditions: pinned LLM judges (OpenAI-compatible), injection detection, held-out cases, `K_ATTEST_JUDGED` |
+| `crates/acn-author` | Authoring aids (CR-003 §3): the terms linter (L1–L8) and the requester and performer drafters |
 | `crates/nmesh-wallet` | Cashu wallet (CDK): HTLC lock, DLEQ/NUT-07 verify, redeem, refund |
 | `crates/nmesh-mint` | `nmesh-mint` binary: local Cashu test mint (CDK, fake Lightning, test sats) |
 | `crates/nmesh-acn-sim` | `nmesh-acn-sim` binary: the demo cast as live Nostr peers; hosts the test mint |

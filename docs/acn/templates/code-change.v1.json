@@ -66,5 +66,14 @@
     },
     {"id": "d3", "class": "mechanical", "description": "Touches files outside {{scope_paths}} without flagging it in REPORT", "runners": ["{{checker}}"]},
     {"id": "d4", "class": "mechanical", "description": "Adds dependencies the request does not list", "runners": ["{{checker}}"]}
-  ]
+  ],
+  "notes": {
+      "c1": "the change doesn't break what already works",
+      "c2": "new behaviour is tested, and held-out integration tests stop code that only passes the visible tests",
+      "c3": "readability, scope and error handling, scored by two judges from different model families",
+      "d1": "so the suite can't be weakened to pass c1",
+      "d2": "so the judges and tests can't be gamed by special-casing inputs",
+      "d3": "so the change stays inside {{scope_paths}}, or says why not",
+      "d4": "so no unagreed dependency comes in with the change"
+  }
 }

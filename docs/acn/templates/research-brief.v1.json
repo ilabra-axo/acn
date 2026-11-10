@@ -74,5 +74,13 @@
       "repeats": 3,
       "runners": ["{{checker}}"]
     }
-  ]
+  ],
+  "notes": {
+      "c1": "the shape the reader expects: {{words}} words and the four sections",
+      "c2": "every claim is cited and every citation resolves",
+      "c3": "accuracy, clarity for a {{reader}} reader, and coverage, scored by two judges",
+      "d1": "c2 counts citations; this catches ones that don't support their claim",
+      "d2": "so the brief is written, not copied",
+      "d3": "so c3 can't be raised by repeating the rubric"
+  }
 }

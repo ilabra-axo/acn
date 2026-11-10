@@ -219,6 +219,15 @@ export interface TermsCard {
   unclosed: string | null;
   /** The template this version was drafted from (V-28), with its reader-computed record. */
   template: TemplateView | null;
+  /** The terms linter (CR-003 §3, L1–L8). */
+  lint: LintFinding[];
+}
+
+export interface LintFinding {
+  rule: string;
+  level: "error" | "warning";
+  item: string | null;
+  message: string;
 }
 
 export interface TemplateView {
