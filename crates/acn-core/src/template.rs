@@ -62,6 +62,10 @@ pub struct TermsTemplate {
     pub conditions: Vec<Value>,
     #[serde(default)]
     pub disqualifiers: Vec<Value>,
+    /// Optional one-line rationale per item id (why the item is there), with placeholders like
+    /// the items. Not terms content: drafters show it beside the diff (CR-003 §3).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub notes: BTreeMap<String, String>,
 }
 
 /// `template_ref` in terms: which template, which version of it, and the slot values used.
@@ -116,6 +120,43 @@ fn walk_strings<'a>(v: &'a Value, f: &mut impl FnMut(&'a str)) {
     }
 }
 
+fn text(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Replace placeholders: a string that is exactly one placeholder becomes the typed value.
+fn subst(v: &Value, filled: &BTreeMap<&str, Value>) -> Value {
+    match v {
+        Value::String(s) => {
+            let ph = placeholders(s);
+            let t = s.trim();
+            if ph.len() == 1
+                && t.starts_with("{{")
+                && t.ends_with("}}")
+                && t[2..t.len() - 2].trim() == ph[0]
+            {
+                return filled[ph[0].as_str()].clone();
+            }
+            let mut out = s.clone();
+            for p in ph {
+                out = out.replace(&format!("{{{{{p}}}}}"), &text(&filled[p.as_str()]));
+                out = out.replace(&format!("{{{{ {p} }}}}"), &text(&filled[p.as_str()]));
+            }
+            Value::String(out)
+        }
+        Value::Array(a) => Value::Array(a.iter().map(|x| subst(x, filled)).collect()),
+        Value::Object(o) => Value::Object(
+            o.iter()
+                .map(|(k, x)| (k.clone(), subst(x, filled)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 impl TermsTemplate {
     /// Parse and check a template's content.
     pub fn parse(v: &Value) -> Result<Self, String> {
@@ -143,7 +184,8 @@ impl TermsTemplate {
             }
         }
         let mut unknown = None;
-        for item in t.conditions.iter().chain(&t.disqualifiers) {
+        let notes: Vec<Value> = t.notes.values().map(|n| Value::String(n.clone())).collect();
+        for item in t.conditions.iter().chain(&t.disqualifiers).chain(&notes) {
             walk_strings(item, &mut |s| {
                 for p in placeholders(s) {
                     if !t.slots.contains_key(&p) && unknown.is_none() {
@@ -152,18 +194,23 @@ impl TermsTemplate {
                 }
             });
         }
+        let ids: Vec<&str> = t
+            .conditions
+            .iter()
+            .chain(&t.disqualifiers)
+            .filter_map(|i| i["id"].as_str())
+            .collect();
+        if let Some(k) = t.notes.keys().find(|k| !ids.contains(&k.as_str())) {
+            return Err(format!("note `{k}` names no condition or disqualifier"));
+        }
         if let Some(p) = unknown {
             return Err(format!("placeholder `{{{{{p}}}}}` names no slot"));
         }
         Ok(t)
     }
 
-    /// Fill the slots (given values, else defaults) and return the conditions and disqualifiers
-    /// as the terms would carry them (normalized through the terms types).
-    pub fn instantiate(
-        &self,
-        values: &BTreeMap<String, Value>,
-    ) -> Result<(Vec<Condition>, Vec<Disqualifier>), String> {
+    /// Each slot's value: the given one, else the default; typed-checked.
+    fn filled(&self, values: &BTreeMap<String, Value>) -> Result<BTreeMap<&str, Value>, String> {
         if let Some(k) = values.keys().find(|k| !self.slots.contains_key(*k)) {
             return Err(format!("slot `{k}` is not in the template"));
         }
@@ -178,57 +225,41 @@ impl TermsTemplate {
             }
             filled.insert(name, v.clone());
         }
-        let text = |v: &Value| match v {
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        fn subst(
-            v: &Value,
-            filled: &BTreeMap<&str, Value>,
-            text: &dyn Fn(&Value) -> String,
-        ) -> Value {
-            match v {
-                Value::String(s) => {
-                    let ph = placeholders(s);
-                    let t = s.trim();
-                    if ph.len() == 1
-                        && t.starts_with("{{")
-                        && t.ends_with("}}")
-                        && t[2..t.len() - 2].trim() == ph[0]
-                    {
-                        return filled[ph[0].as_str()].clone();
-                    }
-                    let mut out = s.clone();
-                    for p in ph {
-                        let pat = |q: &str| format!("{{{{{q}}}}}");
-                        out = out.replace(&pat(&p), &text(&filled[p.as_str()]));
-                        out = out.replace(&format!("{{{{ {p} }}}}"), &text(&filled[p.as_str()]));
-                    }
-                    Value::String(out)
-                }
-                Value::Array(a) => Value::Array(a.iter().map(|x| subst(x, filled, text)).collect()),
-                Value::Object(o) => Value::Object(
-                    o.iter()
-                        .map(|(k, x)| (k.clone(), subst(x, filled, text)))
-                        .collect(),
-                ),
-                other => other.clone(),
-            }
-        }
+        Ok(filled)
+    }
+
+    /// The notes with the slots filled in (item id → one line).
+    pub fn notes_for(
+        &self,
+        values: &BTreeMap<String, Value>,
+    ) -> Result<BTreeMap<String, String>, String> {
+        let filled = self.filled(values)?;
+        Ok(self
+            .notes
+            .iter()
+            .map(|(k, n)| (k.clone(), text(&subst(&Value::String(n.clone()), &filled))))
+            .collect())
+    }
+
+    /// Fill the slots (given values, else defaults) and return the conditions and disqualifiers
+    /// as the terms would carry them (normalized through the terms types).
+    pub fn instantiate(
+        &self,
+        values: &BTreeMap<String, Value>,
+    ) -> Result<(Vec<Condition>, Vec<Disqualifier>), String> {
+        let filled = self.filled(values)?;
         let conditions = self
             .conditions
             .iter()
             .map(|c| {
-                serde_json::from_value(subst(c, &filled, &text))
-                    .map_err(|e| format!("condition: {e}"))
+                serde_json::from_value(subst(c, &filled)).map_err(|e| format!("condition: {e}"))
             })
             .collect::<Result<Vec<Condition>, String>>()?;
         let disqualifiers = self
             .disqualifiers
             .iter()
             .map(|d| {
-                serde_json::from_value(subst(d, &filled, &text))
-                    .map_err(|e| format!("disqualifier: {e}"))
+                serde_json::from_value(subst(d, &filled)).map_err(|e| format!("disqualifier: {e}"))
             })
             .collect::<Result<Vec<Disqualifier>, String>>()?;
         Ok((conditions, disqualifiers))
@@ -303,6 +334,22 @@ mod tests {
         assert_eq!(c[0].extra["limit"], json!(5));
         assert_eq!(d[0].description, "touches files outside src/");
         assert_eq!(d[0].runners(), vec!["ab".repeat(32)]);
+    }
+
+    #[test]
+    fn notes_fill_placeholders_and_name_items() {
+        let mut v = tpl();
+        v["notes"] = json!({"c1": "within {{max}}% for {{scope}}"});
+        let t = TermsTemplate::parse(&v).unwrap();
+        let slots = BTreeMap::from([
+            ("scope".to_string(), json!("src/")),
+            ("checker".to_string(), json!("ab".repeat(32))),
+        ]);
+        assert_eq!(t.notes_for(&slots).unwrap()["c1"], "within 5% for src/");
+        v["notes"] = json!({"c9": "names nothing"});
+        assert!(TermsTemplate::parse(&v).is_err());
+        v["notes"] = json!({"c1": "{{nope}}"});
+        assert!(TermsTemplate::parse(&v).is_err());
     }
 
     #[test]

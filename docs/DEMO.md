@@ -50,7 +50,13 @@ scenario logic** (`acn-core`, `acn-view`, `acn-sim`). Every act is a real BIP-34
    · Checked by · Pay if · Disqualified if*), **v2 · drafted by Atlas**, and the diff against
    v1. The counter is an instantiation of a **terms template** Atlas published
    (`retry-change/v1`): the card says **✓ from template**, shows the slot values filled in, and
-   the template's record across the commitments you can see. You accept; Verity checks both conditions and both disqualifiers; auto-satisfy.
+   the template's record across the commitments you can see. Atlas's **drafter** (`acn-author`)
+   wrote it: the counter's reason is one line per change, taken from the template's notes. You
+   accept; Verity checks both conditions and both disqualifiers; auto-satisfy.
+
+   Terms cards also carry the **linter's** advice (CR-003 §3): on `/judged`, for example, L6 (no
+   disqualifier against gaming the judges) and L8 (no held-out cases, no reference in the
+   rubric). Advice only: the validator doesn't use it.
 6. **Disqualified** (`/disqualified`). Same terms, but Atlas loosens an existing assertion.
    Both conditions pass, yet Verity attests `d2` as **hit**: Satisfy disappears, the Director
    says *Reject: d2 hit*, and the commitment ends **Rejected** with no rework, although one was

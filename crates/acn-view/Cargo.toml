@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 acn-core.workspace = true
+acn-author.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 hex.workspace = true

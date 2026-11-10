@@ -64,8 +64,25 @@ record.
 - Templates cover conditions and disqualifiers only. Price, deadline, review window,
   `verifiers`, settlement and the deliverable are set per request.
 
-Reference: `acn_core::template` (`TermsTemplate::parse`, `instantiate`, `check`),
+- Optional `notes`: one line per item id saying why it is there, with placeholders. Not terms
+  content; a drafter shows them beside the diff when it uses the template.
+
+Reference: `acn_core::template` (`TermsTemplate::parse`, `instantiate`, `notes_for`, `check`),
 `acn_core::draft::Draft::template` to publish.
+
+## Authoring aids
+
+`acn-author` (Core.md §11, CR-003 §3) puts these practices where terms are written:
+
+- **The linter** (L1–L8) flags terms with no evidence producer, unretrievable criteria, `open`
+  conditions about to bind (errors: the reference app won't send them), and qualities without
+  rubrics, disqualifiers that aren't acts, judged conditions with no disqualifier, one judge or
+  one model family above 1,000 sat, and judged conditions open to overfitting (warnings, on the
+  terms card).
+- **The requester drafter** turns a goal and its requirements into terms, using a template where
+  one fits and leaving the rest `open` with a suggested class.
+- **The performer drafter** closes `open` conditions from the performer's templates and
+  explains each change with the template's notes. Neither drafter invents a key.
 
 ## Templates
 

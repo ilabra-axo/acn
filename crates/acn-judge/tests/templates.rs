@@ -77,6 +77,11 @@ fn check_judged(name: &str, content: &Value) {
 fn instantiate(content: &Value, slots: BTreeMap<String, Value>, rework_limit: u32) -> Terms {
     let tpl = TermsTemplate::parse(content).expect("template parses");
     let (conditions, disqualifiers) = tpl.instantiate(&slots).expect("template instantiates");
+    // Every item has a note, and the notes fill (a drafter shows them beside the diff).
+    let notes = tpl.notes_for(&slots).expect("notes fill");
+    for id in conditions.iter().map(|c| &c.id).chain(disqualifiers.iter().map(|d| &d.id)) {
+        assert!(notes.get(id).is_some_and(|n| !n.contains("{{")), "note for {id}");
+    }
     let event = Draft::template(content).sign(&[0x41; 32], 1_000).unwrap();
     let terms = json!({
         "v": acn_core::terms::TERMS_VERSION,

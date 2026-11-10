@@ -44,7 +44,13 @@ pub struct TermsCard {
     pub unclosed: Option<String>,
     /// The template this version was drafted from, if it says so (V-28), with its record.
     pub template: Option<TemplateView>,
+    /// The terms linter on this version (CR-003 §3, L1–L8; L3 is `unclosed` above). Errors
+    /// would have blocked a binding that lints before sending; warnings are advice.
+    pub lint: Vec<acn_author::Finding>,
 }
+
+/// Price (sat) above which the card warns about a single judge or one model family (L7).
+pub const JUDGE_PRICE_THRESHOLD: u64 = 1_000;
 
 /// A version's `template_ref`: which template, whether it checks out, and the template's record.
 #[derive(Debug, Clone, Serialize)]
@@ -276,6 +282,13 @@ pub fn card(t: &Terms, v: &TermsVersionView, template: Option<TemplateView>) -> 
             .collect(),
         unclosed: t.unclosed(),
         template,
+        lint: acn_author::lint(
+            t,
+            &acn_author::LintContext {
+                judge_price_threshold: JUDGE_PRICE_THRESHOLD,
+                ..Default::default()
+            },
+        ),
     }
 }
 

@@ -25,6 +25,7 @@ tracing-subscriber.workspace = true
 rustls.workspace = true
 
 [dev-dependencies]
+acn-author.workspace = true
 nmesh-app.workspace = true
 acn-wallet.workspace = true
 acn-view.workspace = true

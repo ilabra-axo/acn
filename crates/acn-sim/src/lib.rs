@@ -487,7 +487,12 @@ pub fn retry_change_template() -> Value {
         "disqualifiers": [
             {"id": "d1", "class": "mechanical", "description": "Disables or skips the benchmark", "runners": ["{{checker}}"]},
             {"id": "d2", "class": "mechanical", "description": "Modifies or deletes existing tests or their assertions", "runners": ["{{checker}}"]}
-        ]
+        ],
+        "notes": {
+            "c2": "closed as a benchmark check (p95 within {{max_regression}}%)",
+            "d1": "so the check can't be dodged",
+            "d2": "so the suite can't be weakened to pass c1"
+        }
     })
 }
 
@@ -497,31 +502,6 @@ pub fn templates() -> Vec<(String, Actor, Draft)> {
     let t = retry_change_template();
     let name = t["name"].as_str().unwrap_or_default().to_string();
     vec![(name, Actor::Performer, Draft::template(&t))]
-}
-
-/// `retry-change/v1` filled for the demo: the reference (if the template was published) and
-/// what it instantiates to.
-type Filled = (
-    Option<acn_core::template::TemplateRef>,
-    Vec<acn_core::terms::Condition>,
-    Vec<acn_core::terms::Disqualifier>,
-);
-
-fn retry_change(cast: &Cast) -> Option<Filled> {
-    let content = retry_change_template();
-    let t = acn_core::template::TermsTemplate::parse(&content).ok()?;
-    let slots = BTreeMap::from([("checker".to_string(), json!(cast.verifier))]);
-    let (c, d) = t.instantiate(&slots).ok()?;
-    let hash = acn_core::jcs::hash(&content).ok()?;
-    let r = cast
-        .templates
-        .get(&t.name)
-        .map(|event| acn_core::template::TemplateRef {
-            event: event.clone(),
-            hash,
-            slots,
-        });
-    Some((r, c, d))
 }
 
 /// Text that addresses the judges instead of the reader (the injection scenario).
@@ -1228,16 +1208,18 @@ fn react_settlement(
         }
         // ---- CR-003: Atlas's drafter closes the open condition and adds disqualifiers ----
         ("drafted" | "disqualified", Phase::Requested) if !ctx.exists(K_COUNTER, p, |_| true) => {
-            // Atlas drafts from its published template (CR-003 §2.5): the counter's conditions
-            // and disqualifiers are an instantiation, and `template_ref` says which.
-            let mut t = serde_json::to_value(terms).ok()?;
-            let (r, conditions, disqualifiers) = retry_change(cast)?;
-            t["conditions"] = serde_json::to_value(conditions).ok()?;
-            t["disqualifiers"] = serde_json::to_value(disqualifiers).ok()?;
-            if let Some(r) = r {
-                t["template_ref"] = serde_json::to_value(r).ok()?;
-            }
-            let d = Draft::counter(c, head, parties, &t, "c2: closed as a benchmark check (p95 within 5%). d1: so the check can't be dodged. d2: so the suite can't be weakened to pass c1.").ok()?;
+            // Atlas's drafter (acn-author, CR-003 §3) closes the open condition from its published
+            // template (CR-003 §2.5): the counter is an instantiation, with `template_ref`, and
+            // the reason is one line per change from the template's notes.
+            let caps = acn_author::Capabilities {
+                templates: vec![acn_author::TemplateCandidate {
+                    event: cast.templates.get("retry-change/v1").cloned(),
+                    content: retry_change_template(),
+                }],
+                ..Default::default()
+            };
+            let drafted = acn_author::draft_counter(terms, &caps)?;
+            let d = Draft::counter(c, head, parties, &drafted.terms, &drafted.reason).ok()?;
             push(mv(Actor::Performer, 1300, "Atlas's drafter fills its published template retry-change/v1: c2 closed as a benchmark check with a retrievable definition, plus two disqualifiers. In effect a quote of what it will be held to, and the card can show the template's record. You can't be promised against an open condition; you can accept this version.", d, ctx));
         }
         ("drafted" | "disqualified", Phase::Promised) if fresh(K_REPORT) => {

@@ -96,6 +96,31 @@ pub fn invoke(req: &str) -> Result<Value, String> {
             ser(&acn_view::project(&events, &me, now))
         }
         "scenarios" => ser(&acn_sim::SCENARIOS),
+        // Authoring aids (CR-003 §3): the linter and both drafters.
+        "lint" => {
+            let terms = acn_core::terms::Terms::parse(&arg::<Value>(&r, "terms")?)?;
+            let binding: bool = arg(&r, "binding").unwrap_or(false);
+            ser(&acn_author::lint(
+                &terms,
+                &acn_author::LintContext {
+                    binding,
+                    judge_price_threshold: acn_view::JUDGE_PRICE_THRESHOLD,
+                    ..Default::default()
+                },
+            ))
+        }
+        "draft_request" => {
+            let intent: acn_author::Intent = arg(&r, "intent")?;
+            let templates: Vec<acn_author::TemplateCandidate> =
+                arg(&r, "templates").unwrap_or_default();
+            let cfg: acn_author::RequesterConfig = arg(&r, "config").unwrap_or_default();
+            ser(&acn_author::draft_request(&intent, &templates, &cfg))
+        }
+        "draft_counter" => {
+            let terms = acn_core::terms::Terms::parse(&arg::<Value>(&r, "terms")?)?;
+            let caps: acn_author::Capabilities = arg(&r, "capabilities").unwrap_or_default();
+            ser(&acn_author::draft_counter(&terms, &caps))
+        }
         // The cast's public terms templates: who signs each, and at what time.
         // The host signs each, then puts the ids in `cast.templates` (by name).
         "templates" => ser(&acn_sim::templates()

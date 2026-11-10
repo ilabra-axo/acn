@@ -11,6 +11,7 @@ nmesh-proto.workspace = true
 nmesh-contracts.workspace = true
 nmesh-core.workspace = true
 acn-core.workspace = true
+acn-author.workspace = true
 acn-view.workspace = true
 acn-sim.workspace = true
 acn-wallet.workspace = true

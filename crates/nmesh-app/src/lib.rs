@@ -647,6 +647,20 @@ impl App {
         };
         // Requester-side settlement policy (Binding API policy filters, CR-002).
         self.inner.policy.check(&terms)?;
+        // The terms linter (CR-003 §3): errors block sending; warnings go on the card.
+        if let Ok(t) = acn_core::terms::Terms::parse(&terms) {
+            let errors: Vec<String> = acn_author::lint(&t, &acn_author::LintContext::default())
+                .into_iter()
+                .filter(|f| f.level == acn_author::Level::Error)
+                .map(|f| format!("{} {}: {}", f.rule, f.item.unwrap_or_default(), f.message))
+                .collect();
+            if !errors.is_empty() {
+                return Err(AppError::Invalid(format!(
+                    "the terms can't be sent: {}",
+                    errors.join("; ")
+                )));
+            }
+        }
         // Rail capability (Core.md §8.6): contingent needs a mint that reveals the preimage to
         // the payer, as declared in the agent's K_SVC.
         if terms["settlement_trigger"] == "contingent" {
@@ -1014,6 +1028,34 @@ impl App {
             .chain(st.bindings.get(conv).into_iter().flatten())
             .cloned()
             .collect()
+    }
+
+    /// Draft terms for an intent with the requester drafter (CR-003 §3): it matches the terms
+    /// templates published by the agents you've added, fills their slots from `cfg` (it never
+    /// invents a key), and leaves what it can't close `open` for the performer to close.
+    pub async fn draft_request(
+        &self,
+        intent: &acn_author::Intent,
+        cfg: &acn_author::RequesterConfig,
+    ) -> acn_author::RequestDraft {
+        let templates: Vec<acn_author::TemplateCandidate> = {
+            let st = self.inner.state.lock().await;
+            let mut seen = HashSet::new();
+            st.bindings
+                .values()
+                .flatten()
+                .filter(|e| {
+                    e.kind == acn_core::kinds::K_TERMS_TEMPLATE && seen.insert(e.id.clone())
+                })
+                .filter_map(|e| {
+                    Some(acn_author::TemplateCandidate {
+                        event: Some(e.id.clone()),
+                        content: serde_json::from_str(&e.content).ok()?,
+                    })
+                })
+                .collect()
+        };
+        acn_author::draft_request(intent, &templates, cfg)
     }
 
     /// What a requester-side runner needs to attest an item with held-out instances (CR-003

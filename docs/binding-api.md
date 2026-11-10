@@ -30,6 +30,17 @@ In the reference bindings:
 | `nmesh-app` | requester | `SettlementPolicy { refuse_verifier, refuse_contingent, trusted_verifiers }` (the trusted set covers both triggers); checked before any money is locked; default accepts every valid combination. Contingent also needs the agent's `K_SVC` to declare `reveals_preimage_to_payer` for the terms' mint, else `rail_incapable` (vector S-10) | `crates/nmesh-app/src/lib.rs` (`SettlementPolicy`, `mint_has_capability`) |
 | `acn-mcp-shim` | performer | requester trigger only; anything else is declined `trigger_unsupported`. It also declines terms it can't meet: other profiles, priced terms, an `open` condition (`terms_unclosed`), held-out instances (`instances_unsupported`) | `crates/nmesh-agent-bridge/src/shim.rs` (`refusal`) |
 
+## Authoring aids (CR-003 §3)
+
+Drafting and critiquing terms is binding work; Core only validates the result. The reference
+implementation is `crates/acn-author`, pure and deterministic:
+
+| Aid | What it does | Used by |
+| --- | --- | --- |
+| `lint` | Rules L1–L8. Errors (no evidence producer, unretrievable criteria when known, `open` in a version about to bind) block sending; warnings (qualities without rubrics, disqualifiers that aren't acts, a judged condition without a disqualifier, one judge or model family above 1,000 sat, nothing against overfitting) go on the terms card | `acn-view` (`TermsCard.lint`), `nmesh-app` (blocks a `REQUEST` with errors), `acn-wasm` op `lint` |
+| `draft_request` | Intent and requirements in; terms out. Uses the best-fitting template it can fill from the requester's configuration, and leaves each uncovered requirement `open` with a `suggested_class` | `nmesh-app` (`App::draft_request`, templates of the agents you've added), `acn-wasm` op `draft_request` |
+| `draft_counter` | A request with `open` conditions and the performer's templates in; a `COUNTER` that closes them, adds the template's disqualifiers and explains each change in one line (from the template's `notes`). Keys come from the request's own verifiers or the performer's configuration, never invented; nothing if no template closes everything | the demo performer (Atlas's `/drafted` and `/disqualified` counters), `acn-wasm` op `draft_counter` |
+
 ## Worked example: outcome-priced technical summary (CR-001)
 
 A requester commissions a 500-word technical summary of a document and pays only if two

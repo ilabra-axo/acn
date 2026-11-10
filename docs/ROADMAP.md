@@ -36,9 +36,10 @@ of focused work for 1–2 people.
 - [x] CR-003 Phase A (`acn-terms/0.5`): no hidden criteria (public rubrics and checks), disqualifiers, `open` conditions drafted in `COUNTER` with closure before promise, the terms card; `/drafted`, `/disqualified`
 - [x] CR-003 Phase B: held-out instances and the two-party seed (RFC 6962 pool roots, seeds committed before delivery, sample derived from both, proofs in the attestation); `/held-out`
 - [x] Held-out instances for judged conditions: `acn-judge` gives the judges the sampled cases and reveals the requester seed and proofs in `K_ATTEST_JUDGED`; `/held-out` adds a judged condition on a second pool. The app keeps its requester seed and assembles a runner's `HeldOut` (`App::held_out`)
-- [ ] A requester-side runner in the reference binding (the app running checks or judges itself): lands with Phase D / P3
+- [ ] A requester-side runner in the reference binding (the app running checks or judges itself): P3
 - [x] CR-003 Phase C: terms templates (`K_TERMS_TEMPLATE`, typed slots, `template_ref` checked by re-instantiation, V-28), template and record on the terms card; best practices and two templates in `docs/acn/cos-templates.md`; Atlas's `/drafted` and `/disqualified` counters come from its published `retry-change/v1`
-- [ ] CR-003 Phase D: drafters and linter in the reference binding (this is where P2's negotiation UI and P3's binding API land)
+- [x] CR-003 Phase D: `acn-author`, the terms linter (L1–L8; errors block a `REQUEST`, warnings on the card) and the requester and performer drafters (Atlas's counters come from it; `App::draft_request`); template `notes` explain each change
+- [ ] Drafting UI (intent → drafted terms → card with findings → send) and a model-backed drafter behind the same signatures: P2
 - [ ] Template records split by slot range (the template-laundering residual, Core §13)
 - [x] Board (queue view, §12): columns by ACN stage across agents and roles, whose-move from `acn-view`, needs-you filter, paged Closed column, drawer with the full card; no drag-and-drop. Reset demo (Director)
 - [ ] P1 remainder: T0 paid (unlocked token swapped before work) in the MCP shim

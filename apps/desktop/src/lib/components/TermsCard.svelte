@@ -59,6 +59,13 @@
   {#if card.unclosed}
     <div class="warn">⚠ Can't be promised or accepted yet: {card.unclosed}.</div>
   {/if}
+  {#if card.lint.length}
+    <div class="lint" title="The terms linter (CR-003 §3): advice on how the terms are written. The validator doesn't use it.">
+      {#each card.lint as f (f.rule + (f.item ?? ""))}
+        <div class="lf" data-l={f.level}><span class="mono">{f.rule}</span>{#if f.item} <span class="mono">{f.item}</span>{/if} {f.message}</div>
+      {/each}
+    </div>
+  {/if}
 
   {#if diff.length}
     <div class="sec">
@@ -157,6 +164,9 @@
   .tpl[data-s="unavailable"] { color: var(--muted); }
   .tpl .bad { color: var(--warn); }
   .tpl-slots { font-size: 11px; color: var(--muted); }
+  .lint { display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; color: var(--muted); }
+  .lf[data-l="error"] { color: var(--warn); }
+  .lf .mono { font-size: 10.5px; }
   .sec { display: flex; flex-direction: column; gap: 3px; }
   .sh { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--faint); font-weight: 650; }
   .row { display: flex; gap: 7px; align-items: baseline; flex-wrap: wrap; }

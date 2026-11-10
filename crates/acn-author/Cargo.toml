@@ -1,0 +1,12 @@
+[package]
+name = "acn-author"
+description = "ACN authoring aids (CR-003 §3): requester and performer drafters and the terms linter. Bindings, not Core: output is ordinary terms the validator judges like any other"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+acn-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
