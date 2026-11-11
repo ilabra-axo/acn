@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use acn_conformance::{l0, l1, Env, Executions, Target};
+use acn_conformance::{l0, l1, l2, Env, Executions, Target};
 use nmesh_agent_bridge::config::{
     AcnConfig, AgentConfig, AgentSection, Disclosure, McpServerConfig, McpTransport,
 };
@@ -102,6 +102,7 @@ async fn shim(
     dir: &std::path::Path,
     price_sat: u64,
     negotiate: bool,
+    gate: bool,
 ) -> anyhow::Result<String> {
     let bridge = Bridge::start(AgentConfig {
         agent: AgentSection {
@@ -136,6 +137,7 @@ async fn shim(
             // L0 publishes evidence: opt in explicitly (the default is private).
             evidence: Disclosure::Public,
             negotiate,
+            gate_key_file: gate.then(|| dir.join("gate.nsec")),
             ..Default::default()
         },
     })
@@ -154,26 +156,29 @@ async fn mcp_shim_passes_l0_priced_and_free() -> anyhow::Result<()> {
         mint: Some(i.mint.url.clone()),
         blossom: Some(i.blossom.url.clone()),
     };
-    for (name, price, negotiate) in [
-        ("l0-priced", 5, false),
-        ("l0-free", 0, false),
-        ("l1-priced", 5, true),
-        ("l1-free", 0, true),
+    // L2 includes every L1 case, so L1 runs once (free) and L2 priced and free.
+    for (name, price, level) in [
+        ("l0-priced", 5, 0usize),
+        ("l0-free", 0, 0),
+        ("l1-free", 0, 1),
+        ("l2-priced", 5, 2),
+        ("l2-free", 0, 2),
     ] {
+        let negotiate = level >= 1;
         let dir = temp_dir(name);
-        let agent = shim(&i, &dir, price, negotiate).await?;
+        let agent = shim(&i, &dir, price, negotiate, level >= 2).await?;
         let target = Target {
             agent,
             tool: "echo".into(),
             input: json!({"text": "conformance"}),
             executions: Some(executions(&dir)),
         };
-        let report = if negotiate {
-            l1(&env, &target).await?
-        } else {
-            l0(&env, &target).await?
+        let report = match level {
+            0 => l0(&env, &target).await?,
+            1 => l1(&env, &target).await?,
+            _ => l2(&env, &target).await?,
         };
-        assert_eq!(report.level, if negotiate { "L1" } else { "L0" });
+        assert_eq!(report.level, ["L0", "L1", "L2"][level]);
         println!("{}", report.summary());
         assert!(report.passed(), "{name}:\n{}", report.summary());
         let names: Vec<&str> = report.cases.iter().map(|c| c.name.as_str()).collect();
@@ -215,6 +220,11 @@ async fn mcp_shim_passes_l0_priced_and_free() -> anyhow::Result<()> {
                 "n-contradicted-rejection-disputed",
                 "n-decline-governed",
             ] {
+                assert!(names.contains(&c), "{c} missing: {names:?}");
+            }
+        }
+        if level >= 2 {
+            for c in ["g-endorsed-promise-and-report", "g-endorsed-t-report"] {
                 assert!(names.contains(&c), "{c} missing: {names:?}");
             }
         }

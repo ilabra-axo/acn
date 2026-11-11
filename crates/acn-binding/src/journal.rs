@@ -51,6 +51,9 @@ pub struct Entry {
     /// The signed act (from `Prepared` on).
     #[serde(default)]
     pub act: Option<Event>,
+    /// Events sent with the act (its governance endorsement).
+    #[serde(default)]
+    pub extra: Vec<Event>,
     /// Whether the executor was started for this entry.
     #[serde(default)]
     pub executed: bool,
@@ -258,6 +261,7 @@ mod tests {
             to: "r".into(),
             step: Step::Executing,
             act: None,
+            extra: vec![],
             executed: true,
             at: 1,
         };

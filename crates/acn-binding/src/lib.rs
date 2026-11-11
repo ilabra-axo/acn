@@ -190,13 +190,181 @@ pub trait Wallet: Send + Sync {
 /// A gate's decision on an act draft.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GateDecision {
+    /// Allowed by policy (an endorsement, if one is needed, says `automated`).
     Allow,
-    Deny { reason: String },
+    /// Allowed after a person signed off (an endorsement says `human`).
+    AllowedByHuman,
+    Deny {
+        reason: String,
+    },
 }
 
-/// Pre-signing policy (rule 1: never sign what the gate denied or hasn't decided).
+/// Pre-signing policy (rule 1: never sign what the gate denied or hasn't decided). `evaluate`
+/// may wait, e.g. for a person's sign-off; a gate that times out denies. A gate that holds a
+/// governance key (L2) also endorses the acts it lets through (`K_ENDORSE`, Core §9), which is
+/// what terms with `governance` require (V-14).
 pub trait Gate: Send + Sync {
-    fn evaluate(&self, draft: &Draft, commitment: &acn_core::Commitment) -> GateDecision;
+    fn evaluate<'a>(
+        &'a self,
+        draft: &'a Draft,
+        commitment: &'a acn_core::Commitment,
+    ) -> BoxFut<'a, GateDecision>;
+    /// The governance key this gate endorses with (x-only hex), if it endorses at all.
+    fn endorser(&self) -> Option<String> {
+        None
+    }
+    /// The hash of the policy it applies (the endorsement's `policy` tag).
+    fn policy_hash(&self) -> String {
+        String::new()
+    }
+    /// A signed endorsement of `act`, after the gate allowed it (`human` if a person signed
+    /// off).
+    fn endorse(&self, act: &Event, human: bool) -> Result<Event, String> {
+        let _ = (act, human);
+        Err("this gate does not endorse".into())
+    }
+}
+
+/// A Signer for a bare key (a governance key, an arbiter's): signs drafts, nothing else.
+pub struct KeySigner([u8; 32]);
+
+impl KeySigner {
+    pub fn new(secret: [u8; 32]) -> Self {
+        Self(secret)
+    }
+}
+
+impl Signer for KeySigner {
+    fn pubkey(&self) -> String {
+        acn_core::draft::public_key(&self.0).unwrap_or_default()
+    }
+    fn sign(&self, draft: &Draft, not_before: Option<u64>) -> Result<Event, String> {
+        draft
+            .sign(&self.0, now_secs().max(not_before.unwrap_or(0)))
+            .map_err(|e| e.to_string())
+    }
+    fn decrypt(&self, _: &str, _: &str) -> Result<String, String> {
+        Err("this key decrypts nothing".into())
+    }
+}
+
+/// What the reference gate lets through.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GatePolicy {
+    /// The highest price it endorses a commitment at (sat); `None`: any.
+    #[serde(default)]
+    pub max_sat: Option<u64>,
+    /// Tools it endorses work on; empty: any.
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// Act kinds that need a person's sign-off (through [`PolicyGate::with_approver`]).
+    #[serde(default)]
+    pub human_kinds: Vec<u16>,
+}
+
+/// A person's sign-off on a draft: `true` approves. Asked for [`GatePolicy::human_kinds`].
+pub type Approver = Arc<dyn Fn(Draft, acn_core::Commitment) -> BoxFut<'static, bool> + Send + Sync>;
+
+/// The reference gate (L2): a policy, a governance key that endorses what the policy allows,
+/// and optionally a person who signs off on some act kinds (within `approval_timeout`, else
+/// denied). Refusals (`DECLINE`, `REVOKE`) are always allowed: a gate can stop work, never force
+/// it.
+pub struct PolicyGate {
+    pub signer: Arc<dyn Signer>,
+    pub policy: GatePolicy,
+    approver: Option<Approver>,
+    approval_timeout: std::time::Duration,
+}
+
+impl PolicyGate {
+    pub fn new(signer: Arc<dyn Signer>, policy: GatePolicy) -> Self {
+        Self {
+            signer,
+            policy,
+            approver: None,
+            approval_timeout: std::time::Duration::from_secs(300),
+        }
+    }
+
+    pub fn with_approver(mut self, a: Approver, timeout: std::time::Duration) -> Self {
+        self.approver = Some(a);
+        self.approval_timeout = timeout;
+        self
+    }
+}
+
+impl Gate for PolicyGate {
+    fn evaluate<'a>(
+        &'a self,
+        draft: &'a Draft,
+        cm: &'a acn_core::Commitment,
+    ) -> BoxFut<'a, GateDecision> {
+        Box::pin(async move {
+            if matches!(draft.kind, K_DECLINE | K_REVOKE) {
+                return GateDecision::Allow;
+            }
+            if let Some(t) = &cm.terms {
+                if self.policy.max_sat.is_some_and(|m| t.price.amount > m) {
+                    return GateDecision::Deny {
+                        reason: format!(
+                            "the gate's policy endorses up to {} sat",
+                            self.policy.max_sat.unwrap_or(0)
+                        ),
+                    };
+                }
+                if !self.policy.tools.is_empty()
+                    && !t
+                        .deliverable
+                        .tool
+                        .as_ref()
+                        .is_some_and(|x| self.policy.tools.contains(x))
+                {
+                    return GateDecision::Deny {
+                        reason: "the gate's policy doesn't cover this tool".into(),
+                    };
+                }
+            }
+            if !self.policy.human_kinds.contains(&draft.kind) {
+                return GateDecision::Allow;
+            }
+            let Some(a) = &self.approver else {
+                return GateDecision::Deny {
+                    reason: "this act needs a person's sign-off and nobody is set to give it"
+                        .into(),
+                };
+            };
+            match tokio::time::timeout(self.approval_timeout, a(draft.clone(), cm.clone())).await {
+                Ok(true) => GateDecision::AllowedByHuman,
+                Ok(false) => GateDecision::Deny {
+                    reason: "not approved".into(),
+                },
+                Err(_) => GateDecision::Deny {
+                    reason: "no sign-off in time".into(),
+                },
+            }
+        })
+    }
+    fn endorser(&self) -> Option<String> {
+        Some(self.signer.pubkey())
+    }
+    fn policy_hash(&self) -> String {
+        acn_core::jcs::hash(&serde_json::to_value(&self.policy).unwrap_or_default())
+            .unwrap_or_default()
+    }
+    fn endorse(&self, act: &Event, human: bool) -> Result<Event, String> {
+        let c = if act.kind == K_REQUEST {
+            act.id.clone()
+        } else {
+            act.values("c")
+                .first()
+                .map(|c| c.to_string())
+                .unwrap_or_default()
+        };
+        self.signer.sign(
+            &Draft::endorse(&c, &act.id, &self.policy_hash(), human),
+            Some(act.created_at),
+        )
+    }
 }
 
 /// Produces attestations (L3).
@@ -423,8 +591,6 @@ pub type Admission = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 struct Move {
     draft: Draft,
     blobs: Vec<(Vec<u8>, String)>,
-    /// A REPORT of work done: if it can't be sent, a refusal saying why is.
-    report: bool,
     /// The terms the act commits its signer to, when not the terms in force (a `COUNTER`'s or
     /// an `ACCEPT`'s): what V-8 is checked against.
     terms: Option<Terms>,
@@ -435,7 +601,6 @@ impl Move {
         Self {
             draft,
             blobs: vec![],
-            report: false,
             terms: None,
         }
     }
@@ -591,10 +756,32 @@ impl Performer {
     /// calls; L1 adds negotiation. Whether an operator binding is in force is the host's to add.
     pub fn level(&self) -> Option<Level> {
         let evidence = self.evidence.is_some() && self.disclosure == Disclosure::Public;
-        match (evidence, self.negotiate) {
-            (true, true) => Some(Level::L1),
-            (true, false) => Some(Level::L0),
+        let endorses = self.gate.as_ref().and_then(|g| g.endorser()).is_some();
+        match (evidence, self.negotiate, endorses) {
+            (true, true, true) => Some(Level::L2),
+            (true, true, false) => Some(Level::L1),
+            (true, false, _) => Some(Level::L0),
             _ => None,
+        }
+    }
+
+    /// The governance this binding can meet, for `K_SVC` (`governance`): its gate's key and
+    /// policy hash, if the gate endorses.
+    pub fn governance(&self) -> Option<Value> {
+        let g = self.gate.as_ref()?;
+        Some(json!({"keys": [g.endorser()?], "policy": g.policy_hash()}))
+    }
+
+    /// Whether this binding's gate can endorse acts governed by `terms` (performer-governed
+    /// terms listing its key).
+    fn can_meet_governance(&self, terms: &Terms) -> bool {
+        match &terms.governance {
+            Some(g) if g.party == GovernedParty::Performer => self
+                .gate
+                .as_ref()
+                .and_then(|x| x.endorser())
+                .is_some_and(|k| g.keys.contains(&k)),
+            _ => true,
         }
     }
 
@@ -1071,6 +1258,7 @@ impl Performer {
                 to: cm.requester.clone(),
                 step: Step::Executing,
                 act: None,
+                extra: vec![],
                 executed: true,
                 at: now,
             },
@@ -1164,6 +1352,9 @@ impl Performer {
                 }
                 (Step::Sent, Some(act)) if !self.store.has(c, &act.id) => {
                     self.store.add(act.clone());
+                    for x in &e.extra {
+                        self.store.add(x.clone());
+                    }
                 }
                 (Step::Executing, None) => {
                     // Reconcile: our act answering this head (the key's), from history.
@@ -1340,15 +1531,12 @@ impl Performer {
                 "an L0 binding doesn't take terms with disqualifiers".into(),
             ));
         }
-        if terms
-            .governance
-            .as_ref()
-            .is_some_and(|g| g.party == GovernedParty::Performer)
-        {
-            // L2: its acts would wait for an endorsement an L0 binding can't produce.
+        if !self.can_meet_governance(terms) {
+            // Its acts would wait for an endorsement from a key its gate doesn't hold.
             return Some((
                 "governance_unsupported",
-                "the terms require endorsed performer acts; this binding has no governance gate"
+                "the terms require performer acts endorsed by a key this binding's gate doesn't \
+                 hold"
                     .into(),
             ));
         }
@@ -1421,7 +1609,6 @@ impl Performer {
                     &[],
                 ),
                 blobs: vec![],
-                report: true,
                 terms: None,
             });
         }
@@ -1482,7 +1669,6 @@ impl Performer {
             )
             .field("derivation", json!(derivation)),
             blobs,
-            report: true,
             terms: None,
         })
     }
@@ -1503,13 +1689,14 @@ impl Performer {
         let mut mv = first;
         loop {
             match self.prepare(c, cm, terms, &mv, st.head_at).await {
-                Ok(act) => {
+                Ok((act, extra)) => {
                     let entry = Entry {
                         commitment: c.to_string(),
                         terms: st.terms.clone(),
                         to: cm.requester.clone(),
                         step: Step::Prepared,
                         act: Some(act.clone()),
+                        extra,
                         executed: self.journal.entry(key).is_some_and(|e| e.executed),
                         at: now_secs(),
                     };
@@ -1517,8 +1704,10 @@ impl Performer {
                     self.journal.put(key, entry.clone())?;
                     return self.deliver(key, entry, act, change).await;
                 }
-                Err((reason, note)) if mv.report => {
-                    tracing::warn!(commitment = %c, %reason, %note, "binding: REPORT withheld");
+                // Any move but a refusal that can't go out (a REPORT the gate or the validator
+                // won't pass, a PROMISE the gate denies) is replaced by a refusal saying why.
+                Err((reason, note)) if !matches!(mv.draft.kind, K_DECLINE | K_REVOKE) => {
+                    tracing::warn!(commitment = %c, act = acn_core::kinds::name(mv.draft.kind), %reason, %note, "binding: act withheld");
                     mv = Move::act(self.refuse_draft(c, cm, st, reason, note));
                 }
                 Err((reason, note)) => {
@@ -1533,6 +1722,7 @@ impl Performer {
                                 reason: format!("{reason}: {note}"),
                             },
                             act: None,
+                            extra: vec![],
                             executed,
                             at: now_secs(),
                         },
@@ -1553,12 +1743,15 @@ impl Performer {
         terms: &Terms,
         mv: &Move,
         not_before: u64,
-    ) -> Result<Event, (&'static str, String)> {
-        if let Some(g) = &self.gate {
-            if let GateDecision::Deny { reason } = g.evaluate(&mv.draft, cm) {
-                return Err(("gate_denied", reason));
-            }
-        }
+    ) -> Result<(Event, Vec<Event>), (&'static str, String)> {
+        let human = match &self.gate {
+            Some(g) => match g.evaluate(&mv.draft, cm).await {
+                GateDecision::Deny { reason } => return Err(("gate_denied", reason)),
+                GateDecision::AllowedByHuman => true,
+                GateDecision::Allow => false,
+            },
+            None => false,
+        };
         self.authority(
             mv.draft.kind,
             mv.terms.as_ref().unwrap_or(terms),
@@ -1568,7 +1761,25 @@ impl Performer {
             .signer
             .sign(&mv.draft, Some(not_before))
             .map_err(|e| ("signer_refused", e))?;
-        self.applied(c, &act)?;
+        // V-14 against the terms in force at the act's prev, as the validator checks it.
+        let governed = terms.governance.as_ref().is_some_and(|g| {
+            g.party == GovernedParty::Performer && g.kinds.contains(&mv.draft.kind)
+        });
+        let mut extra = Vec::new();
+        if governed {
+            let Some(g) = self
+                .gate
+                .as_ref()
+                .filter(|_| self.can_meet_governance(terms))
+            else {
+                return Err((
+                    "governance_unsupported",
+                    "the act needs an endorsement this binding's gate can't give".into(),
+                ));
+            };
+            extra.push(g.endorse(&act, human).map_err(|e| ("gate_denied", e))?);
+        }
+        self.applied(c, &act, &extra)?;
         if let Some(ev) = self.evidence.as_ref().filter(|_| !mv.blobs.is_empty()) {
             for (bytes, media_type) in &mv.blobs {
                 let want = acn_core::jcs::sha256_hex(bytes);
@@ -1584,15 +1795,16 @@ impl Performer {
                 }
             }
         }
-        Ok(act)
+        Ok((act, extra))
     }
 
-    /// Fold the candidate with what we know: it must be applied (on the effective chain), not
-    /// merely free of rejections. A governed act that would wait for an endorsement, a stale or
-    /// out-of-scope one, isn't.
-    fn applied(&self, c: &str, act: &Event) -> Result<(), (&'static str, String)> {
+    /// Fold the candidate (with its endorsement, if governed) with what we know: it must be
+    /// applied (on the effective chain), not merely free of rejections. A governed act that
+    /// would wait for an endorsement, a stale or out-of-scope one, isn't.
+    fn applied(&self, c: &str, act: &Event, extra: &[Event]) -> Result<(), (&'static str, String)> {
         let mut events = self.events(c);
         events.push(act.clone());
+        events.extend(extra.iter().cloned());
         let out = fold(&events, &self.docs());
         if let Some(a) = out
             .anomalies
@@ -1636,11 +1848,18 @@ impl Performer {
         act: Event,
         change: &mut StateChange,
     ) -> Result<(), String> {
-        self.inbox
-            .send(&entry.to, &act)
-            .await
-            .map_err(|e| format!("send failed, will retry the same act: {e}"))?;
+        // The act, then what goes with it (its endorsement). All or nothing: a failure leaves
+        // the entry `Prepared`, and the same events are sent again.
+        for e in std::iter::once(&act).chain(&entry.extra) {
+            self.inbox
+                .send(&entry.to, e)
+                .await
+                .map_err(|e| format!("send failed, will retry the same act: {e}"))?;
+        }
         self.store.add(act.clone());
+        for e in &entry.extra {
+            self.store.add(e.clone());
+        }
         if let Err(e) = self.journal.put(
             key,
             Entry {
@@ -1768,12 +1987,19 @@ pub struct ServiceAd {
     pub mints: Vec<(String, Vec<String>)>,
     pub blossom: Vec<String>,
     pub binding_level: Option<Level>,
+    /// The governance the binding can meet: `{keys, policy}` of its gate (L2).
+    pub governance: Option<Value>,
     pub data_handling: Value,
     pub deadline_secs: u64,
     pub review_window_secs: u64,
 }
 
 impl ServiceAd {
+    pub fn with_governance(mut self, g: Option<Value>) -> Self {
+        self.governance = g;
+        self
+    }
+
     pub fn to_json(&self) -> Value {
         let mut v = json!({
             "v": VERSION,
@@ -1791,6 +2017,9 @@ impl ServiceAd {
         }
         if let Some(l) = self.binding_level {
             v["binding_level"] = json!(l.as_str());
+        }
+        if let Some(g) = &self.governance {
+            v["governance"] = g.clone();
         }
         v
     }
@@ -2003,14 +2232,19 @@ mod tests {
 
     struct DenyReports;
     impl Gate for DenyReports {
-        fn evaluate(&self, d: &Draft, _: &acn_core::Commitment) -> GateDecision {
-            if d.kind == K_REPORT {
+        fn evaluate<'a>(
+            &'a self,
+            d: &'a Draft,
+            _: &'a acn_core::Commitment,
+        ) -> BoxFut<'a, GateDecision> {
+            let r = if d.kind == K_REPORT {
                 GateDecision::Deny {
                     reason: "no reports today".into(),
                 }
             } else {
                 GateDecision::Allow
-            }
+            };
+            Box::pin(async move { r })
         }
     }
 
@@ -2396,6 +2630,7 @@ mod tests {
                 to: public_key(&[1; 32]).unwrap(),
                 step: Step::Executing,
                 act: None,
+                extra: vec![],
                 executed: true,
                 at: 1,
             },
@@ -2785,5 +3020,154 @@ mod tests {
         assert_eq!(kinds(&ch), [K_REVOKE], "{ch:?}");
         assert_eq!(reason_of(&ch.sent[0]), "execution_uncertain");
         assert_eq!(work.n(), 1, "re-ran an interrupted job");
+    }
+
+    // ---------- governance (L2) ----------
+
+    const GOV: [u8; 32] = [4; 32];
+
+    fn gated(work: Arc<Counting>, policy: GatePolicy) -> Performer {
+        n_performer(work, Arc::new(Sent::default()))
+            .with_gate(Arc::new(PolicyGate::new(Arc::new(Key(GOV)), policy)))
+    }
+
+    fn governed(keys: &[String], kinds: &[u16]) -> impl FnOnce(&mut Value) {
+        let g = json!({"keys": keys, "kinds": kinds, "window": 600});
+        move |t: &mut Value| t["governance"] = g
+    }
+
+    #[tokio::test]
+    async fn a_gate_endorses_the_governed_acts_it_allows() {
+        let work = Arc::new(Counting::default());
+        let p = gated(work.clone(), GatePolicy::default());
+        assert_eq!(p.level(), None, "no public evidence: no level");
+        let gk = public_key(&GOV).unwrap();
+        assert_eq!(p.governance().unwrap()["keys"][0], gk);
+        let ch = p
+            .on_event(n_request(governed(
+                std::slice::from_ref(&gk),
+                &[K_PROMISE, K_REPORT],
+            )))
+            .await;
+        assert_eq!(kinds(&ch), [K_PROMISE, K_REPORT], "{ch:?}");
+        assert_eq!(ch.to, Some(Phase::Reported));
+        let c = ch.commitment.clone();
+        let ends: Vec<Event> = p
+            .store
+            .events(&c)
+            .into_iter()
+            .filter(|e| e.kind == K_ENDORSE)
+            .collect();
+        assert_eq!(ends.len(), 2);
+        for (e, act) in ends.iter().zip(&ch.sent) {
+            assert_eq!(e.pubkey, gk);
+            assert!(ends
+                .iter()
+                .any(|x| x.e_marked("endorses") == [act.id.as_str()]));
+            assert_eq!(e.values("endorser"), ["automated"]);
+        }
+        clean(&p, &c);
+        // An independent fold with the endorsements: applied, no pending endorsement.
+        let out = fold(&p.events(&c), &p.docs());
+        assert!(!out
+            .anomalies
+            .iter()
+            .any(|a| a.code == Code::PendingEndorsement));
+    }
+
+    #[tokio::test]
+    async fn governance_by_another_key_is_declined() {
+        let work = Arc::new(Counting::default());
+        let p = gated(work.clone(), GatePolicy::default());
+        let other = public_key(&[7; 32]).unwrap();
+        let ch = p
+            .on_event(n_request(governed(&[other], &[K_PROMISE])))
+            .await;
+        assert_eq!(kinds(&ch), [K_DECLINE], "{ch:?}");
+        assert_eq!(reason_of(&ch.sent[0]), "governance_unsupported");
+        assert_eq!(work.n(), 0);
+        // Without a gate at all, the same.
+        let p = n_performer(work.clone(), Arc::new(Sent::default()));
+        let gk = public_key(&GOV).unwrap();
+        let ch = p.on_event(n_request(governed(&[gk], &[K_PROMISE]))).await;
+        assert_eq!(reason_of(&ch.sent[0]), "governance_unsupported");
+    }
+
+    #[tokio::test]
+    async fn the_gate_policy_stops_work_and_refusals_pass() {
+        let work = Arc::new(Counting::default());
+        let p = gated(
+            work.clone(),
+            GatePolicy {
+                tools: vec!["other".into()],
+                ..Default::default()
+            },
+        );
+        let gk = public_key(&GOV).unwrap();
+        let ch = p
+            .on_event(n_request(governed(&[gk], &[K_PROMISE, K_REPORT])))
+            .await;
+        // The PROMISE is denied; the DECLINE saying so passes the gate (refusals always do).
+        assert_eq!(kinds(&ch), [K_DECLINE], "{ch:?}");
+        assert_eq!(reason_of(&ch.sent[0]), "gate_denied");
+        assert_eq!(work.n(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_person_signs_off_on_the_report() {
+        let asked = Arc::new(Mutex::new(Vec::<u16>::new()));
+        let log = asked.clone();
+        let approver: Approver = Arc::new(move |d: Draft, _| {
+            log.lock().unwrap().push(d.kind);
+            Box::pin(async { true })
+        });
+        let gate = PolicyGate::new(
+            Arc::new(Key(GOV)),
+            GatePolicy {
+                human_kinds: vec![K_REPORT],
+                ..Default::default()
+            },
+        )
+        .with_approver(approver, std::time::Duration::from_secs(5));
+        let p = n_performer(Arc::new(Counting::default()), Arc::new(Sent::default()))
+            .with_gate(Arc::new(gate));
+        let gk = public_key(&GOV).unwrap();
+        let ch = p
+            .on_event(n_request(governed(&[gk], &[K_PROMISE, K_REPORT])))
+            .await;
+        assert_eq!(kinds(&ch), [K_PROMISE, K_REPORT], "{ch:?}");
+        assert_eq!(*asked.lock().unwrap(), [K_REPORT]);
+        let human: Vec<Event> = p
+            .store
+            .events(&ch.commitment)
+            .into_iter()
+            .filter(|e| e.kind == K_ENDORSE && e.values("endorser") == ["human"])
+            .collect();
+        assert_eq!(human.len(), 1);
+        assert_eq!(human[0].e_marked("endorses"), [ch.sent[1].id.as_str()]);
+
+        // A person who doesn't answer in time: denied, and the work's REPORT becomes a REVOKE.
+        let slow: Approver = Arc::new(|_, _| {
+            Box::pin(async {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                true
+            })
+        });
+        let gate = PolicyGate::new(
+            Arc::new(Key(GOV)),
+            GatePolicy {
+                human_kinds: vec![K_REPORT],
+                ..Default::default()
+            },
+        )
+        .with_approver(slow, std::time::Duration::from_millis(50));
+        let p = n_performer(Arc::new(Counting::default()), Arc::new(Sent::default()))
+            .with_gate(Arc::new(gate));
+        let gk = public_key(&GOV).unwrap();
+        let ch = p
+            .on_event(n_request(governed(&[gk], &[K_PROMISE, K_REPORT])))
+            .await;
+        assert_eq!(kinds(&ch), [K_PROMISE, K_REVOKE], "{ch:?}");
+        assert_eq!(reason_of(&ch.sent[1]), "gate_denied");
     }
 }

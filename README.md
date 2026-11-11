@@ -88,15 +88,15 @@ Browser preview without Tauri or a relay (presenter mode: stand-in chat, real AC
 | `crates/acn-author` | Authoring aids (CR-003 §3): the terms linter (L1–L8) and the requester and performer drafters |
 | `crates/acn-binding` | The Binding API: the eight interfaces as traits, and the performer driver |
 | `crates/acn-binding-nostr` | Adapters to the reference stack (session, CDK wallet, Blossom) and the performer run loop |
-| `crates/acn-conformance` | Conformance suites (L0, L1): a scripted requester that checks a binding end to end |
-| `crates/acn-cli-shim` | `acn-cli-shim`: any command-line harness as an L1 ACN performer (T0, T1, N) |
+| `crates/acn-conformance` | Conformance suites (L0, L1, L2): a scripted requester that checks a binding end to end |
+| `crates/acn-cli-shim` | `acn-cli-shim`: any command-line harness as an L1 ACN performer (T0, T1, N; L2 with a gate key) |
 | `crates/nmesh-blossom` | Dev Blossom server (`nmesh blossom`) and client for artifacts and derivation records |
 | `crates/nmesh-wallet` | Cashu wallet (CDK): HTLC lock, DLEQ/NUT-07 verify, redeem, refund |
 | `crates/nmesh-mint` | `nmesh-mint` binary: local Cashu test mint (CDK, fake Lightning, test sats) |
 | `crates/nmesh-acn-sim` | `nmesh-acn-sim` binary: the demo cast as live Nostr peers; hosts the test mint and a Blossom server for evidence |
 | `crates/acn-core` | ACN grammar + validator: acts, terms, JCS, fold, anomalies, `status_at`. No I/O, no C deps |
 | `crates/nmesh-app` | UI-facing layer: contacts, history, consent, view models (used by the desktop app; the FFI later) |
-| `crates/nmesh-agent-bridge` | `nmesh-agent` (MCP servers → Nostr agent, and `acn-mcp-shim` at L1) and the `nmesh-echo-mcp` demo server |
+| `crates/nmesh-agent-bridge` | `nmesh-agent` (MCP servers → Nostr agent, and `acn-mcp-shim` at L1 (L2 with a gate key)) and the `nmesh-echo-mcp` demo server |
 | `apps/desktop` | Tauri 2 + Svelte 5 desktop client |
 | `crates/nmesh-cli` | `nmesh` dev client and dev relay |
 | `crates/nmesh-ffi` | (placeholder) UniFFI bindings for Kotlin/Swift |

@@ -42,7 +42,16 @@
 //! - **Disputes:** a rejection contradicted by a passing attestation from a listed verifier,
 //!   under terms naming an arbiter, is disputed; the arbiter's ruling for the performer settles
 //!   it (and its preimage is redeemed when priced).
-//! - **Governance** over the performer's acts (L2) is declined `governance_unsupported`.
+//! - **Governance** by a key the binding's gate doesn't hold is declined
+//!   `governance_unsupported`.
+//!
+//! [`l2`] is the L2 suite (Governed: L1 plus a gate). `K_SVC` names the gate's governance key
+//! and policy (`governance`), and then:
+//!
+//! - **Endorsed acts:** terms requiring endorsed `PROMISE` and `REPORT` by that key get both, each
+//!   with a `K_ENDORSE` from the key, naming the act, with the advertised policy hash, inside the
+//!   window; the validator applies them (no `pending_endorsement`) and `SATISFY` closes it. The
+//!   same for a T-profile `REPORT`.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -427,6 +436,11 @@ pub async fn l1(env: &Env, target: &Target) -> anyhow::Result<Report> {
     suite(env, target, acn_binding::Level::L1).await
 }
 
+/// Run the L2 suite against `target`: every L1 case, then governed acts.
+pub async fn l2(env: &Env, target: &Target) -> anyhow::Result<Report> {
+    suite(env, target, acn_binding::Level::L2).await
+}
+
 fn parse_level(v: &Value) -> Option<acn_binding::Level> {
     use acn_binding::Level::*;
     [L0, L1, L2, L3]
@@ -494,6 +508,13 @@ async fn suite(env: &Env, target: &Target, level: acn_binding::Level) -> anyhow:
             }
             if level >= acn_binding::Level::L1 && !profiles.contains(&"N") {
                 return Err(format!("profiles {profiles:?}: an L1 binding serves N"));
+            }
+            if level >= acn_binding::Level::L2
+                && svc["governance"]["keys"]
+                    .as_array()
+                    .is_none_or(|k| k.is_empty())
+            {
+                return Err("an L2 binding names its gate's governance key in K_SVC".into());
             }
             if !profiles.contains(&"T0") && !profiles.contains(&"T1") {
                 return Err(format!(
@@ -846,6 +867,11 @@ async fn suite(env: &Env, target: &Target, level: acn_binding::Level) -> anyhow:
         for (name, res) in n.cases().await {
             case(name, res);
         }
+        if level >= acn_binding::Level::L2 {
+            for (name, res) in n.governed(&svc["governance"]).await {
+                case(name, res);
+            }
+        }
     }
     r.session.shutdown().await;
     Ok(Report {
@@ -1061,6 +1087,142 @@ impl Negotiated<'_> {
             ("n-held-out-seed", self.held_out().await),
             ("n-disqualifier-breach", self.disqualifier().await),
             ("n-contradicted-rejection-disputed", self.dispute().await),
+        ]
+    }
+
+    /// The endorsement of `act` in `c`, by a key in `keys`, with `policy`, within `window`.
+    async fn endorsement(
+        &self,
+        c: &str,
+        act: &Event,
+        keys: &[String],
+        policy: &str,
+        window: u64,
+    ) -> Result<String, String> {
+        let deadline = tokio::time::Instant::now() + WAIT;
+        while tokio::time::Instant::now() < deadline {
+            if let Some(e) =
+                self.r.events(c).into_iter().find(|e| {
+                    e.kind == K_ENDORSE && e.e_marked("endorses").contains(&act.id.as_str())
+                })
+            {
+                if !keys.contains(&e.pubkey) {
+                    return Err(format!(
+                        "{} endorsed by a key K_SVC doesn't name",
+                        acn_core::kinds::name(act.kind)
+                    ));
+                }
+                if e.values("policy").first() != Some(&policy) {
+                    return Err("the endorsement's policy hash isn't the advertised one".into());
+                }
+                if e.created_at > act.created_at + window {
+                    return Err("the endorsement came after the window".into());
+                }
+                return Ok(format!(
+                    "{} endorsed ({})",
+                    acn_core::kinds::name(act.kind),
+                    e.values("endorser").first().copied().unwrap_or("?")
+                ));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Err(format!(
+            "no endorsement of the {}",
+            acn_core::kinds::name(act.kind)
+        ))
+    }
+
+    async fn governed(&self, gov: &Value) -> Vec<(&'static str, Result<String, String>)> {
+        let keys: Vec<String> = gov["keys"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|k| k.as_str().map(str::to_owned))
+            .collect();
+        let policy = gov["policy"].as_str().unwrap_or_default().to_string();
+        let n = async {
+            let g = json!({"keys": keys, "kinds": [K_PROMISE, K_REPORT], "window": 600});
+            let sent = self.request(None, |t| t["governance"] = g).await?;
+            let pr = self.promised(&sent.c).await?;
+            let e1 = self.endorsement(&sent.c, &pr, &keys, &policy, 600).await?;
+            let rep = self.report_to(&sent.c, &pr.id).await?;
+            let e2 = self.endorsement(&sent.c, &rep, &keys, &policy, 600).await?;
+            let out = fold(&self.r.events(&sent.c), &self.r.docs());
+            if out
+                .anomalies
+                .iter()
+                .any(|a| a.code == acn_core::anomaly::Code::PendingEndorsement)
+            {
+                return Err("an endorsed act is still pending".into());
+            }
+            let closed = self.close(&sent).await?;
+            Ok(format!("{e1}; {e2}; {closed}"))
+        }
+        .await;
+        let t = async {
+            let g = json!({"keys": keys, "kinds": [K_REPORT], "window": 600});
+            let r = self.r;
+            let (profile, terms, ct, secret, token) = match (self.wallet, &self.offer) {
+                (Some(w), Some(o)) => {
+                    let s = Keys::generate().secret_key().to_secret_hex();
+                    let h = acn_core::jcs::sha256_hex(&hex_bytes(&s));
+                    let mut terms = acn_core::draft::instantiate(
+                        o,
+                        &self.target.tool,
+                        self.target.input.clone(),
+                        Timestamp::now().as_secs(),
+                        Some(&h),
+                        None,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    terms["governance"] = g;
+                    let tok = w
+                        .lock_htlc(
+                            terms["price"]["amount"].as_u64().unwrap_or(0),
+                            &h,
+                            &self.target.agent,
+                            terms["payment"]["locktime"].as_u64().unwrap_or(0),
+                            None,
+                        )
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let ct = r
+                        .session
+                        .nip44_encrypt(&r.agent, &tok)
+                        .map_err(|e| e.to_string())?;
+                    ("T1", terms, Some(ct), Some(s), Some(tok))
+                }
+                _ => {
+                    let mut terms = base_terms(&self.target.tool, &self.target.input, 0);
+                    terms["governance"] = g;
+                    ("T0", terms, None, None, None)
+                }
+            };
+            let c = r
+                .request(profile, &terms, ct.as_deref())
+                .await
+                .map_err(|e| e.to_string())?;
+            let rep = r
+                .answer(&c, &[K_REPORT, K_DECLINE])
+                .await
+                .ok_or("no answer")?;
+            if rep.kind != K_REPORT {
+                return Err(format!("declined ({})", reason(&rep)));
+            }
+            let e = self.endorsement(&c, &rep, &keys, &policy, 600).await?;
+            let closed = self
+                .close(&Sent {
+                    c,
+                    preimage: secret,
+                    token,
+                })
+                .await?;
+            Ok(format!("{profile} REPORT; {e}; {closed}"))
+        }
+        .await;
+        vec![
+            ("g-endorsed-promise-and-report", n),
+            ("g-endorsed-t-report", t),
         ]
     }
 

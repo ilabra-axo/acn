@@ -53,7 +53,7 @@ whitepaper doesn't state.
 | Not an AI: it records and settles | §10 | The validator is a pure function of signed events and documents; judges run outside it, and it only counts the scores a listed runner signed (V-17). Test: `fold_is_order_independent` | ✅ |
 | Not a judge of quality: the parties choose who checks | §7 `verifiers`, `runners` | Verifiers listed per class in the terms; attestations from anyone else are `unlisted_verifier` and not counted. Tests: scenarios, `live` (*verified*) | ✅ |
 | Not a reputation authority: anyone can compute a track record from public or disclosed commitments; many scorers | §11 `K_SCORE`, D-13 | Kind reserved; no scorer; commitments are private by default and there is no disclosure mechanism (D-13 open). Per-template records are computed by each reader over what it can see (`acn_view::template_records`) | ⬜ |
-| Not tied to any framework: a small set of interfaces; a thin adapter makes a tool server accountable | §11, D-10 | The Binding API as traits (`acn-binding`) with a performer driver; `acn-mcp-shim` (any MCP server) and `acn-cli-shim` (any CLI harness) pass the L0 conformance suite (`acn-conformance`), priced and free, terms inline or by reference. The driver journals execution, applies one admission policy to history and live events, checks its operator scope before working, and keeps evidence private unless configured public (harness-binding-API rules 8–15). Tests: both L0 runs, `acn-binding` unit, bridge `startup.rs` | ✅ L0 (T0, T1) and L1 (profile N: counters, rework, disputes, held-out seeds, disqualifiers; `acn_conformance::l1`, passed by both bindings); ⬜ L2–L3 (governance, verifiers) and requester bindings on the traits |
+| Not tied to any framework: a small set of interfaces; a thin adapter makes a tool server accountable | §11, D-10 | The Binding API as traits (`acn-binding`) with a performer driver; `acn-mcp-shim` (any MCP server) and `acn-cli-shim` (any CLI harness) pass the L0 conformance suite (`acn-conformance`), priced and free, terms inline or by reference. The driver journals execution, applies one admission policy to history and live events, checks its operator scope before working, and keeps evidence private unless configured public (harness-binding-API rules 8–15). Tests: both L0 runs, `acn-binding` unit, bridge `startup.rs` | ✅ L0 (T0, T1), L1 (profile N: counters, rework, disputes, held-out seeds, disqualifiers) and L2 (governed acts with endorsements), each with its suite, passed by both bindings; ⬜ L3 (verifiers) and requester bindings on the traits |
 
 ### §6 Built on open rails
 
@@ -69,8 +69,8 @@ whitepaper doesn't state.
 
 | Whitepaper claim | Spec | Prototype and tests | Status |
 |---|---|---|---|
-| A checkpoint in front of an agent's commitments runs checks, asks a human where needed, and publishes a signed endorsement | §9 `K_ENDORSE`, V-14 | Endorsement validation; the Gate interface (`acn-binding`, rule 1); the *governance* demo's scripted Gate. Tests: `governance` (scenarios), *governed* in `playthrough` | 🟡 no gate product, no human sign-off UI; the reference bindings decline governed terms at L0 (`governance_unsupported`, `governance_is_declined_before_work`) |
-| A requester can require endorsement from named overseers in its terms | §7 `governance` | `governance.keys / kinds / window`; `pending_endorsement` / `unendorsed`. Tests: `governance` | ✅ validator; 🟡 no reference performer can meet such terms yet (L2) |
+| A checkpoint in front of an agent's commitments runs checks, asks a human where needed, and publishes a signed endorsement | §9 `K_ENDORSE`, V-14 | Endorsement validation; the Gate in the binding driver with its own governance key: it checks a policy, can wait for a person's sign-off (a timeout denies), and endorses each governed act it lets through (`PolicyGate`; endorsements journaled and sent with the act). Tests: `governance` (scenarios), `a_gate_endorses_the_governed_acts_it_allows`, `a_person_signs_off_on_the_report`, L2 suite (both bindings) | ✅ automated gate in the reference bindings; 🟡 a person's sign-off works in the driver but no shim or app offers a sign-off UI |
+| A requester can require endorsement from named overseers in its terms | §7 `governance`, §4 `K_SVC` `governance` | `governance.keys / kinds / window`; `pending_endorsement` / `unendorsed`; agents advertise the governance keys they can obtain endorsements from, and an L2 binding meets such terms (terms naming another key are declined `governance_unsupported`). Tests: `governance`, L2 cases `g-endorsed-promise-and-report`, `g-endorsed-t-report` | ✅ |
 | Overseers build reputations; one that approves everything is visible | §11, §13 | Endorsements are signed records; no scoring | ⬜ |
 
 ### §8 Aspirations
@@ -81,7 +81,7 @@ whitepaper doesn't state.
 | Track records replace marketing, including how well an agent predicts its deadlines | §11, §6.2 `p_on_time`, D-13 | Template records over commitments a reader can see; `p_on_time` recorded, not scored | 🧭; ⬜ scorers, Brier scoring, disclosure |
 | Verification becomes an industry | §7 `verifiers`, `runners`; harness-binding-API L3 | The verifier and runner roles are in the protocol; the judge harness is a reference runner | 🧭; ⬜ the L3 suite and a verifier binding |
 | Better contracts get written | §7 templates, CR-003 §3 | Terms templates with notes, the linter (L1–L8), requester and performer drafters, the drafting screen. Tests: `acn-author` unit, template vectors C-15…C-16e, `templates.rs` | 🧭; ✅ the authoring aids |
-| Humans stay in charge where it matters | §7 `governance`, §9 | See §7: validated, not productised | 🧭; 🟡 |
+| Humans stay in charge where it matters | §7 `governance`, §9 | See §7: governance is validated and met by the reference bindings; a person's sign-off is supported by the driver, without a UI yet | 🧭; 🟡 |
 
 ### §9 Where it stands
 
@@ -117,8 +117,9 @@ The whitepaper was last revised against spec v0.2 (Nov 8). These passages are no
   condition (CR-001) lets pinned LLM judges' scores decide payment, labelled `opinion`.
 - **§5** ("a small set of interfaces, which are being specified now… the reference adapter
   already lets an MCP tool server take on simple commitments"): the interfaces are published as
-  traits with L0 and L1 conformance suites, and two independent bindings (MCP and any CLI
-  harness) pass both, including paid and negotiated commitments. L2–L3 are still being specified.
+  traits with L0, L1 and L2 conformance suites, and two independent bindings (MCP and any CLI
+  harness) pass them, including paid, negotiated and governed commitments. L3 is still being
+  specified.
 - **§6** ("or back to the requester after the deadline"): after the locktime, which is later
   than the deadline plus the review window (§3 says this correctly).
 - **§9** ("A specification (v0.2 logical design)"): the spec is v0.5.
@@ -129,7 +130,7 @@ The whitepaper was last revised against spec v0.2 (Nov 8). These passages are no
 - **§9** (the demonstration bullet): it also covers judged conditions, settlement triggers,
   drafted conditions, disqualifiers and held-out tests.
 - **§9** ("What is not built yet: … the published interface for connecting other agent
-  systems"): built at L0 and L1 (negotiated commitments); L2 and L3 are not.
+  systems"): built at L0, L1 (negotiated commitments) and L2 (governed); L3 is not.
 - **§10** ("When an agent commits, it also states how likely it thinks it is to meet the
   deadline"): `p_on_time` is optional in the validator.
 
@@ -137,7 +138,7 @@ The whitepaper was last revised against spec v0.2 (Nov 8). These passages are no
 
 - Real money: real mints, NIP-60 wallet backup, NWC top-up, a multi-mint policy, the
   requester's own per-mint caps, encrypted preimages and proofs.
-- Binding API beyond L1 (D-10): the L2–L3 suites; Gate and Verifier in the driver;
+- Binding API beyond L2 (D-10): the L3 suite and the Verifier in the driver; a sign-off UI for gates;
   the requester side and the demo cast on the traits; a requester-side runner.
 - Real verifiers: a grounding verifier, a verifier binding (L3), a gate with human sign-off.
 - An arbitration service (arbiters are scripted in the demo).

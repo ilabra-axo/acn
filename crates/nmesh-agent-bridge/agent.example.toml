@@ -38,6 +38,12 @@ evidence = "public"
 # or from your templates), the requester's counters, rework, disputes of contradicted rejections,
 # held-out instances and disqualifiers. Default true; false serves T0/T1 only (L0).
 negotiate = true
+# A governance gate (L2): its own key endorses (K_ENDORSE) the acts its policy allows, so the
+# agent can take terms that require endorsed performer acts. K_SVC names the key and policy hash.
+# gate_key_file = ".nmesh/agents/gate.nsec"
+# [acn.gate_policy]   (in acn-cli-shim: [gate_policy])
+# max_sat = 1000
+# tools = ["echo"]
 # Execution journal (what ran, what was sent, what was redeemed), so a restart never repeats
 # work. Default: next to the key file.
 # journal = ".nmesh/agents/echo.acn-journal.json"
