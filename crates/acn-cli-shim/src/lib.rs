@@ -74,6 +74,11 @@ pub struct Config {
     /// derivation record to the Blossom servers, unencrypted, after the REPORT passes the gate.
     #[serde(default)]
     pub evidence: Disclosure,
+    /// Serve profile N too (conformance level L1): counters that close open conditions,
+    /// accepting the requester's counters, promises, rework, disputes of contradicted
+    /// rejections (when the terms name an arbiter), held-out instances and disqualifiers.
+    #[serde(default = "yes")]
+    pub negotiate: bool,
     /// The durable execution journal (JSON). Default: next to `key_file`.
     #[serde(default)]
     pub journal: Option<PathBuf>,
@@ -98,6 +103,10 @@ pub struct Config {
 fn default_operator() -> String {
     "self-hosted".into()
 }
+fn yes() -> bool {
+    true
+}
+
 fn default_capabilities() -> Vec<String> {
     acn_binding_nostr::TEST_MINT_CAPABILITIES
         .iter()
@@ -262,6 +271,7 @@ impl CliShim {
             }),
         )
         .with_min_price(cfg.price_sat)
+        .with_negotiation(cfg.negotiate)
         .with_journal(journal)
         .with_disclosure(cfg.evidence);
         if !cfg.blossom.is_empty() {
@@ -331,7 +341,6 @@ impl CliShim {
             };
             session.publish_pinned_builder(def.to_builder()).await?;
         }
-        let paid = cfg.price_sat > 0 && cfg.mint.is_some();
         let ad = ServiceAd {
             tools: cfg
                 .tools
@@ -344,7 +353,7 @@ impl CliShim {
                     })
                 })
                 .collect(),
-            profiles: if paid { vec!["T0".into(), "T1".into()] } else { vec!["T0".into()] },
+            profiles: performer.profiles(),
             min_price_sat: cfg.price_sat,
             mints: cfg.mint.iter().map(|m| (m.clone(), cfg.mint_capabilities.clone())).collect(),
             blossom: cfg.blossom.clone(),

@@ -44,6 +44,11 @@ pub struct AcnConfig {
     /// passed the gate.
     #[serde(default)]
     pub evidence: Disclosure,
+    /// Serve profile N too (conformance level L1): counters that close open conditions,
+    /// accepting the requester's counters, promises, rework, disputes of contradicted
+    /// rejections (when the terms name an arbiter), held-out instances and disqualifiers.
+    #[serde(default = "yes")]
+    pub negotiate: bool,
     /// The durable execution journal (JSON). Default: next to `agent.key_file`
     /// (`<key>.acn-journal.json`).
     #[serde(default)]
@@ -71,6 +76,7 @@ impl Default for AcnConfig {
             wallet_dir: None,
             blossom: vec![],
             evidence: Disclosure::default(),
+            negotiate: true,
             journal: None,
             deadline_secs: default_deadline(),
             review_window_secs: default_review(),

@@ -33,6 +33,17 @@ impl Signer for SessionBinding {
         nostr_sdk::nips::nip44::decrypt(self.0.keys().secret_key(), &pk, ciphertext)
             .map_err(|e| e.to_string())
     }
+    /// `sha256("acn-binding derived secret" ‖ secret key ‖ label)`: a different value per
+    /// label, recoverable after a restart from the key alone, and revealing nothing about it.
+    fn derive_secret(&self, label: &str) -> Result<[u8; 32], String> {
+        use sha2::{Digest, Sha256};
+        Ok(Sha256::new()
+            .chain_update(b"acn-binding derived secret")
+            .chain_update(self.0.keys().secret_key().secret_bytes())
+            .chain_update(label.as_bytes())
+            .finalize()
+            .into())
+    }
 }
 
 impl Inbox for SessionBinding {

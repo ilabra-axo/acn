@@ -1,12 +1,13 @@
-//! The reference bindings pass the L0 suite: a real relay, a real (fake-Lightning) CDK mint and
-//! a Blossom server, all local. `acn-mcp-shim` (the agent bridge with the echo MCP server) runs
-//! priced, so T1 is exercised, and free, so T0 is.
+//! The reference bindings pass the L0 and L1 suites: a real relay, a real (fake-Lightning) CDK
+//! mint and a Blossom server, all local. `acn-mcp-shim` (the agent bridge with the echo MCP
+//! server) runs priced, so T1 is exercised, and free, so T0 is; without negotiation for L0 (so
+//! it must decline profile N) and with it for L1.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use acn_conformance::{l0, Env, Executions, Target};
+use acn_conformance::{l0, l1, Env, Executions, Target};
 use nmesh_agent_bridge::config::{
     AcnConfig, AgentConfig, AgentSection, Disclosure, McpServerConfig, McpTransport,
 };
@@ -96,7 +97,12 @@ fn executions(dir: &Path) -> Executions {
     }))
 }
 
-async fn shim(i: &Infra, dir: &std::path::Path, price_sat: u64) -> anyhow::Result<String> {
+async fn shim(
+    i: &Infra,
+    dir: &std::path::Path,
+    price_sat: u64,
+    negotiate: bool,
+) -> anyhow::Result<String> {
     let bridge = Bridge::start(AgentConfig {
         agent: AgentSection {
             id: "echo".into(),
@@ -129,6 +135,7 @@ async fn shim(i: &Infra, dir: &std::path::Path, price_sat: u64) -> anyhow::Resul
             blossom: vec![i.blossom.url.clone()],
             // L0 publishes evidence: opt in explicitly (the default is private).
             evidence: Disclosure::Public,
+            negotiate,
             ..Default::default()
         },
     })
@@ -147,19 +154,26 @@ async fn mcp_shim_passes_l0_priced_and_free() -> anyhow::Result<()> {
         mint: Some(i.mint.url.clone()),
         blossom: Some(i.blossom.url.clone()),
     };
-    for (name, price) in [("priced", 5), ("free", 0)] {
+    for (name, price, negotiate) in [
+        ("l0-priced", 5, false),
+        ("l0-free", 0, false),
+        ("l1-priced", 5, true),
+        ("l1-free", 0, true),
+    ] {
         let dir = temp_dir(name);
-        let agent = shim(&i, &dir, price).await?;
-        let report = l0(
-            &env,
-            &Target {
-                agent,
-                tool: "echo".into(),
-                input: json!({"text": "conformance"}),
-                executions: Some(executions(&dir)),
-            },
-        )
-        .await?;
+        let agent = shim(&i, &dir, price, negotiate).await?;
+        let target = Target {
+            agent,
+            tool: "echo".into(),
+            input: json!({"text": "conformance"}),
+            executions: Some(executions(&dir)),
+        };
+        let report = if negotiate {
+            l1(&env, &target).await?
+        } else {
+            l0(&env, &target).await?
+        };
+        assert_eq!(report.level, if negotiate { "L1" } else { "L0" });
         println!("{}", report.summary());
         assert!(report.passed(), "{name}:\n{}", report.summary());
         let names: Vec<&str> = report.cases.iter().map(|c| c.name.as_str()).collect();
@@ -168,7 +182,7 @@ async fn mcp_shim_passes_l0_priced_and_free() -> anyhow::Result<()> {
             report
                 .cases
                 .iter()
-                .filter(|c| c.name.starts_with("decline-"))
+                .filter(|c| c.name.starts_with("decline-") || c.name.starts_with("n-decline"))
                 .all(|c| c.detail.contains("0 execution(s)")),
             "{}",
             report.summary()
@@ -177,11 +191,32 @@ async fn mcp_shim_passes_l0_priced_and_free() -> anyhow::Result<()> {
             assert!(
                 names.contains(&"t1-paid-call")
                     && names.contains(&"t1-terms-by-reference")
-                    && names.contains(&"free-call-below-price-declined"),
+                    && names.contains(&"free-call-below-price-declined")
+                    && names.contains(&"decline-locktime-too-early"),
                 "{names:?}"
             );
         } else {
             assert!(names.contains(&"t0-call"), "{names:?}");
+        }
+        assert_eq!(
+            names.contains(&"decline-profile-n"),
+            !negotiate,
+            "{names:?}"
+        );
+        if negotiate {
+            for c in [
+                "n-promise-report-satisfy",
+                "n-counter-closes-open-condition",
+                "n-requester-counter-accepted",
+                "n-unmeetable-counter-declined",
+                "n-rework",
+                "n-held-out-seed",
+                "n-disqualifier-breach",
+                "n-contradicted-rejection-disputed",
+                "n-decline-governed",
+            ] {
+                assert!(names.contains(&c), "{c} missing: {names:?}");
+            }
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -34,6 +34,10 @@ price_sat = 0                  # > 0: calls are T1, paid with a hash-locked Cash
 # record and logs to the Blossom servers above, UNENCRYPTED, for anyone with the hash; with an
 # operator binding and a Blossom server the agent then claims conformance level L0.
 evidence = "public"
+# Profile N too (conformance level L1): counters that close open conditions (as human checks,
+# or from your templates), the requester's counters, rework, disputes of contradicted rejections,
+# held-out instances and disqualifiers. Default true; false serves T0/T1 only (L0).
+negotiate = true
 # Execution journal (what ran, what was sent, what was redeemed), so a restart never repeats
 # work. Default: next to the key file.
 # journal = ".nmesh/agents/echo.acn-journal.json"
