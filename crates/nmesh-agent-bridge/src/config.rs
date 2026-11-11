@@ -49,6 +49,15 @@ pub struct AcnConfig {
     /// rejections (when the terms name an arbiter), held-out instances and disqualifiers.
     #[serde(default = "yes")]
     pub negotiate: bool,
+    /// A governance key for the binding's gate (L2): it endorses (`K_ENDORSE`) the acts the
+    /// gate policy allows, so the agent can take terms that require endorsed performer acts.
+    /// Omit for no gate. Kept apart from the agent and operator keys.
+    #[serde(default)]
+    pub gate_key_file: Option<PathBuf>,
+    /// What the gate endorses (`max_sat`, `tools`); a person's sign-off (`human_kinds`) needs a
+    /// host with an approver, which the shims don't have, so those kinds are denied.
+    #[serde(default)]
+    pub gate_policy: acn_binding::GatePolicy,
     /// The durable execution journal (JSON). Default: next to `agent.key_file`
     /// (`<key>.acn-journal.json`).
     #[serde(default)]
@@ -77,6 +86,8 @@ impl Default for AcnConfig {
             blossom: vec![],
             evidence: Disclosure::default(),
             negotiate: true,
+            gate_key_file: None,
+            gate_policy: Default::default(),
             journal: None,
             deadline_secs: default_deadline(),
             review_window_secs: default_review(),

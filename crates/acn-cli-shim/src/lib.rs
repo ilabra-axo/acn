@@ -79,6 +79,15 @@ pub struct Config {
     /// rejections (when the terms name an arbiter), held-out instances and disqualifiers.
     #[serde(default = "yes")]
     pub negotiate: bool,
+    /// A governance key for the binding's gate (L2): it endorses (`K_ENDORSE`) the acts the
+    /// gate policy allows, so the agent can take terms that require endorsed performer acts.
+    /// Omit for no gate. Kept apart from the agent and operator keys.
+    #[serde(default)]
+    pub gate_key_file: Option<PathBuf>,
+    /// What the gate endorses (`max_sat`, `tools`); a person's sign-off (`human_kinds`) needs a
+    /// host with an approver, which the shims don't have, so those kinds are denied.
+    #[serde(default)]
+    pub gate_policy: acn_binding::GatePolicy,
     /// The durable execution journal (JSON). Default: next to `key_file`.
     #[serde(default)]
     pub journal: Option<PathBuf>,
@@ -292,6 +301,13 @@ impl CliShim {
                 capabilities: cfg.mint_capabilities.clone(),
             }));
         }
+        if let Some(path) = &cfg.gate_key_file {
+            let gk = nmesh_core::load_or_create_keys(path)?;
+            performer = performer.with_gate(std::sync::Arc::new(acn_binding::PolicyGate::new(
+                std::sync::Arc::new(acn_binding::KeySigner::new(gk.secret_key().secret_bytes())),
+                cfg.gate_policy.clone(),
+            )));
+        }
         let level = cfg.operator_key_file.as_ref().and(performer.level());
 
         // What the desktop app needs: a manifest (consent) and one slash command per tool.
@@ -358,6 +374,7 @@ impl CliShim {
             mints: cfg.mint.iter().map(|m| (m.clone(), cfg.mint_capabilities.clone())).collect(),
             blossom: cfg.blossom.clone(),
             binding_level: level,
+            governance: performer.governance(),
             data_handling: serde_json::to_value(&data_handling)?,
             deadline_secs: cfg.deadline_secs,
             review_window_secs: cfg.review_window_secs,

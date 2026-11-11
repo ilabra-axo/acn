@@ -13,6 +13,7 @@ acn-author.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 hex.workspace = true
+tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true
 
 [dev-dependencies]

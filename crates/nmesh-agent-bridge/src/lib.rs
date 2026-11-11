@@ -139,6 +139,13 @@ impl Bridge {
                 capabilities: acn.mint_capabilities.clone(),
             }));
         }
+        if let Some(path) = &acn.gate_key_file {
+            let gk = nmesh_core::load_or_create_keys(path)?;
+            performer = performer.with_gate(std::sync::Arc::new(acn_binding::PolicyGate::new(
+                std::sync::Arc::new(acn_binding::KeySigner::new(gk.secret_key().secret_bytes())),
+                acn.gate_policy.clone(),
+            )));
+        }
         let performer = performer.with_min_price(acn.price_sat);
         let bridge = Self {
             config,
@@ -154,7 +161,8 @@ impl Bridge {
             let dh = serde_json::to_value(&bridge.manifest().data_handling)?;
             let level = shim::claimed_level(acn).and(bridge.performer.level());
             let ad =
-                shim::service_advertisement(&bridge.hub, acn, &dh, &acn.mint_capabilities, level);
+                shim::service_advertisement(&bridge.hub, acn, &dh, &acn.mint_capabilities, level)
+                    .with_governance(bridge.performer.governance());
             acn_binding_nostr::announce(&bridge.session, &bridge.config.agent.id, &ad).await?;
             match &acn.operator_key_file {
                 Some(path) => {

@@ -146,6 +146,7 @@ pub fn service_advertisement(
             .collect(),
         blossom: cfg.blossom.clone(),
         binding_level: level,
+        governance: None,
         data_handling: data_handling.clone(),
         deadline_secs: cfg.deadline_secs,
         review_window_secs: cfg.review_window_secs,

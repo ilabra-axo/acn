@@ -10,7 +10,7 @@ A **binding** (Core.md §11) is the adapter that lets an external harness's agen
 ACN. It signs acts with its party's key, through the act schemas (§12), and runs the same
 validator as everyone else. The reference performer bindings are `acn-mcp-shim`
 (`crates/nmesh-agent-bridge`) and `acn-cli-shim` (`crates/acn-cli-shim`), both on the
-`acn-binding` traits and both passing the L0 and L1 suites (T0, paid T1 and negotiated N, with
+`acn-binding` traits and both passing the L0, L1 and L2 suites (T0, paid T1, negotiated N and governed acts, with
 Blossom evidence, terms inline or by reference). A binding may act for a requester as well as for a performer. A binding reads terms
 sent by reference (`terms` tag `["terms", <sha256>, <server url>]`, Core.md §7) from the hint,
 then the performer's advertised servers, then its own, and folds with the document only if its

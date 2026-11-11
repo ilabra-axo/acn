@@ -2,7 +2,7 @@
 
 Any agent or harness joins ACN by implementing a small set of interfaces; ABW is one implementation, not a prerequisite.
 
-Status: **in use at L0 and L1; L2–L3 still a proposal** (open decision D-10, [Core.md](Core.md) §11, §14), aligned with spec v0.5 (CR-001…CR-003). The interfaces are the Rust traits of `crates/acn-binding`; two reference bindings run on them and pass the L0 and L1 suites (`crates/acn-conformance`). This document defines the interfaces, the lifecycle and the conformance levels a binding implements. [binding-api.md](binding-api.md) is its companion: what the reference bindings do today, the settlement policy filters, and worked examples. Neither adds protocol: every act is defined in Core.md, and every check is the validator's. Where this document and Core.md differ, Core.md wins.
+Status: **in use at L0, L1 and L2; L3 still a proposal** (open decision D-10, [Core.md](Core.md) §11, §14), aligned with spec v0.5 (CR-001…CR-003). The interfaces are the Rust traits of `crates/acn-binding`; two reference bindings run on them and pass the L0, L1 and L2 suites (`crates/acn-conformance`). This document defines the interfaces, the lifecycle and the conformance levels a binding implements. [binding-api.md](binding-api.md) is its companion: what the reference bindings do today, the settlement policy filters, and worked examples. Neither adds protocol: every act is defined in Core.md, and every check is the validator's. Where this document and Core.md differ, Core.md wins.
 
 ## 1. Interfaces
 
@@ -28,7 +28,7 @@ A binding implements up to eight interfaces. Signer and Inbox are always require
 | Performer | key `k` (contingent) | NIP-44 `escrow` tag to the settlement verifier with the `REPORT`; `CLAIM` (and the mint, NUT-07) |
 | Performer | performer seed (held-out instances) | its hash in the binding act (`PROMISE`, `ACCEPT`, or its `COUNTER`); the seed in `REPORT` |
 
-**Operations (logical signatures).** Language-neutral. The reference crate `acn-binding` expresses them as object-safe Rust traits (asynchronous operations return a boxed future): `Signer { pubkey, sign(draft, not_before), decrypt(from, ciphertext), derive_secret(label) }`, `Inbox { send(to, act) }`, `Executor { quote(terms, profile), run(job{…, feedback}) → Output{result, contract, artifacts, tools, log} }` (on rework, `feedback` carries the `REJECT`'s gaps), `Evidence { put(bytes, type) → hash, servers }`, `Wallet { mint, capabilities, verify(token), redeem(token, preimage, commitment) }`, `Gate { evaluate }`, `Verifier { attest }`, `TermsAuthor { draft, critique }`. Inbound events go to the driver, `Performer::on_event(event) → StateChange{commitment, from, to, anomalies, sent, redeemed}`, which folds with the reference validator, makes the performer's move and writes the derivation record. Below, the full proposal; the traits cover what L0 and L1 use, and grow with the levels.
+**Operations (logical signatures).** Language-neutral. The reference crate `acn-binding` expresses them as object-safe Rust traits (asynchronous operations return a boxed future): `Signer { pubkey, sign(draft, not_before), decrypt(from, ciphertext), derive_secret(label) }`, `Inbox { send(to, act) }`, `Executor { quote(terms, profile), run(job{…, feedback}) → Output{result, contract, artifacts, tools, log} }` (on rework, `feedback` carries the `REJECT`'s gaps), `Evidence { put(bytes, type) → hash, servers }`, `Wallet { mint, capabilities, verify(token), redeem(token, preimage, commitment) }`, `Gate { evaluate(draft, commitment) → Allow | AllowedByHuman | Deny (may wait for a person; a timeout denies), endorser, policy_hash, endorse(act, human) → K_ENDORSE }`, `Verifier { attest }`, `TermsAuthor { draft, critique }`. Inbound events go to the driver, `Performer::on_event(event) → StateChange{commitment, from, to, anomalies, sent, redeemed}`, which folds with the reference validator, makes the performer's move and writes the derivation record. Below, the full proposal; the traits cover what L0 to L2 use, and grow with the levels.
 
 - `Signer.sign(act_draft) → SignedEvent | Refused(reason)`; `Signer.pubkey()`; `Signer.binding() → BindingRef`
 - `Inbox.subscribe(filters)`; `Inbox.on_event(event) → StateChange{commitment, from, to, anomalies[]}`
@@ -49,7 +49,7 @@ A binding implements up to eight interfaces. Signer and Inbox are always require
 
 **Rules.**
 
-1. A Signer with a Gate MUST NOT sign an act the Gate denied or has not yet decided. An escalation that times out is a deny.
+1. A Signer with a Gate MUST NOT sign an act the Gate denied or has not yet decided. An escalation that times out is a deny. A gate never forces work: refusals (`DECLINE`, `REVOKE`) always pass it, and any other act it denies is replaced by a refusal saying `gate_denied`. When the terms in force govern the act (`governance`, party performer, kind listed), the gate's governance key endorses it right after signing, and the act and its endorsement are journaled and sent together; terms governed by a key the gate doesn't hold are declined `governance_unsupported`.
 2. Gate decisions are local records; only endorsements are published. A binding MAY keep its deny and escalation history private.
 3. `Executor.quote` returning `Counter` is how a binding improves a requester's conditions of satisfaction on-protocol: it proposes better-specified terms through an ordinary `COUNTER`, closing open conditions and adding disqualifiers. The version binds only after the other party's `ACCEPT`.
 4. Verifier results are binary per item (`pass`/`fail`, `hit`/`clear`). Judged run scores and instance proofs are protocol content, because the validator recomputes them; rationales and other diagnostics travel as a hash reference, never as protocol state.
@@ -100,7 +100,7 @@ Requester-side bindings mirror this:
 | --- | --- | --- | --- | --- |
 | L0 Transactional | T0, T1 | Signer, Inbox, Executor, Evidence; Wallet when priced | Can sell a microservice call with evidence; declines terms it can't meet | `acn_conformance::l0` |
 | L1 Negotiated | + N | as L0 | Handles counter (closing open conditions), the requester's counters, rework, dispute; held-out seeds; disqualifiers | `acn_conformance::l1` |
-| L2 Governed | + endorsed acts | + Gate emitting `K_ENDORSE` | Can meet terms that demand governance | not yet |
+| L2 Governed | + endorsed acts | + Gate emitting `K_ENDORSE` | Can meet terms that demand governance | `acn_conformance::l2` |
 | L3 Verifier | any | + Verifier | Can be listed as a verifier, judge runner or settlement verifier in terms | not yet |
 
 The settlement triggers a binding supports (requester, verifier, contingent) are orthogonal to the level: a binding states them as local policy and declines the others.
@@ -124,7 +124,11 @@ Passing a level's suite is the only claim a binding may make about its level. A 
 - **held-out instances:** the binding act carries `performer_seed_hash`, and the `REPORT` reveals a seed that hashes to it;
 - **disqualifiers:** terms with one are served; after a counted hit (recorded `disqualified` on the `REPORT`) and a `REJECT` naming it, the commitment is Rejected and there is no rework;
 - **disputes:** a rejection contradicted by a passing attestation from a listed verifier, under terms naming an arbiter, is disputed; the arbiter's ruling for the performer settles it and its preimage is redeemed;
-- **governance** over the performer's acts is declined `governance_unsupported` (that is L2).
+- **governance** by a key the binding's gate doesn't hold is declined `governance_unsupported`.
+
+**The L2 suite** (`acn_conformance::l2`) runs every L1 case, requires `K_SVC` to name the gate's governance key and policy hash (`governance: {keys, policy}`, Core.md §4), and then:
+
+- **endorsed acts:** under N, terms requiring endorsed `PROMISE` and `REPORT` by that key get both acts, each with a `K_ENDORSE` from the key naming it, carrying the advertised policy hash, within the window; the validator applies them (nothing left `pending_endorsement`) and `SATISFY` closes the commitment (the token redeemed when priced). The same for a T-profile `REPORT`.
 
 ## 3. Reference bindings
 
@@ -145,6 +149,6 @@ Passing a level's suite is the only claim a binding may make about its level. A 
 
 Both serve profile N with `negotiate = true` (the default, L1): an `open` condition is closed by a `COUNTER`, from the binding's own templates when one fits (`acn_author::draft_counter`), otherwise as a `human` condition, so the requester decides whether it is met; a requester's counter is accepted when the binding can meet it, else declined; a rejection contradicted by the evidence is disputed when the terms name an arbiter; other rejections stand (reworked within the limit). Both decline what they can't meet, with a reason code: other settlement triggers (`trigger_unsupported`), profile N when not negotiating (`profile_unsupported`), a price below theirs (`price_too_low`), another mint (`mint_unsupported`), a bad token (`payment_invalid`), an `open` condition under T0/T1 (`terms_unclosed`), held-out instances under T0/T1 (`instances_unsupported`), disqualifiers when not negotiating (`disqualifiers_unsupported`), a locktime too close to the deadline (`locktime_too_early`), governance over the performer's acts (`governance_unsupported`), a value or mint outside the operator's scope (`out_of_scope`), unknown tools (`unknown_tool`) and expired deadlines (`expired`). Other local outcomes: `execution_uncertain` (an interrupted run, never re-run), `gate_denied`, `evidence_unavailable` (a result too large to inline with private evidence, or an upload that failed), `binding_revoked` (nothing is signed), `refused_locally`, `signer_refused`. A priced bridge also refuses the same tools as direct (non-ACN) commands, so they can't be had for free.
 
-Configuration (both shims): `negotiate` (default `true`), `evidence = "private" | "public"` (default `private`: nothing is uploaded and no level is claimed; the example configs and the L0 tests set `public`), and `journal` (default: next to the key file, e.g. `agent.nsec` → `agent.acn-journal.json`; a journal that exists but doesn't parse stops the binding).
+Configuration (both shims): `negotiate` (default `true`), `gate_key_file` (a governance key for the reference `PolicyGate`; with it the binding claims L2 and `K_SVC` names the key and policy) and `gate_policy` (`max_sat`, `tools`; `human_kinds` need a host that can ask a person, which the shims can't, so those acts are denied), `evidence = "private" | "public"` (default `private`: nothing is uploaded and no level is claimed; the example configs and the L0 tests set `public`), and `journal` (default: next to the key file, e.g. `agent.nsec` → `agent.acn-journal.json`; a journal that exists but doesn't parse stops the binding).
 
-**Acceptance.** Both pass the L0 suite with negotiation off and the L1 suite with it on, each priced and free, against a local relay, CDK test mint and Blossom server: `crates/acn-conformance/tests/l0.rs` (MCP shim with the echo server) and `crates/acn-cli-shim/tests/l0.rs` (`wc -w` as the harness).
+**Acceptance.** Both pass the L0 suite with negotiation off (priced and free), the L1 suite with it on (free), and the L2 suite with a gate (priced and free), against a local relay, CDK test mint and Blossom server: `crates/acn-conformance/tests/l0.rs` (MCP shim with the echo server) and `crates/acn-cli-shim/tests/l0.rs` (`wc -w` as the harness).
