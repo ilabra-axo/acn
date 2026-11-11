@@ -1,16 +1,17 @@
-//! The CLI shim passes the L0 suite with `wc -w` as its harness, priced (T1) and free (T0), on a
-//! local relay, CDK test mint and Blossom server. No MCP and no agent-bridge code involved.
+//! The CLI shim passes the L0 and L1 suites with `wc -w` as its harness, priced (T1) and free
+//! (T0), on a local relay, CDK test mint and Blossom server. No MCP and no agent-bridge code
+//! involved.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use acn_cli_shim::{CliShim, Config, Disclosure, Stdin, ToolConfig};
-use acn_conformance::{l0, Env, Executions, Target};
+use acn_conformance::{l0, l1, Env, Executions, Target};
 use nostr_relay_builder::prelude::*;
 use serde_json::json;
 
 #[tokio::test]
-async fn cli_shim_passes_l0_priced_and_free() -> anyhow::Result<()> {
+async fn cli_shim_passes_l0_and_l1_priced_and_free() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let relay = LocalRelay::new(RelayBuilder::default().rate_limit(RateLimit {
         max_reqs: 500,
@@ -31,7 +32,12 @@ async fn cli_shim_passes_l0_priced_and_free() -> anyhow::Result<()> {
         mint: Some(mint.url.clone()),
         blossom: Some(blossom.url.clone()),
     };
-    for (name, price) in [("priced", 3), ("free", 0)] {
+    for (name, price, negotiate) in [
+        ("l0-priced", 3, false),
+        ("l0-free", 0, false),
+        ("l1-priced", 3, true),
+        ("l1-free", 0, true),
+    ] {
         let dir = std::env::temp_dir().join(format!("acn-cli-l0-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir)?;
@@ -48,6 +54,7 @@ async fn cli_shim_passes_l0_priced_and_free() -> anyhow::Result<()> {
             operator_key_file: Some(dir.join("operator.nsec")),
             blossom: vec![blossom.url.clone()],
             evidence: Disclosure::Public,
+            negotiate,
             journal: None,
             price_sat: price,
             mint: (price > 0).then(|| mint.url.clone()),
@@ -74,20 +81,22 @@ async fn cli_shim_passes_l0_priced_and_free() -> anyhow::Result<()> {
         let agent = shim.session().public_key().to_hex();
         tokio::spawn(async move { shim.run().await });
         tokio::time::sleep(Duration::from_millis(2000)).await;
-        let report = l0(
-            &env,
-            &Target {
-                agent,
-                tool: "wordcount".into(),
-                input: json!({"text": "one two three"}),
-                executions: Some(Executions(Arc::new(move || {
-                    std::fs::read_to_string(&log)
-                        .map(|s| s.lines().count() as u64)
-                        .unwrap_or(0)
-                }))),
-            },
-        )
-        .await?;
+        let target = Target {
+            agent,
+            tool: "wordcount".into(),
+            input: json!({"text": "one two three"}),
+            executions: Some(Executions(Arc::new(move || {
+                std::fs::read_to_string(&log)
+                    .map(|s| s.lines().count() as u64)
+                    .unwrap_or(0)
+            }))),
+        };
+        let report = if negotiate {
+            l1(&env, &target).await?
+        } else {
+            l0(&env, &target).await?
+        };
+        assert_eq!(report.level, if negotiate { "L1" } else { "L0" });
         println!("{}", report.summary());
         assert!(report.passed(), "{name}:\n{}", report.summary());
         let _ = std::fs::remove_dir_all(&dir);

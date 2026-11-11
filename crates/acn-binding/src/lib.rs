@@ -33,7 +33,7 @@
 //! - **Evidence:** nothing is uploaded unless [`Disclosure::Public`], and then only after the
 //!   REPORT referencing it has passed the gate and the validator.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -84,6 +84,14 @@ pub trait Signer: Send + Sync {
     fn sign(&self, draft: &Draft, not_before: Option<u64>) -> Result<Event, String>;
     /// NIP-44 decrypt a payload sent to this key by `from` (tokens, seeds, escrowed secrets).
     fn decrypt(&self, from: &str, ciphertext: &str) -> Result<String, String>;
+    /// A secret derived from this key for `label` (the per-commitment performer seed for
+    /// held-out instances, Core §7): deterministic, so nothing has to be stored, and revealed
+    /// only by the act the spec names. A signer that can't derive secrets returns an error, and
+    /// the driver declines terms that need one.
+    fn derive_secret(&self, label: &str) -> Result<[u8; 32], String> {
+        let _ = label;
+        Err("this signer derives no secrets".into())
+    }
 }
 
 /// Delivery of signed acts. Inbound events reach the binding through [`Performer::on_event`].
@@ -116,6 +124,8 @@ pub struct Job {
     pub terms: Terms,
     pub tool: Option<String>,
     pub input: Value,
+    /// On rework (profile N): the gaps of the `REJECT` being answered (`{condition, note}`).
+    pub feedback: Vec<Value>,
 }
 
 /// An artifact the work produced; stored by [`Evidence`] and listed in the `REPORT`'s `x` tags.
@@ -413,8 +423,11 @@ pub type Admission = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 struct Move {
     draft: Draft,
     blobs: Vec<(Vec<u8>, String)>,
-    /// A REPORT of work done: if it can't be sent, a DECLINE saying why is.
+    /// A REPORT of work done: if it can't be sent, a refusal saying why is.
     report: bool,
+    /// The terms the act commits its signer to, when not the terms in force (a `COUNTER`'s or
+    /// an `ACCEPT`'s): what V-8 is checked against.
+    terms: Option<Terms>,
 }
 
 impl Move {
@@ -423,6 +436,13 @@ impl Move {
             draft,
             blobs: vec![],
             report: false,
+            terms: None,
+        }
+    }
+    fn committing(draft: Draft, terms: Terms) -> Self {
+        Self {
+            terms: Some(terms),
+            ..Self::act(draft)
         }
     }
 }
@@ -434,8 +454,11 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// A performer: its interfaces and the lifecycle that runs on them. Profiles T0 and T1 under
-/// the requester trigger (conformance level L0); anything else is declined.
+/// A performer: its interfaces and the lifecycle that runs on them, under the requester
+/// trigger. Profiles T0 and T1 (conformance level L0); with [`Performer::with_negotiation`] also
+/// profile N (L1): counters that close open conditions, accepting the requester's counters,
+/// promises, rework, disputes of contradicted rejections, held-out instances and disqualifiers.
+/// Anything else is declined.
 pub struct Performer {
     pub signer: Arc<dyn Signer>,
     pub inbox: Arc<dyn Inbox>,
@@ -453,8 +476,16 @@ pub struct Performer {
     retry_base_secs: u64,
     /// Terms documents referenced by hash rather than inlined (Core §7).
     docs: Mutex<BTreeMap<String, Value>>,
-    /// Commitments the driver is acting on (an act is in flight).
-    busy: Mutex<HashSet<String>>,
+    /// Commitments the driver is acting on, each with a dirty flag: set when another event for
+    /// it arrives meanwhile, so the active drive folds again before it stops (none is lost).
+    busy: Mutex<BTreeMap<String, bool>>,
+    /// Profile N (L1).
+    negotiate: bool,
+    /// Time this binding needs, after the review window, to redeem before the requester's
+    /// refund path opens (Core §8.2 timing constraint).
+    redeem_margin_secs: u64,
+    /// The performer's own terms templates, for closing open conditions (CR-003 §2.4).
+    author: acn_author::Capabilities,
 }
 
 impl Performer {
@@ -477,8 +508,32 @@ impl Performer {
             admission: None,
             retry_base_secs: 5,
             docs: Mutex::new(BTreeMap::new()),
-            busy: Mutex::new(HashSet::new()),
+            busy: Mutex::new(BTreeMap::new()),
+            negotiate: false,
+            redeem_margin_secs: 3600,
+            author: acn_author::Capabilities::default(),
         }
+    }
+
+    /// Serve profile N too (conformance level L1).
+    pub fn with_negotiation(mut self, on: bool) -> Self {
+        self.negotiate = on;
+        self
+    }
+
+    /// How long after `deadline + review_window` this binding needs to redeem a token (Core
+    /// §8.2): paid terms whose locktime leaves less are declined `locktime_too_early`.
+    pub fn with_redeem_margin(mut self, secs: u64) -> Self {
+        self.redeem_margin_secs = secs;
+        self
+    }
+
+    /// Templates (and slot values, verifiers) the binding closes open conditions from, through
+    /// `acn_author::draft_counter`. Without one that fits, an open condition is closed as a
+    /// `human` condition: the requester decides whether it is met.
+    pub fn with_templates(mut self, caps: acn_author::Capabilities) -> Self {
+        self.author = caps;
+        self
     }
 
     /// Evidence: fetches terms sent by reference, and (with [`Disclosure::Public`]) stores
@@ -533,9 +588,26 @@ impl Performer {
 
     /// The level these interfaces can reach (the suite decides whether it is met): L0 needs
     /// Evidence with public disclosure (the suite fetches the artifacts), and a Wallet for priced
-    /// calls. Whether an operator binding is in force is the host's to add.
+    /// calls; L1 adds negotiation. Whether an operator binding is in force is the host's to add.
     pub fn level(&self) -> Option<Level> {
-        (self.evidence.is_some() && self.disclosure == Disclosure::Public).then_some(Level::L0)
+        let evidence = self.evidence.is_some() && self.disclosure == Disclosure::Public;
+        match (evidence, self.negotiate) {
+            (true, true) => Some(Level::L1),
+            (true, false) => Some(Level::L0),
+            _ => None,
+        }
+    }
+
+    /// The profiles this binding serves, for `K_SVC`.
+    pub fn profiles(&self) -> Vec<String> {
+        let mut v = vec!["T0".to_string()];
+        if self.wallet.is_some() {
+            v.push("T1".into());
+        }
+        if self.negotiate {
+            v.push("N".into());
+        }
+        v
     }
 
     /// Record an event without acting (history replay); terms it references are fetched.
@@ -687,27 +759,33 @@ impl Performer {
             commitment: c.to_string(),
             ..Default::default()
         };
-        if c.is_empty() || !self.busy.lock().unwrap().insert(c.to_string()) {
-            // Another drive is acting on `c`; it re-folds before it finishes.
+        if c.is_empty() {
             return change;
         }
-        // Re-fold while events arrive during a move (the other caller returned early above).
-        for _ in 0..8 {
-            let before = self.store.events(c).len();
+        {
+            let mut busy = self.busy.lock().unwrap();
+            if let Some(dirty) = busy.get_mut(c) {
+                // Another drive is acting on `c`: it folds again before it stops.
+                *dirty = true;
+                return change;
+            }
+            busy.insert(c.to_string(), false);
+        }
+        // Fold again while the head moves: others' acts arrived (dirty), or ours did (a PROMISE
+        // is followed by the work and its REPORT). Bounded; a later event drives again.
+        for round in 0.. {
             let ours = change.sent.len();
             if let Err(e) = self.drive_inner(c, &mut change).await {
                 tracing::warn!(commitment = %c, error = %e, "binding: no move");
             }
-            let arrived = self
-                .store
-                .events(c)
-                .len()
-                .saturating_sub(before + (change.sent.len() - ours));
-            if arrived == 0 {
+            let mut busy = self.busy.lock().unwrap();
+            let dirty = busy.get(c).copied().unwrap_or(false);
+            if round >= 16 || (!dirty && change.sent.len() == ours) {
+                busy.remove(c);
                 break;
             }
+            busy.insert(c.to_string(), false);
         }
-        self.busy.lock().unwrap().remove(c);
         change.to = self.phase(c);
         change
     }
@@ -726,36 +804,353 @@ impl Performer {
         if cm.performer != me {
             return Ok(());
         }
-        match st.phase {
-            Phase::Requested => {
-                if !self.admits(&cm.requester) {
-                    tracing::debug!(commitment = %c, requester = %cm.requester, "binding: requester not admitted");
-                    return Ok(());
-                }
-                let key = Journal::key(c, &st.terms);
-                let first = match self.journal.entry(&key) {
-                    None => self.answer(c, cm, st, terms, &events, &key).await?,
-                    // Intent without an outcome: the work may have run. Never run it again
-                    // automatically; say so.
-                    Some(e) if e.step == Step::Executing => Move::act(self.decline_draft(
-                        c,
-                        cm,
-                        st,
-                        "execution_uncertain",
-                        "an earlier run of this request was interrupted and may or may not have \
-                         completed; it is not run again automatically",
-                    )),
-                    // An act is in flight (`flush` delivers it), or the binding halted.
-                    Some(_) => return Ok(()),
-                };
-                self.commit(c, cm, st, terms, &key, first, change).await
-            }
-            Phase::Satisfied => {
-                change.redeemed = self.redeem(c, &events).await?;
-                Ok(())
-            }
-            _ => Ok(()),
+        if st.phase == Phase::Satisfied {
+            change.redeemed = self.redeem(c, &events).await?;
+            return Ok(());
         }
+        if matches!(st.phase, Phase::Requested | Phase::Countered) && !self.admits(&cm.requester) {
+            tracing::debug!(commitment = %c, requester = %cm.requester, "binding: requester not admitted");
+            return Ok(());
+        }
+        // One move per head: the journal says whether this head was answered (across restarts).
+        let key = Journal::key(c, &st.head);
+        let first = match self.journal.entry(&key) {
+            // Intent without an outcome: the work may have run. Never run it again
+            // automatically; say so (a refusal: DECLINE before a promise, REVOKE after).
+            Some(e) if e.step == Step::Executing => Move::act(self.refuse_draft(
+                c,
+                cm,
+                st,
+                "execution_uncertain",
+                "an earlier run of this request was interrupted and may or may not have \
+                 completed; it is not run again automatically",
+            )),
+            // An act is in flight (`flush` delivers it), was sent, or the binding halted.
+            Some(_) => return Ok(()),
+            None => match self
+                .next_move(c, cm, st, terms, &out, &events, &key)
+                .await?
+            {
+                Some(m) => m,
+                None => return Ok(()),
+            },
+        };
+        self.commit(c, cm, st, terms, &key, first, change).await
+    }
+
+    /// The performer's move on head `st.head`, if it has one.
+    #[allow(clippy::too_many_arguments)]
+    async fn next_move(
+        &self,
+        c: &str,
+        cm: &acn_core::Commitment,
+        st: &acn_core::State,
+        terms: &Terms,
+        out: &acn_core::Output,
+        events: &[Event],
+        key: &str,
+    ) -> Result<Option<Move>, String> {
+        let requester_counter = st
+            .pending
+            .as_ref()
+            .filter(|p| p.by == cm.requester)
+            .map(|p| p.terms.clone());
+        match st.phase {
+            Phase::Requested if cm.profile != Profile::N => {
+                self.answer(c, cm, st, terms, events, key).await.map(Some)
+            }
+            Phase::Requested => self.negotiate(c, cm, st, terms, None, events).await,
+            Phase::Countered => match requester_counter {
+                Some(h) => self.negotiate(c, cm, st, terms, Some(&h), events).await,
+                // Our own counter: the requester's move.
+                None => Ok(None),
+            },
+            Phase::Promised => {
+                if let Some(h) = &requester_counter {
+                    // A counter while promised: accept it if this binding can meet it; otherwise
+                    // the work goes on under the terms in force.
+                    if let Some(m) = self.negotiate(c, cm, st, terms, Some(h), events).await? {
+                        if m.draft.kind == K_ACCEPT {
+                            return Ok(Some(m));
+                        }
+                    }
+                }
+                self.work(c, cm, st, terms, events, key, vec![])
+                    .await
+                    .map(Some)
+            }
+            Phase::Reworking => {
+                let gaps = events
+                    .iter()
+                    .find(|e| e.id == st.head)
+                    .and_then(|e| serde_json::from_str::<Value>(&e.content).ok())
+                    .and_then(|v| v["gaps"].as_array().cloned())
+                    .unwrap_or_default();
+                self.work(c, cm, st, terms, events, key, gaps)
+                    .await
+                    .map(Some)
+            }
+            Phase::Rejected => Ok(self.dispute_move(c, cm, st, terms, out)),
+            _ => Ok(None),
+        }
+    }
+
+    /// Profile N, on the `REQUEST` (`pending` `None`) or on the requester's `COUNTER` (its
+    /// terms hash): `PROMISE` / `ACCEPT` terms this binding can meet, `COUNTER` closing open
+    /// conditions, or `DECLINE`.
+    async fn negotiate(
+        &self,
+        c: &str,
+        cm: &acn_core::Commitment,
+        st: &acn_core::State,
+        terms: &Terms,
+        pending: Option<&str>,
+        events: &[Event],
+    ) -> Result<Option<Move>, String> {
+        let parties = [cm.requester.as_str(), cm.performer.as_str()];
+        let decline = |reason: &str, note: String| {
+            Ok(Some(Move::act(self.refuse_draft(c, cm, st, reason, note))))
+        };
+        let candidate = match pending {
+            None => terms.clone(),
+            Some(h) => match self.terms_doc(events, h) {
+                Some(t) => t,
+                None => return Ok(None), // the counter's terms aren't available yet
+            },
+        };
+        let now = now_secs();
+        if let Err((reason, note)) = self.authority(K_PROMISE, &candidate, now) {
+            return decline(reason, note);
+        }
+        if let Some((reason, note)) = self.refusal(&candidate, Profile::N, now) {
+            return decline(reason, note);
+        }
+        // Open conditions: the performer drafts what it will be held to (CR-003 §2.4).
+        if candidate.unclosed().is_some() {
+            let Some((closed, reason)) = self.close_open(&candidate) else {
+                return decline(
+                    "terms_unclosed",
+                    "this binding can't close the open conditions".into(),
+                );
+            };
+            return self.counter_move(c, cm, st, closed, &reason, now);
+        }
+        match self.executor.quote(&candidate, Profile::N) {
+            Quote::Accept { p_on_time } => {
+                let paid = candidate.price.amount > 0;
+                if paid {
+                    if let Err(why) = self.check_token(c, cm, &candidate, events).await {
+                        return decline("payment_invalid", why);
+                    }
+                }
+                let mut d = match pending {
+                    None => Draft::promise(c, &st.head, &parties, &st.terms, p_on_time, paid),
+                    Some(h) => Draft::accept(c, &st.head, &parties, h),
+                };
+                if candidate.has_instances() {
+                    match self.performer_seed(c) {
+                        Ok(seed) => {
+                            d = d.field(
+                                "performer_seed_hash",
+                                json!(acn_core::jcs::sha256_hex(&seed)),
+                            )
+                        }
+                        Err(e) => return decline("instances_unsupported", e),
+                    }
+                }
+                Ok(Some(Move::committing(d, candidate)))
+            }
+            Quote::Decline { reason, note } => decline(&reason, note),
+            Quote::Counter { terms: t, reason } => self.counter_move(c, cm, st, t, &reason, now),
+        }
+    }
+
+    /// Our `COUNTER` with `terms`, if this binding could meet them; else a `DECLINE`.
+    fn counter_move(
+        &self,
+        c: &str,
+        cm: &acn_core::Commitment,
+        st: &acn_core::State,
+        terms: Value,
+        reason: &str,
+        now: u64,
+    ) -> Result<Option<Move>, String> {
+        let parties = [cm.requester.as_str(), cm.performer.as_str()];
+        let parsed = match Terms::parse(&terms) {
+            Ok(t) if t.unclosed().is_none() => t,
+            Ok(_) | Err(_) => {
+                return Ok(Some(Move::act(self.refuse_draft(
+                    c,
+                    cm,
+                    st,
+                    "terms_unclosed",
+                    "this binding's counter would not be closed terms",
+                ))))
+            }
+        };
+        if let Some((r, note)) = self.refusal(&parsed, Profile::N, now) {
+            return Ok(Some(Move::act(self.refuse_draft(c, cm, st, r, note))));
+        }
+        let mut d =
+            Draft::counter(c, &st.head, &parties, &terms, reason).map_err(|e| e.to_string())?;
+        if parsed.has_instances() {
+            let seed = self.performer_seed(c)?;
+            d = d.field(
+                "performer_seed_hash",
+                json!(acn_core::jcs::sha256_hex(&seed)),
+            );
+        }
+        Ok(Some(Move::committing(d, parsed)))
+    }
+
+    /// Close every open condition: from the binding's own templates (`acn-author`), or else as a
+    /// `human` condition (the requester decides whether it is met), with one line per change.
+    fn close_open(&self, terms: &Terms) -> Option<(Value, String)> {
+        if let Some(d) = acn_author::draft_counter(terms, &self.author) {
+            return Some((d.terms, d.reason));
+        }
+        let mut v = serde_json::to_value(terms).ok()?;
+        let obj = v.as_object_mut()?;
+        // The conditions change, so a template reference would no longer re-instantiate (V-28).
+        obj.remove("template_ref");
+        let mut lines = Vec::new();
+        for cond in obj.get_mut("conditions")?.as_array_mut()? {
+            if cond["class"] == "open" {
+                let id = cond["id"].as_str().unwrap_or_default().to_string();
+                let o = cond.as_object_mut()?;
+                o.retain(|k, _| matches!(k.as_str(), "id" | "description"));
+                o.insert("class".into(), json!("human"));
+                lines.push(format!(
+                    "{id}: closed as a human check: you decide whether it is met"
+                ));
+            }
+        }
+        Some((v, lines.join("; ")))
+    }
+
+    /// Do the work and draft the `REPORT` (with the performer seed, for held-out instances). The
+    /// intent is journaled before the executor runs; if it can't be, nothing runs.
+    #[allow(clippy::too_many_arguments)]
+    async fn work(
+        &self,
+        c: &str,
+        cm: &acn_core::Commitment,
+        st: &acn_core::State,
+        terms: &Terms,
+        events: &[Event],
+        key: &str,
+        feedback: Vec<Value>,
+    ) -> Result<Move, String> {
+        let parties = [cm.requester.as_str(), cm.performer.as_str()];
+        let refuse =
+            |reason: &str, note: String| Move::act(self.refuse_draft(c, cm, st, reason, note));
+        let now = now_secs();
+        if let Err((reason, note)) = self.authority(K_REPORT, terms, now) {
+            return Ok(refuse(reason, note));
+        }
+        // Profile N: the token is checked against the terms in force before every run (they may
+        // be a counter's, agreed after the REQUEST's token was locked).
+        if cm.profile == Profile::N && terms.price.amount > 0 {
+            if let Err(why) = self.check_token(c, cm, terms, events).await {
+                return Ok(refuse("payment_invalid", why));
+            }
+        }
+        let seed = if terms.has_instances() {
+            match self.performer_seed(c) {
+                Ok(s) => Some(s),
+                Err(e) => return Ok(refuse("instances_unsupported", e)),
+            }
+        } else {
+            None
+        };
+        self.journal.put(
+            key,
+            Entry {
+                commitment: c.to_string(),
+                terms: st.terms.clone(),
+                to: cm.requester.clone(),
+                step: Step::Executing,
+                act: None,
+                executed: true,
+                at: now,
+            },
+        )?;
+        let job = Job {
+            commitment: c.to_string(),
+            terms: terms.clone(),
+            tool: terms.deliverable.tool.clone(),
+            input: terms.deliverable.input.clone().unwrap_or_else(|| json!({})),
+            feedback,
+        };
+        let output = match self.executor.run(job).await {
+            Ok(o) => o,
+            Err(e) => return Ok(refuse("tool_error", e)),
+        };
+        let mut mv = match self.report(c, st, &parties, terms, output, now) {
+            Ok(m) => m,
+            Err(e) => return Ok(refuse("evidence_unavailable", e)),
+        };
+        if let Some(s) = seed {
+            mv.draft = mv.draft.field("performer_seed", json!(hex::encode(s)));
+        }
+        Ok(mv)
+    }
+
+    /// Dispute a rejection the evidence contradicts (V-16: `contradicted_rejection`, or
+    /// `overruled_judgement`), when the terms name an arbiter. Other rejections stand.
+    fn dispute_move(
+        &self,
+        c: &str,
+        cm: &acn_core::Commitment,
+        st: &acn_core::State,
+        terms: &Terms,
+        out: &acn_core::Output,
+    ) -> Option<Move> {
+        if !self.negotiate || terms.arbiter.is_none() || st.ruled {
+            return None;
+        }
+        let contradicted = out.has(&st.head, Code::ContradictedRejection)
+            || out.has(&st.head, Code::OverruledJudgement);
+        if !contradicted {
+            return None;
+        }
+        let parties = [cm.requester.as_str(), cm.performer.as_str()];
+        Some(Move::act(Draft::dispute(
+            c,
+            &st.head,
+            &parties,
+            "the rejection is contradicted by the evidence the terms name",
+        )))
+    }
+
+    /// The per-commitment performer seed (held-out instances): derived from our key.
+    fn performer_seed(&self, c: &str) -> Result<[u8; 32], String> {
+        self.signer
+            .derive_secret(&format!("acn-binding performer seed/{c}"))
+    }
+
+    /// Terms with hash `h`: inline in a `REQUEST` / `COUNTER` among `events`, or a fetched
+    /// document.
+    fn terms_doc(&self, events: &[Event], h: &str) -> Option<Terms> {
+        if let Some(v) = self.docs.lock().unwrap().get(h) {
+            return Terms::parse(v).ok();
+        }
+        events
+            .iter()
+            .filter(|e| matches!(e.kind, K_REQUEST | K_COUNTER))
+            .filter(|e| {
+                e.tags.iter().any(|t| {
+                    t.first().map(String::as_str) == Some("terms")
+                        && t.get(1).map(String::as_str) == Some(h)
+                })
+            })
+            .find_map(|e| {
+                let v: Value = serde_json::from_str(&e.content).ok()?;
+                let t = v.get("terms")?;
+                (acn_core::jcs::hash(t).ok()? == h)
+                    .then(|| Terms::parse(t).ok())
+                    .flatten()
+            })
     }
 
     /// The journal's view of `c` into the store: a prepared act is (re)sent as signed; a sent one
@@ -771,15 +1166,11 @@ impl Performer {
                     self.store.add(act.clone());
                 }
                 (Step::Executing, None) => {
-                    // Reconcile: our act on this commitment's chain, from history.
+                    // Reconcile: our act answering this head (the key's), from history.
+                    let head = key.split_once(':').map(|(_, h)| h).unwrap_or_default();
                     let events = self.events(c);
-                    let out = fold(&events, &self.docs());
-                    let ours = out.commitments.get(c).and_then(|cm| {
-                        cm.chain.iter().find_map(|id| {
-                            events
-                                .iter()
-                                .find(|x| &x.id == id && x.pubkey == me && x.kind != K_REQUEST)
-                        })
+                    let ours = events.iter().find(|x| {
+                        x.pubkey == me && x.kind != K_REQUEST && x.e_marked("prev").contains(&head)
                     });
                     if let Some(act) = ours {
                         tracing::info!(commitment = %c, "binding: interrupted run reconciled from history");
@@ -799,6 +1190,25 @@ impl Performer {
         Ok(())
     }
 
+    /// A refusal from the current phase: `DECLINE` before a promise, `REVOKE` after (both
+    /// commit to no value, so they are always in scope, V-8).
+    fn refuse_draft(
+        &self,
+        c: &str,
+        cm: &acn_core::Commitment,
+        st: &acn_core::State,
+        reason: &str,
+        note: impl Into<String>,
+    ) -> Draft {
+        if matches!(st.phase, Phase::Promised | Phase::Reworking) {
+            let parties = [cm.requester.as_str(), cm.performer.as_str()];
+            Draft::closing(K_REVOKE, c, &st.head, &parties, reason)
+                .content(json!({ "reason": reason, "note": note.into() }))
+        } else {
+            self.decline_draft(c, cm, st, reason, note)
+        }
+    }
+
     fn decline_draft(
         &self,
         c: &str,
@@ -812,8 +1222,7 @@ impl Performer {
             .content(json!({ "reason": reason, "note": note.into() }))
     }
 
-    /// The move on a fresh REQUEST: decline, or do the work and REPORT (T0/T1). The intent is
-    /// journaled before the executor runs; if it can't be, nothing runs.
+    /// The move on a fresh T0/T1 `REQUEST`: decline, or do the work and REPORT.
     async fn answer(
         &self,
         c: &str,
@@ -823,7 +1232,6 @@ impl Performer {
         events: &[Event],
         key: &str,
     ) -> Result<Move, String> {
-        let parties = [cm.requester.as_str(), cm.performer.as_str()];
         let decline =
             |reason: &str, note: String| Ok(Move::act(self.decline_draft(c, cm, st, reason, note)));
         let now = now_secs();
@@ -839,7 +1247,7 @@ impl Performer {
             Quote::Counter { .. } => {
                 return decline(
                     "profile_unsupported",
-                    "this binding answers T0/T1 calls; counters need profile N".into(),
+                    "this request is T0/T1; counters need profile N".into(),
                 )
             }
         }
@@ -848,43 +1256,20 @@ impl Performer {
                 return decline("payment_invalid", why);
             }
         }
-        self.journal.put(
-            key,
-            Entry {
-                commitment: c.to_string(),
-                terms: st.terms.clone(),
-                to: cm.requester.clone(),
-                step: Step::Executing,
-                act: None,
-                executed: true,
-                at: now,
-            },
-        )?;
-        let job = Job {
-            commitment: c.to_string(),
-            terms: terms.clone(),
-            tool: terms.deliverable.tool.clone(),
-            input: terms.deliverable.input.clone().unwrap_or_else(|| json!({})),
-        };
-        let output = match self.executor.run(job).await {
-            Ok(o) => o,
-            Err(e) => return decline("tool_error", e),
-        };
-        match self.report(c, st, &parties, terms, output, now) {
-            Ok(m) => Ok(m),
-            Err(e) => decline("evidence_unavailable", e),
-        }
+        self.work(c, cm, st, terms, events, key, vec![]).await
     }
 
-    /// What L0 declines before running anything (docs/harness-binding-API.md §1).
+    /// What this binding declines before running anything (docs/harness-binding-API.md §1):
+    /// what L0 can't meet, less what L1 adds when negotiating.
     fn refusal(&self, terms: &Terms, profile: Profile, now: u64) -> Option<(&'static str, String)> {
+        let n = profile == Profile::N;
         if !terms.settlement_trigger.is_requester() {
             return Some((
                 "trigger_unsupported",
                 "this binding settles through the requester only".into(),
             ));
         }
-        if profile == Profile::N {
+        if n && !self.negotiate {
             return Some((
                 "profile_unsupported",
                 "this binding offers T0 and T1".into(),
@@ -910,23 +1295,46 @@ impl Performer {
                     format!("this binding is paid at {}", w.mint()),
                 ));
             }
-            if profile != Profile::T1 || pay.is_none_or(|p| p.hashlock.is_none()) {
+            if profile == Profile::T0 || pay.is_none_or(|p| p.hashlock.is_none()) {
                 return Some((
                     "payment_unsupported",
-                    "paid calls are T1 with a hash-locked token".into(),
+                    "paid calls are T1 or N with a hash-locked token".into(),
                 ));
             }
+            // Core §8.2: the refund path must not open before this binding can redeem.
+            let need = terms
+                .deadline
+                .saturating_add(terms.review_window)
+                .saturating_add(self.redeem_margin_secs);
+            match pay.and_then(|p| p.locktime) {
+                Some(l) if l > need => {}
+                l => {
+                    return Some((
+                        "locktime_too_early",
+                        format!(
+                        "the payment's locktime ({}) must be after the deadline plus the review \
+                             window plus {} s to redeem ({need})",
+                        l.map_or("none".to_string(), |l| l.to_string()),
+                        self.redeem_margin_secs
+                    ),
+                    ))
+                }
+            }
         }
-        if let Some(why) = terms.unclosed() {
-            return Some(("terms_unclosed", why));
+        // Profile N closes open conditions by counter; T0/T1 can't.
+        if !n {
+            if let Some(why) = terms.unclosed() {
+                return Some(("terms_unclosed", why));
+            }
         }
-        if terms.has_instances() {
+        if terms.has_instances() && !n {
             return Some((
                 "instances_unsupported",
-                "held-out instances need a performer seed, which an L0 binding doesn't keep".into(),
+                "held-out instances need a performer seed committed before delivery: profile N"
+                    .into(),
             ));
         }
-        if !terms.disqualifiers.is_empty() {
+        if !terms.disqualifiers.is_empty() && !self.negotiate {
             return Some((
                 "disqualifiers_unsupported",
                 "an L0 binding doesn't take terms with disqualifiers".into(),
@@ -1014,6 +1422,7 @@ impl Performer {
                 ),
                 blobs: vec![],
                 report: true,
+                terms: None,
             });
         }
         if let Some(r) = &output.result {
@@ -1074,6 +1483,7 @@ impl Performer {
             .field("derivation", json!(derivation)),
             blobs,
             report: true,
+            terms: None,
         })
     }
 
@@ -1109,7 +1519,7 @@ impl Performer {
                 }
                 Err((reason, note)) if mv.report => {
                     tracing::warn!(commitment = %c, %reason, %note, "binding: REPORT withheld");
-                    mv = Move::act(self.decline_draft(c, cm, st, reason, note));
+                    mv = Move::act(self.refuse_draft(c, cm, st, reason, note));
                 }
                 Err((reason, note)) => {
                     let executed = self.journal.entry(key).is_some_and(|e| e.executed);
@@ -1149,7 +1559,11 @@ impl Performer {
                 return Err(("gate_denied", reason));
             }
         }
-        self.authority(mv.draft.kind, terms, now_secs().max(not_before))?;
+        self.authority(
+            mv.draft.kind,
+            mv.terms.as_ref().unwrap_or(terms),
+            now_secs().max(not_before),
+        )?;
         let act = self
             .signer
             .sign(&mv.draft, Some(not_before))
@@ -1399,6 +1813,13 @@ mod tests {
         /// Test "ciphertexts" are the plaintext.
         fn decrypt(&self, _: &str, ct: &str) -> Result<String, String> {
             Ok(ct.to_string())
+        }
+        fn derive_secret(&self, label: &str) -> Result<[u8; 32], String> {
+            let mut k = self.0;
+            for (i, b) in label.bytes().enumerate() {
+                k[i % 32] ^= b;
+            }
+            Ok(k)
         }
     }
     #[derive(Default)]
@@ -1966,8 +2387,9 @@ mod tests {
             .clone()
             .unwrap()
             .terms;
+        // Keyed by the head being answered: the REQUEST itself.
         j.put(
-            &Journal::key(&c, &terms),
+            &Journal::key(&c, &c),
             Entry {
                 commitment: c.clone(),
                 terms,
@@ -2043,5 +2465,325 @@ mod tests {
                 (K_DECLINE, Some(reason))
             );
         }
+    }
+
+    // ---------- profile N (L1) ----------
+
+    const REQ: [u8; 32] = [1; 32];
+    const PERF: [u8; 32] = [2; 32];
+    const ARB: [u8; 32] = [3; 32];
+
+    fn me() -> String {
+        public_key(&PERF).unwrap()
+    }
+    fn requester() -> String {
+        public_key(&REQ).unwrap()
+    }
+
+    /// A free profile-N request from key 1 to key 2.
+    fn n_request(f: impl FnOnce(&mut Value)) -> Event {
+        let mut t =
+            acn_core::draft::tool_call_terms("echo", json!({"text": "hi"}), u64::MAX / 4, 3600, 0);
+        t["rework_limit"] = json!(1);
+        f(&mut t);
+        Draft::request(&me(), "N", &t, None)
+            .unwrap()
+            .sign(&REQ, 100)
+            .unwrap()
+    }
+
+    fn n_performer(work: Arc<Counting>, sent: Arc<Sent>) -> Performer {
+        Performer::new(Arc::new(Key(PERF)), sent, Arc::new(work)).with_negotiation(true)
+    }
+
+    /// The requester's (or `key`'s) next act on `c`, signed after the head.
+    fn act(
+        p: &Performer,
+        key: &[u8; 32],
+        c: &str,
+        d: impl FnOnce(&str, &[&str]) -> Draft,
+    ) -> Event {
+        let out = fold(&p.events(c), &p.docs());
+        let st = out.commitments[c].state.clone().unwrap();
+        let parties = [requester(), me()];
+        let parties: Vec<&str> = parties.iter().map(String::as_str).collect();
+        d(&st.head, &parties).sign(key, st.head_at + 1).unwrap()
+    }
+
+    fn kinds(ch: &StateChange) -> Vec<u16> {
+        ch.sent.iter().map(|e| e.kind).collect()
+    }
+
+    fn clean(p: &Performer, c: &str) {
+        let out = fold(&p.events(c), &p.docs());
+        let mine: Vec<&Anomaly> = out
+            .anomalies
+            .iter()
+            .filter(|a| a.code != Code::Unbound) // no operator binding in these unit tests
+            .filter(|a| {
+                p.events(c)
+                    .iter()
+                    .any(|e| e.id == a.event && e.pubkey == me())
+            })
+            .collect();
+        assert!(mine.is_empty(), "anomalies on the binding's acts: {mine:?}");
+    }
+
+    #[tokio::test]
+    async fn n_promise_then_work_then_satisfy() {
+        let work = Arc::new(Counting::default());
+        let p = n_performer(work.clone(), Arc::new(Sent::default()));
+        assert_eq!(p.profiles(), ["T0", "N"]);
+        let ch = p.on_event(n_request(|_| {})).await;
+        assert_eq!(kinds(&ch), [K_PROMISE, K_REPORT], "{ch:?}");
+        assert_eq!((ch.to, work.n()), (Some(Phase::Reported), 1));
+        let c = ch.commitment.clone();
+        let sat = act(&p, &REQ, &c, |h, pa| Draft::satisfy(&c, h, pa, None));
+        assert_eq!(p.on_event(sat).await.to, Some(Phase::Satisfied));
+        clean(&p, &c);
+    }
+
+    #[tokio::test]
+    async fn n_open_condition_is_closed_by_counter_then_worked_after_accept() {
+        let work = Arc::new(Counting::default());
+        let p = n_performer(work.clone(), Arc::new(Sent::default()));
+        let req = n_request(|t| {
+            t["conditions"] = json!([{"id": "c1", "class": "open", "description": "Make it fast"}]);
+        });
+        let ch = p.on_event(req).await;
+        assert_eq!(kinds(&ch), [K_COUNTER], "{ch:?}");
+        assert_eq!(work.n(), 0, "worked before the terms were agreed");
+        let body: Value = serde_json::from_str(&ch.sent[0].content).unwrap();
+        assert_eq!(body["terms"]["conditions"][0]["class"], "human");
+        assert!(body["reason"].as_str().unwrap().contains("c1"));
+        let c = ch.commitment.clone();
+        let h = ch.sent[0].values("terms")[0].to_string();
+        let accept = act(&p, &REQ, &c, |head, pa| Draft::accept(&c, head, pa, &h));
+        let ch = p.on_event(accept).await;
+        assert_eq!(kinds(&ch), [K_REPORT], "{ch:?}");
+        assert_eq!(work.n(), 1);
+        clean(&p, &c);
+    }
+
+    #[tokio::test]
+    async fn n_requester_counter_is_accepted_or_declined() {
+        let work = Arc::new(Counting::default());
+        let p = n_performer(work.clone(), Arc::new(Sent::default()));
+        let req = n_request(|t| {
+            t["conditions"] = json!([{"id": "c1", "class": "open", "description": "Make it fast"}]);
+        });
+        let ch = p.on_event(req).await;
+        let c = ch.commitment.clone();
+        let ours: Value = serde_json::from_str(&ch.sent[0].content).unwrap();
+        // The requester counters back: closed, with a later deadline.
+        let mut t = ours["terms"].clone();
+        t["deadline"] = json!(t["deadline"].as_u64().unwrap() + 600);
+        let counter = act(&p, &REQ, &c, |h, pa| {
+            Draft::counter(&c, h, pa, &t, "more time").unwrap()
+        });
+        let ch = p.on_event(counter).await;
+        assert_eq!(kinds(&ch), [K_ACCEPT, K_REPORT], "{ch:?}");
+        let out = fold(&p.events(&c), &p.docs());
+        assert_eq!(
+            out.commitments[&c].state.as_ref().unwrap().terms,
+            acn_core::jcs::hash(&t).unwrap()
+        );
+        clean(&p, &c);
+
+        // A counter this binding can't meet (deadline gone): declined, no work.
+        let p = n_performer(work.clone(), Arc::new(Sent::default()));
+        let req = n_request(|t| {
+            t["conditions"] = json!([{"id": "c1", "class": "open", "description": "Make it fast"}]);
+        });
+        let ch = p.on_event(req).await;
+        let c = ch.commitment.clone();
+        let ours: Value = serde_json::from_str(&ch.sent[0].content).unwrap();
+        let mut t = ours["terms"].clone();
+        t["deadline"] = json!(1000);
+        let counter = act(&p, &REQ, &c, |h, pa| {
+            Draft::counter(&c, h, pa, &t, "now").unwrap()
+        });
+        let before = work.n();
+        let ch = p.on_event(counter).await;
+        assert_eq!(kinds(&ch), [K_DECLINE], "{ch:?}");
+        assert_eq!(reason_of(&ch.sent[0]), "expired");
+        assert_eq!(work.n(), before);
+        clean(&p, &c);
+    }
+
+    #[tokio::test]
+    async fn n_rework_runs_again_with_the_rejection() {
+        #[derive(Default)]
+        struct Feedback(Mutex<Vec<Vec<Value>>>);
+        impl Executor for Arc<Feedback> {
+            fn quote(&self, t: &Terms, p: Profile) -> Quote {
+                Echo.quote(t, p)
+            }
+            fn run(&self, job: Job) -> BoxFut<'_, Result<Output, String>> {
+                self.0.lock().unwrap().push(job.feedback.clone());
+                Echo.run(job)
+            }
+        }
+        let fb = Arc::new(Feedback::default());
+        let p = Performer::new(
+            Arc::new(Key(PERF)),
+            Arc::new(Sent::default()),
+            Arc::new(fb.clone()),
+        )
+        .with_negotiation(true);
+        let ch = p.on_event(n_request(|_| {})).await;
+        let c = ch.commitment.clone();
+        let cond = fold(&p.events(&c), &p.docs()).commitments[&c]
+            .terms
+            .as_ref()
+            .unwrap()
+            .conditions[0]
+            .id
+            .clone();
+        let rej = act(&p, &REQ, &c, |h, pa| {
+            Draft::reject(&c, h, pa, vec![(&cond, "shorter, please")])
+        });
+        let ch = p.on_event(rej).await;
+        assert_eq!(kinds(&ch), [K_REPORT], "{ch:?}");
+        let runs = fb.0.lock().unwrap().clone();
+        assert_eq!(runs.len(), 2);
+        assert!(runs[0].is_empty());
+        assert_eq!(runs[1][0]["note"], "shorter, please");
+        // The second REPORT answers the REJECT.
+        let rej_id = p
+            .events(&c)
+            .iter()
+            .find(|e| e.kind == K_REJECT)
+            .unwrap()
+            .id
+            .clone();
+        assert_eq!(ch.sent[0].e_marked("prev"), [rej_id.as_str()]);
+        clean(&p, &c);
+    }
+
+    #[tokio::test]
+    async fn n_held_out_seed_is_committed_then_revealed() {
+        let work = Arc::new(Counting::default());
+        let p = n_performer(work.clone(), Arc::new(Sent::default()));
+        let req = n_request(|t| {
+            t["rework_limit"] = json!(0);
+            t["verifiers"] = json!([{"pubkey": requester(), "classes": ["mechanical"]}]);
+            t["conditions"] = json!([{"id": "c1", "class": "mechanical", "description": "held-out tests pass",
+                "instances": {"pool_description": "cases", "pool_rule": "curated", "pool_root": "cd".repeat(32),
+                    "pool_size": 4, "sample_size": 2, "requester_seed_hash": "ef".repeat(32)}}]);
+        });
+        let ch = p.on_event(req).await;
+        assert_eq!(kinds(&ch), [K_PROMISE, K_REPORT], "{ch:?}");
+        let promise: Value = serde_json::from_str(&ch.sent[0].content).unwrap();
+        let report: Value = serde_json::from_str(&ch.sent[1].content).unwrap();
+        let seed = hex::decode(report["performer_seed"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            promise["performer_seed_hash"],
+            acn_core::jcs::sha256_hex(&seed)
+        );
+        clean(&p, &ch.commitment);
+    }
+
+    #[tokio::test]
+    async fn n_contradicted_rejection_is_disputed() {
+        let work = Arc::new(Counting::default());
+        let p = n_performer(work.clone(), Arc::new(Sent::default()));
+        let arbiter = public_key(&ARB).unwrap();
+        let req = n_request(|t| {
+            t["rework_limit"] = json!(0);
+            t["arbiter"] = json!(arbiter);
+            t["verifiers"] = json!([{"pubkey": arbiter, "classes": ["mechanical"]}]);
+            t["conditions"] =
+                json!([{"id": "tests", "class": "mechanical", "description": "tests pass"}]);
+        });
+        let ch = p.on_event(req).await;
+        let c = ch.commitment.clone();
+        let report = ch.sent[1].id.clone();
+        let pass = Draft::attest(
+            K_ATTEST_MECH,
+            &c,
+            &report,
+            "tests",
+            json!({"result": "pass", "method": "cargo test"}),
+        )
+        .sign(&ARB, 200)
+        .unwrap();
+        assert!(p.on_event(pass).await.sent.is_empty());
+        let rej = act(&p, &REQ, &c, |h, pa| {
+            Draft::reject(&c, h, pa, vec![("tests", "no")])
+        });
+        let ch = p.on_event(rej).await;
+        assert_eq!(kinds(&ch), [K_DISPUTE], "{ch:?}");
+        assert_eq!(ch.to, Some(Phase::Disputed));
+        let ruling = act(&p, &ARB, &c, |h, pa| Draft::ruling(&c, h, pa, true, None));
+        assert_eq!(p.on_event(ruling).await.to, Some(Phase::Satisfied));
+        assert_eq!(work.n(), 1, "no rework at limit 0");
+        clean(&p, &c);
+    }
+
+    #[tokio::test]
+    async fn an_uncontradicted_rejection_stands() {
+        let p = n_performer(Arc::new(Counting::default()), Arc::new(Sent::default()));
+        let req = n_request(|t| {
+            t["rework_limit"] = json!(0);
+            t["arbiter"] = json!(public_key(&ARB).unwrap());
+        });
+        let ch = p.on_event(req).await;
+        let c = ch.commitment.clone();
+        let cond = fold(&p.events(&c), &p.docs()).commitments[&c]
+            .terms
+            .as_ref()
+            .unwrap()
+            .conditions[0]
+            .id
+            .clone();
+        let rej = act(&p, &REQ, &c, |h, pa| {
+            Draft::reject(&c, h, pa, vec![(&cond, "no")])
+        });
+        let ch = p.on_event(rej).await;
+        assert!(ch.sent.is_empty(), "{ch:?}");
+        assert_eq!(ch.to, Some(Phase::Rejected));
+    }
+
+    #[tokio::test]
+    async fn paid_terms_need_a_locktime_after_the_review_window() {
+        let p = Performer::new(
+            Arc::new(Key(PERF)),
+            Arc::new(Sent::default()),
+            Arc::new(Echo),
+        )
+        .with_wallet(Arc::new(FakeWallet::default()))
+        .with_redeem_margin(25 * 3600);
+        // The offer's locktime is deadline + review + 24 h: one hour short of this margin.
+        let ch = p.on_event(paid_request(10)).await;
+        assert_eq!(kinds(&ch), [K_DECLINE], "{ch:?}");
+        assert_eq!(reason_of(&ch.sent[0]), "locktime_too_early");
+    }
+
+    #[tokio::test]
+    async fn an_interrupted_run_after_a_promise_is_revoked() {
+        let work = Arc::new(Counting::default());
+        let sent = Arc::new(Sent::default());
+        let path = journal_path("interrupted-n");
+        let req = n_request(|_| {});
+        let p = n_performer(work.clone(), sent.clone()).with_journal(Journal::open(&path).unwrap());
+        // Promise, then "crash" during the work: replay the PROMISE into a new performer whose
+        // journal says the run started.
+        let ch = p.on_event(req.clone()).await;
+        let promise = ch.sent[0].clone();
+        let key = Journal::key(&ch.commitment, &promise.id);
+        let mut e = p.journal().entry(&key).unwrap();
+        drop(p);
+        e.step = Step::Executing;
+        e.act = None;
+        let j = Journal::open(&path).unwrap();
+        j.put(&key, e).unwrap();
+        drop(j);
+        let p = n_performer(work.clone(), sent).with_journal(Journal::open(&path).unwrap());
+        p.ingest(req).await;
+        let ch = p.on_event(promise).await;
+        assert_eq!(kinds(&ch), [K_REVOKE], "{ch:?}");
+        assert_eq!(reason_of(&ch.sent[0]), "execution_uncertain");
+        assert_eq!(work.n(), 1, "re-ran an interrupted job");
     }
 }

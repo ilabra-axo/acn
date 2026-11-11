@@ -188,7 +188,7 @@ async fn desktop_app_talks_to_mcp_agent() -> anyhow::Result<()> {
 
     // --- ACN (docs/Core.md): the agent advertises K_SVC and is bound to an operator key. ---
     let acn = contact.acn.clone().expect("agent offers ACN");
-    assert_eq!(acn.profiles, ["T0"]);
+    assert_eq!(acn.profiles, ["T0", "N"]); // negotiation is on by default
     assert!(acn.binding.bound, "binding: {}", acn.binding.detail);
     // No Blossom configured: no evidence store, so no conformance level is claimed.
     assert_eq!(acn.binding_level, None);

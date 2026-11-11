@@ -77,10 +77,10 @@ impl Executor for McpExecutor {
     }
 }
 
-/// The conformance level the configuration may claim in `K_SVC`: L0 needs published evidence
-/// (Blossom servers and `evidence = "public"`: the suite fetches the artifacts) and an operator
-/// binding (discovery requires one in force). Hosts also AND this with
-/// [`acn_binding::Performer::level`].
+/// Whether the configuration may claim a conformance level in `K_SVC` at all: it needs
+/// published evidence (Blossom servers and `evidence = "public"`: the suites fetch the
+/// artifacts) and an operator binding (discovery requires one in force). Hosts AND this with
+/// [`acn_binding::Performer::level`], which says which level (L1 when negotiating).
 pub fn claimed_level(cfg: &AcnConfig) -> Option<Level> {
     (!cfg.blossom.is_empty()
         && cfg.evidence == acn_binding::Disclosure::Public
@@ -128,13 +128,16 @@ pub fn service_advertisement(
         })
         .collect();
     let paid = cfg.price_sat > 0 && cfg.mint.is_some();
+    let mut profiles = vec!["T0".to_string()];
+    if paid {
+        profiles.push("T1".into());
+    }
+    if cfg.negotiate {
+        profiles.push("N".into());
+    }
     ServiceAd {
         tools,
-        profiles: if paid {
-            vec!["T0".into(), "T1".into()]
-        } else {
-            vec!["T0".into()]
-        },
+        profiles,
         min_price_sat: cfg.price_sat,
         mints: cfg
             .mint

@@ -110,6 +110,7 @@ impl Bridge {
             }),
         )
         .with_journal(journal)
+        .with_negotiation(acn.negotiate)
         .with_disclosure(acn.evidence)
         .with_admission(Arc::new(move |requester: &str| {
             enabled

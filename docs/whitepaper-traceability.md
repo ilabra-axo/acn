@@ -28,9 +28,9 @@ whitepaper doesn't state.
 | It reports the work along with its evidence | §6.2, §9 | `REPORT` with an inline result and `x` artifact hashes; the reference bindings (`acn_binding::Performer`) and the demo cast (`with_evidence`) store artifacts and a derivation record on Blossom (`nmesh-blossom`); the card shows what each attester signed and links the artifacts. Tests: the L0 suite and `live` fetch and hash-check every artifact and record | ✅ dev Blossom server |
 | The result is checked by tests, by comparison with real data, or by a person | §7 condition classes, INV-8 | Classes `mechanical`, `grounding`, `judged`, `interpretive`, `human`, with evidence rules per class (V-11, V-17); shown in the card's Conditions panel. Tests: `evidence`, J-1…J-18, C-vectors | 🟡 the verifiers are scripted cast members (Verity, Muse); real checkers exist only for judged conditions (`acn-judge`, with `--judges`); no grounding verifier, no requester-side runner |
 | If the requester is satisfied, saying so releases the payment | INV-6, V-10 | `SATISFY` carries the preimage (`bad_preimage` if wrong); the performer redeems at the mint. Tests: `t1_preimage` (scenarios), `htlc`, `live` (balances move) | ✅ test mint |
-| Otherwise the requester names the failed condition; rework if the terms allow, else Rejected; a named arbiter can rule | §6.2 `REJECT`, §8.4 | `REJECT` names a condition (gap); `Reworking` below `rework_limit`, then `Rejected`; `DISPUTE` / `RULING` with the arbiter holding the escrowed secret. Tests: *rework* and *dispute* in `playthrough` and `live` (Atlas redeems after the ruling) | ✅ |
+| Otherwise the requester names the failed condition; rework if the terms allow, else Rejected; a named arbiter can rule | §6.2 `REJECT`, §8.4 | `REJECT` names a condition (gap); `Reworking` below `rework_limit`, then `Rejected`; `DISPUTE` / `RULING` with the arbiter holding the escrowed secret. Any L1 binding reworks with the rejection's gaps and disputes rejections the evidence contradicts. Tests: *rework* and *dispute* in `playthrough` and `live` (Atlas redeems after the ruling); L1 cases `n-rework`, `n-contradicted-rejection-disputed` (both bindings, paid redemption after the ruling) | ✅ |
 | If the agent never delivers, the requester reclaims the money once the time lock expires | §6.5, §8.2 | Lapse derived by `status_at`; settlement "refundable"; NUT-14 refund after the locktime (`CashuWallet::refund`). An interrupted refund is recovered on reopen; refunds pay a fee-bearing mint's fees; a lock whose request was never published stays refundable. Tests: `time_status` (scenarios), `htlc`, `refund_recovers_after_interruption`, `refund_pays_input_fees` | ✅ real mint in tests; the live demo waits the real ≈ 25 h locktime, presenter mode fast-forwards |
-| The time lock is set safely after the deadline and the review period (also §4) | §8.2 timing constraint (MUST) | The reference requester sets `L = deadline + review_window + 24 h` (`nmesh-app`, `acn_core::draft`) | 🟡 only our own requester enforces it: no performer binding checks that received terms satisfy the constraint before working, and the validator doesn't (it has no clock) |
+| The time lock is set safely after the deadline and the review period (also §4) | §8.2 timing constraint (MUST) | The reference requester sets `L = deadline + review_window + 24 h` (`nmesh-app`, `acn_core::draft`); performer bindings decline paid terms whose locktime doesn't exceed `deadline + review_window` plus their redeem margin (`locktime_too_early`, harness-binding-API rule 16). Tests: `paid_terms_need_a_locktime_after_the_review_window`, L0 case `decline-locktime-too-early` (both bindings) | ✅ in the reference bindings; the validator can't check it (no clock) |
 | Each step is a signed message that cannot be altered afterwards | INV-1, INV-11 | Regular signed events; rejected events are kept and listed under "Show signed events"; a corrupted copy of a known act never replaces the verified original, in the app or the bindings. Tests: `every_anomaly_code_is_exercised`, `a_corrupt_copy_never_replaces_a_verified_act`, `corrupt_copy_does_not_replace_a_verified_report` | ✅ |
 
 ### §4 Three design choices
@@ -53,7 +53,7 @@ whitepaper doesn't state.
 | Not an AI: it records and settles | §10 | The validator is a pure function of signed events and documents; judges run outside it, and it only counts the scores a listed runner signed (V-17). Test: `fold_is_order_independent` | ✅ |
 | Not a judge of quality: the parties choose who checks | §7 `verifiers`, `runners` | Verifiers listed per class in the terms; attestations from anyone else are `unlisted_verifier` and not counted. Tests: scenarios, `live` (*verified*) | ✅ |
 | Not a reputation authority: anyone can compute a track record from public or disclosed commitments; many scorers | §11 `K_SCORE`, D-13 | Kind reserved; no scorer; commitments are private by default and there is no disclosure mechanism (D-13 open). Per-template records are computed by each reader over what it can see (`acn_view::template_records`) | ⬜ |
-| Not tied to any framework: a small set of interfaces; a thin adapter makes a tool server accountable | §11, D-10 | The Binding API as traits (`acn-binding`) with a performer driver; `acn-mcp-shim` (any MCP server) and `acn-cli-shim` (any CLI harness) pass the L0 conformance suite (`acn-conformance`), priced and free, terms inline or by reference. The driver journals execution, applies one admission policy to history and live events, checks its operator scope before working, and keeps evidence private unless configured public (harness-binding-API rules 8–15). Tests: both L0 runs, `acn-binding` unit, bridge `startup.rs` | ✅ L0 (T0, T1); ⬜ L1–L3 (negotiation, governance, verifiers) and requester bindings on the traits |
+| Not tied to any framework: a small set of interfaces; a thin adapter makes a tool server accountable | §11, D-10 | The Binding API as traits (`acn-binding`) with a performer driver; `acn-mcp-shim` (any MCP server) and `acn-cli-shim` (any CLI harness) pass the L0 conformance suite (`acn-conformance`), priced and free, terms inline or by reference. The driver journals execution, applies one admission policy to history and live events, checks its operator scope before working, and keeps evidence private unless configured public (harness-binding-API rules 8–15). Tests: both L0 runs, `acn-binding` unit, bridge `startup.rs` | ✅ L0 (T0, T1) and L1 (profile N: counters, rework, disputes, held-out seeds, disqualifiers; `acn_conformance::l1`, passed by both bindings); ⬜ L2–L3 (governance, verifiers) and requester bindings on the traits |
 
 ### §6 Built on open rails
 
@@ -117,8 +117,8 @@ The whitepaper was last revised against spec v0.2 (Nov 8). These passages are no
   condition (CR-001) lets pinned LLM judges' scores decide payment, labelled `opinion`.
 - **§5** ("a small set of interfaces, which are being specified now… the reference adapter
   already lets an MCP tool server take on simple commitments"): the interfaces are published as
-  traits with an L0 conformance suite, and two independent bindings (MCP and any CLI harness)
-  pass it, including paid calls. L1–L3 are still being specified.
+  traits with L0 and L1 conformance suites, and two independent bindings (MCP and any CLI
+  harness) pass both, including paid and negotiated commitments. L2–L3 are still being specified.
 - **§6** ("or back to the requester after the deadline"): after the locktime, which is later
   than the deadline plus the review window (§3 says this correctly).
 - **§9** ("A specification (v0.2 logical design)"): the spec is v0.5.
@@ -129,18 +129,15 @@ The whitepaper was last revised against spec v0.2 (Nov 8). These passages are no
 - **§9** (the demonstration bullet): it also covers judged conditions, settlement triggers,
   drafted conditions, disqualifiers and held-out tests.
 - **§9** ("What is not built yet: … the published interface for connecting other agent
-  systems"): built at L0; the higher levels are not.
+  systems"): built at L0 and L1 (negotiated commitments); L2 and L3 are not.
 - **§10** ("When an agent commits, it also states how likely it thinks it is to meet the
   deadline"): `p_on_time` is optional in the validator.
 
 ## Gaps the whitepaper depends on (to build or keep caveated)
 
-- **The time-lock constraint is not checked by performers** (§3, §4): a performer binding should
-  decline terms whose `payment.locktime` doesn't exceed `deadline + review_window` plus its
-  redeem margin (Core §8.2 MUST).
 - Real money: real mints, NIP-60 wallet backup, NWC top-up, a multi-mint policy, the
   requester's own per-mint caps, encrypted preimages and proofs.
-- Binding API beyond L0 (D-10): the L1–L3 suites; profile N, Gate and Verifier in the driver;
+- Binding API beyond L1 (D-10): the L2–L3 suites; Gate and Verifier in the driver;
   the requester side and the demo cast on the traits; a requester-side runner.
 - Real verifiers: a grounding verifier, a verifier binding (L3), a gate with human sign-off.
 - An arbitration service (arbiters are scripted in the demo).

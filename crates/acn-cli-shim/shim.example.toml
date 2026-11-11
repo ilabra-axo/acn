@@ -13,6 +13,10 @@ blossom = ["http://127.0.0.1:3400"]
 # claimed. "public" uploads stdout, output files, stderr and the derivation record to the
 # Blossom servers above, UNENCRYPTED, for anyone with the hash (needed to claim L0).
 evidence = "public"
+# Profile N too (conformance level L1): counters that close open conditions (as human checks,
+# or from your templates), the requester's counters, rework, disputes of contradicted rejections,
+# held-out instances and disqualifiers. Default true; false serves T0/T1 only (L0).
+negotiate = true
 # Execution journal, so a restart never re-runs a command. Default: next to key_file.
 # journal = ".nmesh/cli-shim/agent.acn-journal.json"
 # Paid calls (T1): a price and the mint you're paid at (nmesh-acn-sim hosts a test mint on :3338).
